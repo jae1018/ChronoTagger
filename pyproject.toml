@@ -1,0 +1,14 @@
+[project]
+name = "chronotagger"
+version = "0.1.0"
+description = "Interactive interval labeling for time-series with Tkinter/Matplotlib."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["pandas", "numpy", "matplotlib", "pyarrow"]  # pyarrow for parquet
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
