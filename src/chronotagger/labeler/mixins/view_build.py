@@ -76,8 +76,8 @@ class ViewBuildMixin:
         nav = ttk.Frame(parent)
         nav.pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(nav, text="◄◄ Prev", command=self._prev_window).pack(side=tk.LEFT, padx=2)
-        ttk.Button(nav, text="Next ►►", command=self._next_window).pack(side=tk.LEFT, padx=2)
+        ttk.Button(nav, text="<- Prev", command=self._prev_window).pack(side=tk.LEFT, padx=2)
+        ttk.Button(nav, text="Next ->", command=self._next_window).pack(side=tk.LEFT, padx=2)
 
         ttk.Label(nav, text="Step:").pack(side=tk.LEFT, padx=(10, 2))
         self.step_entry = ttk.Entry(nav, width=10)
