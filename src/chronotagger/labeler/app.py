@@ -32,6 +32,7 @@ from .mixins.view_build import ViewBuildMixin
 from .mixins.plotting import PlottingMixin
 from .mixins.events import EventsMixin
 from .mixins.navigation import NavigationMixin
+from .mixins.zoom import ZoomMixin
 from .mixins.intervals import IntervalsMixin
 from .mixins.stats import StatsMixin
 from .mixins.io_export import IOExportMixin
@@ -43,6 +44,7 @@ class TimeIntervalLabeler(
     PlottingMixin,
     EventsMixin,
     NavigationMixin,
+    ZoomMixin,
     IntervalsMixin,
     StatsMixin,
     IOExportMixin,
@@ -124,6 +126,12 @@ class TimeIntervalLabeler(
             start = self.data_start
         self.t0: pd.Timestamp = max(start, self.data_start)
         self.t1: pd.Timestamp = min(self.t0 + window, self.data_end)
+        
+        # Wheel zoom/pan config
+        self.zoom_sensitivity: float = 0.20     # 20% per notch
+        self.pan_sensitivity: float = 0.20      # 20% of window per notch
+        self.min_window: pd.Timedelta = pd.Timedelta("5s")
+        self.max_window: pd.Timedelta = self.data_end - self.data_start
 
         # Intervals & selection
         self.intervals: List[Interval] = []

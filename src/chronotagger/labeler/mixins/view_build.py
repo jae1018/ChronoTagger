@@ -138,6 +138,10 @@ class ViewBuildMixin:
 
         toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
         toolbar.update()
+        
+        # Mouse wheel zoom/pan
+        if getattr(self, "_scroll_cid", None) is None:
+            self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
 
         # Rectangle selector on the first user panel
         first_ax = self.user_axes["panel1"]
