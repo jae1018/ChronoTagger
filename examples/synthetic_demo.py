@@ -51,7 +51,7 @@ def generate_synthetic_data() -> pd.DataFrame:
     pd.DataFrame with DatetimeIndex and columns: log10n, BX, BY, BZ
     """
     # ~37-second cadence with randomized gaps
-    base_times = pd.date_range("2015-01-03", "2015-01-07", freq="37S")
+    base_times = pd.date_range("2015-01-03", "2015-01-07", freq="37s")
     rng = np.random.default_rng(42)
     keep = np.ones(len(base_times), dtype=bool)
     for _ in range(10):

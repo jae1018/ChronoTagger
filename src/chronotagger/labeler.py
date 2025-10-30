@@ -312,20 +312,24 @@ class TimeIntervalLabeler:
         # Figure layout: 2 user panels + 1 strip
         self.fig = plt.Figure(figsize=(14, 8))
         gs = self.fig.add_gridspec(5, 1, height_ratios=[3, 3, 3, 3, 1], hspace=0.3)
-
+        
+        # Create user axes
         self.user_axes = {
             "panel1": self.fig.add_subplot(gs[0, 0]),
             "panel2": self.fig.add_subplot(gs[1, 0]),
         }
-        # Share x-axis across user panels
         for ax in list(self.user_axes.values())[1:]:
             ax.sharex(self.user_axes["panel1"])
-
+        
+        # Create strip axis
         self.strip_ax = self.fig.add_subplot(gs[4, 0], sharex=self.user_axes["panel1"])
         self.strip_ax.set_ylabel("Labels", fontsize=9)
         self.strip_ax.set_ylim(0, 1)
         self.strip_ax.set_yticks([])
-        self.strip_ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+        
+        # NOW apply date formatting (all axes exist)
+        for ax in list(self.user_axes.values()) + [self.strip_ax]:
+            self._apply_time_axis_format(ax)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
         self.canvas.draw()
@@ -547,7 +551,7 @@ class TimeIntervalLabeler:
         # Clear user axes
         for ax in self.user_axes.values():
             ax.clear()
-
+    
         # Call user plot function with sliced data
         try:
             sub_df = self.df.loc[self.t0:self.t1]
@@ -556,40 +560,47 @@ class TimeIntervalLabeler:
             for ax in self.user_axes.values():
                 ax.text(0.5, 0.5, f"Plot error:\n{e}", transform=ax.transAxes,
                         ha="center", va="center")
-
-        # Ensure consistent x-limits across all panels
-        for ax in list(self.user_axes.values()) + [self.strip_ax]:  # type: ignore[list-item]
+    
+        # Apply x-lims + date formatting to every panel and the strip
+        axes = list(self.user_axes.values())
+        if self.strip_ax is not None:
+            axes.append(self.strip_ax)
+    
+        for ax in axes:
             ax.set_xlim(self.t0, self.t1)
-
-        for ax in self.user_axes.values():
-            ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+            self._apply_time_axis_format(ax)
             ax.margins(x=0.01)
-
+    
         self._update_strip()
         self._update_intervals_list()
-
+    
         self.fig.tight_layout()  # type: ignore[union-attr]
-        self.canvas.draw()  # type: ignore[union-attr]
+        self.canvas.draw()       # type: ignore[union-attr]
 
     def _update_strip(self) -> None:
         """Redraw the annotation strip with intervals + current selection preview."""
-        self.strip_ax.clear()  # type: ignore[union-attr]
-        self.strip_ax.set_ylim(0, 1)  # type: ignore[union-attr]
-        self.strip_ax.set_yticks([])  # type: ignore[union-attr]
-        self.strip_ax.set_ylabel("Labels", fontsize=9)  # type: ignore[union-attr]
-
+        ax = self.strip_ax  # type: ignore[assignment]
+        ax.clear()
+        ax.set_ylim(0, 1)
+        ax.set_yticks([])
+        ax.set_ylabel("Labels", fontsize=9)
+    
+        # Clearing resets formatters/locators; restore them and limits here.
+        ax.set_xlim(self.t0, self.t1)
+        self._apply_time_axis_format(ax)
+    
         # Draw labeled intervals overlapping the window
         for iv in self.intervals:
             if iv.end <= self.t0 or iv.start >= self.t1:
                 continue
             s = max(iv.start, self.t0)
             e = min(iv.end, self.t1)
-
+    
             color = self.class_colors.get(iv.label, "#cccccc")
             alpha = 0.8 if iv == self.selected_interval else 0.6
             edgecolor = "red" if iv == self.selected_interval else "black"
             lw = 2 if iv == self.selected_interval else 0.5
-
+    
             rect = Rectangle(
                 (mdates.date2num(s), 0.1),
                 mdates.date2num(e) - mdates.date2num(s),
@@ -600,8 +611,8 @@ class TimeIntervalLabeler:
                 alpha=alpha,
                 picker=True,
             )
-            self.strip_ax.add_patch(rect)  # type: ignore[union-attr]
-
+            ax.add_patch(rect)
+    
         # Current selection preview
         if self.current_selection:
             s, e = self.current_selection
@@ -615,7 +626,8 @@ class TimeIntervalLabeler:
                 alpha=0.3,
                 linestyle="--",
             )
-            self.strip_ax.add_patch(rect)  # type: ignore[union-attr]
+            ax.add_patch(rect)
+
 
     def _update_intervals_list(self) -> None:
         """Refresh the sidebar list + stats."""
@@ -837,6 +849,27 @@ class TimeIntervalLabeler:
         idx_start = sub.index[sub.index.get_indexer([t_start], method="nearest")[0]]
         idx_end = sub.index[sub.index.get_indexer([t_end], method="nearest")[0]]
         return idx_start, idx_end
+
+    # -------------------- Formatting --------------------
+    
+    def _apply_time_axis_format(self, ax):
+        """
+        Ensure the x-axis is treated and formatted as dates.
+    
+        Important: do NOT call ticklabel_format(...) here; that installs a
+        ScalarFormatter and nukes the date formatter.
+        """
+        if ax is None:
+            return
+        import matplotlib.dates as mdates
+    
+        ax.xaxis_date()
+        locator = mdates.AutoDateLocator(minticks=3, maxticks=8)
+        formatter = mdates.ConciseDateFormatter(locator)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(formatter)
+
+
 
     # --------------------- File ops ---------------------
 
