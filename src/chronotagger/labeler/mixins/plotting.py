@@ -51,7 +51,8 @@ class PlottingMixin:
         self._update_strip()
         self._update_intervals_list()
 
-        self.fig.tight_layout()   # type: ignore[union-attr]
+        # constrained_layout=True already manages spacing
+        #self.fig.tight_layout()   # type: ignore[union-attr]
         self.canvas.draw()        # type: ignore[union-attr]
 
     def _update_strip(self) -> None:

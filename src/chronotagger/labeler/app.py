@@ -83,6 +83,7 @@ class TimeIntervalLabeler(
         self,
         df: pd.DataFrame,
         plot_fn: Callable,
+        n_panels: Optional[int] = None,
         classes: Optional[List[str]] = None,
         class_colors: Optional[Dict[str, str]] = None,
         window: pd.Timedelta = pd.Timedelta("30min"),
@@ -146,6 +147,8 @@ class TimeIntervalLabeler(
         self.strip_ax: Optional[plt.Axes] = None
         self.rect_selector = None  # RectangleSelector
         self.pick_cid: Optional[int] = None
+        # Panels (None means "resolve automatically")
+        self.n_panels = n_panels
 
         # Widgets we update later (set by view_build)
         self.start_time_entry = None

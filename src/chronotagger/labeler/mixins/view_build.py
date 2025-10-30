@@ -105,20 +105,24 @@ class ViewBuildMixin:
         ttk.Button(act, text="Redo", command=self._redo).pack(side=tk.LEFT, padx=2)
 
     def _build_plot(self, parent: ttk.Frame) -> None:
-        # 2 user panels + 1 strip at bottom (grid spec leaves room to grow)
-        self.fig = plt.Figure(figsize=(14, 8))
-        gs = self.fig.add_gridspec(5, 1, height_ratios=[3, 3, 3, 3, 1], hspace=0.3)
+        # Resolve how many data panels to build
+        n = self._resolve_n_panels()
 
-        # User axes (share x)
-        self.user_axes: Dict[str, plt.Axes] = {
-            "panel1": self.fig.add_subplot(gs[0, 0]),
-            "panel2": self.fig.add_subplot(gs[1, 0]),
-        }
-        for ax in list(self.user_axes.values())[1:]:
-            ax.sharex(self.user_axes["panel1"])
+        # Figure with constrained layout to manage whitespace cleanly
+        self.fig = plt.Figure(figsize=(14, 8), constrained_layout=True)
+        gs = self.fig.add_gridspec(n + 1, 1, height_ratios=[3] * n + [1], hspace=0.25)
+
+        # User axes (share x with the first)
+        self.user_axes: Dict[str, plt.Axes] = {}
+        for i in range(n):
+            ax = self.fig.add_subplot(gs[i, 0])
+            key = f"panel{i+1}"
+            self.user_axes[key] = ax
+            if i > 0:
+                ax.sharex(self.user_axes["panel1"])
 
         # Annotation strip
-        self.strip_ax = self.fig.add_subplot(gs[4, 0], sharex=self.user_axes["panel1"])
+        self.strip_ax = self.fig.add_subplot(gs[n, 0], sharex=self.user_axes["panel1"])
         self.strip_ax.set_ylabel("Labels", fontsize=9)
         self.strip_ax.set_ylim(0, 1)
         self.strip_ax.set_yticks([])
@@ -136,8 +140,9 @@ class ViewBuildMixin:
         toolbar.update()
 
         # Rectangle selector on the first user panel
+        first_ax = self.user_axes["panel1"]
         self.rect_selector = RectangleSelector(
-            self.user_axes["panel1"],
+            first_ax,
             onselect=self._on_rectangle_select,
             useblit=True,
             button=[1],  # left mouse
@@ -216,3 +221,74 @@ class ViewBuildMixin:
         ttk.Label(parent, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(
             side=tk.BOTTOM, fill=tk.X
         )
+        
+    def _resolve_n_panels(self) -> int:
+        """
+        Determine how many data panels to build.
+    
+        Priority:
+          1) Explicit self.n_panels if provided (>=1)
+          2) plot_fn.n_panels attribute if present (>=1)
+          3) Probe the plot function on a throwaway figure
+          4) Fallback to 2
+        """
+        # 1) Explicit param
+        if isinstance(self.n_panels, int) and self.n_panels >= 1:
+            return self.n_panels
+    
+        # 2) Function attribute
+        advertised = getattr(self.plot_fn, "n_panels", None)
+        if isinstance(advertised, int) and advertised >= 1:
+            return advertised
+    
+        # 3) Probe
+        probed = self._probe_plot_fn_for_panels()
+        if probed >= 1:
+            return probed
+    
+        # 4) Sensible default
+        return 2
+    
+    
+    def _probe_plot_fn_for_panels(self, max_panels: int = 6) -> int:
+        """
+        Call the user's plot_fn with a temporary off-screen Figure containing
+        up to `max_panels` Axes, then count which Axes received any artists.
+    
+        Returns a number in [1, max_panels] or 0 on failure.
+        """
+        try:
+            from matplotlib.figure import Figure
+            import pandas as pd
+        except Exception:
+            return 0
+    
+        # Build a tiny time slice that's guaranteed to exist
+        t0 = self.df.index[0]
+        # take ~30 minutes or to data_end
+        t1 = min(t0 + pd.Timedelta("30min"), self.df.index[-1])
+        sub = self.df.loc[t0:t1]
+    
+        # Throwaway figure; no Tk/pyplot involved
+        fig = Figure()
+        axs = {f"panel{i+1}": fig.add_subplot(max_panels, 1, i + 1) for i in range(max_panels)}
+    
+        try:
+            self.plot_fn(axs, sub, t0, t1)
+        except Exception:
+            # User plot may error on probe—don't hard fail the app
+            return 0
+        finally:
+            # Close figure to free memory (no canvas was created)
+            try:
+                fig.clf()
+            except Exception:
+                pass
+    
+        # Count Axes that look "used"
+        used = 0
+        for ax in axs.values():
+            if ax.lines or ax.patches or ax.collections or ax.images:
+                used += 1
+    
+        return max(1, min(max_panels, used)) if used else 0
