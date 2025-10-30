@@ -111,11 +111,11 @@ class ViewBuildMixin:
     def _build_plot(self, parent: ttk.Frame) -> None:
         # Resolve how many data panels to build
         n = self._resolve_n_panels()
-
+    
         # Figure with constrained layout to manage whitespace cleanly
         self.fig = plt.Figure(figsize=(14, 8), constrained_layout=True)
         gs = self.fig.add_gridspec(n + 1, 1, height_ratios=[3] * n + [1], hspace=0.25)
-
+    
         # User axes (share x with the first)
         self.user_axes: Dict[str, plt.Axes] = {}
         for i in range(n):
@@ -124,49 +124,53 @@ class ViewBuildMixin:
             self.user_axes[key] = ax
             if i > 0:
                 ax.sharex(self.user_axes["panel1"])
-
+    
         # Annotation strip
         self.strip_ax = self.fig.add_subplot(gs[n, 0], sharex=self.user_axes["panel1"])
         self.strip_ax.set_ylabel("Labels", fontsize=9)
         self.strip_ax.set_ylim(0, 1)
         self.strip_ax.set_yticks([])
-
+    
         # Apply date formatting to all axes
         for ax in list(self.user_axes.values()) + [self.strip_ax]:
             self._apply_time_axis_format(ax)
-
+    
         # Embed
         self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
+    
         toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
         toolbar.update()
-        
+    
         # Defer the first draw so Tk has correct geometry (prevents clipped labels)
         self.root.after(0, self.canvas.draw_idle)
-        
+    
         # Mouse wheel zoom/pan
         if getattr(self, "_scroll_cid", None) is None:
             self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
-
-        # Rectangle selector on the first user panel
-        first_ax = self.user_axes["panel1"]
-        self.rect_selector = RectangleSelector(
-            first_ax,
-            onselect=self._on_rectangle_select,
-            useblit=True,
-            button=[1],  # left mouse
-            minspanx=5,
-            minspany=5,
-            spancoords="pixels",
-            interactive=False,
-            props=dict(
-                facecolor="yellow", edgecolor="orange",
-                alpha=0.3, linestyle="--", linewidth=2
-            ),
-        )
-
+    
+        # Rectangle selectors on *every* user axis (not just panel1)
+        self.rect_selectors = {}
+        for name, ax in self.user_axes.items():
+            self.rect_selectors[name] = RectangleSelector(
+                ax,
+                onselect=self._on_rectangle_select,   # same callback for all panels
+                useblit=True,
+                button=[1],                           # left mouse
+                minspanx=5,
+                minspany=5,
+                spancoords="pixels",
+                interactive=False,
+                props=dict(
+                    facecolor="yellow",
+                    edgecolor="orange",
+                    alpha=0.3,
+                    linestyle="--",
+                    linewidth=2,
+                ),
+            )
+    
         # One-time pick handler for the strip
         if self.pick_cid is None:
             self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)

@@ -155,7 +155,7 @@ class TimeIntervalLabeler(
         self.canvas = None  # FigureCanvasTkAgg
         self.user_axes: Dict[str, plt.Axes] = {}
         self.strip_ax: Optional[plt.Axes] = None
-        self.rect_selector = None  # RectangleSelector
+        self.rect_selectors = {}
         self.pick_cid: Optional[int] = None
         # Panels (None means "resolve automatically")
         self.n_panels = n_panels
