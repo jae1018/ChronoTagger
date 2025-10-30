@@ -143,6 +143,9 @@ class ViewBuildMixin:
         toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
         toolbar.update()
         
+        # Defer the first draw so Tk has correct geometry (prevents clipped labels)
+        self.root.after(0, self.canvas.draw_idle)
+        
         # Mouse wheel zoom/pan
         if getattr(self, "_scroll_cid", None) is None:
             self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
@@ -223,6 +226,12 @@ class ViewBuildMixin:
         opts.pack(fill=tk.X, pady=5)
         self.snap_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(opts, text="Snap to samples", variable=self.snap_var).pack(anchor=tk.W)
+        
+        # Overlay toggle
+        self.overlays_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            opts, text="Show interval overlays on panels", variable=self.overlays_var
+        ).pack(anchor=tk.W)
 
         # Status
         self.status_var = tk.StringVar(value="Ready")

@@ -1,3 +1,4 @@
+# src/chronotagger/labeler/mixins/plotting.py
 """
 Plotting & axis formatting mixin.
 
@@ -12,22 +13,29 @@ import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 
 from ..utils.timeaxis import apply_time_axis_format
+from ..utils.overlays import draw_interval_bands
 
 
 class PlottingMixin:
     # Expects on self: fig, canvas, user_axes, strip_ax, class_colors, etc.
 
-    # ---- internal helper ----
     def _apply_time_axis_format(self, ax) -> None:
         apply_time_axis_format(ax)
 
-    # ---- main redraw ----
+    def _overlays_enabled(self) -> bool:
+        """Safe check for overlay toggle; default True if toggle not built yet."""
+        try:
+            return bool(self.overlays_var.get())  # created in view_build Options
+        except Exception:
+            return True
+
     def _update_plot(self) -> None:
         """Redraw user panels and strip."""
+        # Clear data panels
         for ax in self.user_axes.values():
             ax.clear()
 
-        # Call user plot function with sliced data
+        # User plot function
         try:
             sub_df = self.df.loc[self.t0:self.t1]
             self.plot_fn(self.user_axes, sub_df, self.t0, self.t1)
@@ -38,7 +46,7 @@ class PlottingMixin:
                     ha="center", va="center"
                 )
 
-        # Keep x-lims + time formatting consistent on all panels and strip
+        # Align limits + date formatting
         axes = list(self.user_axes.values())
         if self.strip_ax is not None:
             axes.append(self.strip_ax)
@@ -48,10 +56,25 @@ class PlottingMixin:
             self._apply_time_axis_format(ax)
             ax.margins(x=0.01)
 
+        # NEW: draw faint background interval bands across all data panels
+        if self._overlays_enabled():
+            draw_interval_bands(
+                self.user_axes,
+                self.intervals,
+                self.t0, self.t1,
+                self.class_colors,
+                selected_interval=self.selected_interval,
+                preview=self.current_selection,
+                alpha=0.10,
+                alpha_selected=0.16,
+                alpha_preview=0.12,
+                zorder=0.05,
+            )
+
+        # Existing strip + sidebars
         self._update_strip()
         self._update_intervals_list()
 
-        # constrained_layout=True already manages spacing
         #self.fig.tight_layout()   # type: ignore[union-attr]
         self.canvas.draw()        # type: ignore[union-attr]
 
@@ -63,11 +86,11 @@ class PlottingMixin:
         ax.set_yticks([])
         ax.set_ylabel("Labels", fontsize=9)
 
-        # Clearing resets formatters; re-apply and restore limits.
+        # Reset limits/formatting because clearing resets formatter
         ax.set_xlim(self.t0, self.t1)
         self._apply_time_axis_format(ax)
 
-        # Draw intervals overlapping window
+        # Labeled intervals in strip
         for iv in self.intervals:
             if iv.end <= self.t0 or iv.start >= self.t1:
                 continue
@@ -91,7 +114,7 @@ class PlottingMixin:
             )
             ax.add_patch(rect)
 
-        # Current selection preview
+        # Preview rectangle (strip)
         if self.current_selection:
             s, e = self.current_selection
             rect = Rectangle(
