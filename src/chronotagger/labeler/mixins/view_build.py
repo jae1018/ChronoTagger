@@ -47,6 +47,8 @@ class ViewBuildMixin:
         self._build_sidebar(sidebar)
 
         self.root.bind("<Key>", self._on_key_press)
+        # F1 opens Help
+        self.root.bind("<F1>", self._open_help_dialog)
 
     def _build_top_controls(self, parent: ttk.Frame) -> None:
         from tkinter import filedialog  # just to ensure Tk is initialized on Windows
@@ -103,6 +105,8 @@ class ViewBuildMixin:
         ttk.Button(act, text="Delete", command=self._delete_interval).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Undo", command=self._undo).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Redo", command=self._redo).pack(side=tk.LEFT, padx=2)
+        ttk.Separator(act, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        ttk.Button(act, text="Help (F1)", command=self._open_help_dialog).pack(side=tk.LEFT, padx=2)
 
     def _build_plot(self, parent: ttk.Frame) -> None:
         # Resolve how many data panels to build

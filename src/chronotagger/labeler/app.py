@@ -32,6 +32,7 @@ from .mixins.view_build import ViewBuildMixin
 from .mixins.plotting import PlottingMixin
 from .mixins.events import EventsMixin
 from .mixins.navigation import NavigationMixin
+from .mixins.help import HelpMixin
 from .mixins.zoom import ZoomMixin
 from .mixins.intervals import IntervalsMixin
 from .mixins.stats import StatsMixin
@@ -44,6 +45,7 @@ class TimeIntervalLabeler(
     PlottingMixin,
     EventsMixin,
     NavigationMixin,
+    HelpMixin,
     ZoomMixin,
     IntervalsMixin,
     StatsMixin,
