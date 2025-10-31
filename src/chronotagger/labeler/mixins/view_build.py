@@ -141,15 +141,16 @@ class ViewBuildMixin:
     def _build_plot(self, parent: ttk.Frame) -> None:
         """
         Build the Matplotlib figure and axes.
-
+    
         Two modes:
           - Legacy simple mode (no layout_spec): 1-column, N-rows time panels + strip.
           - Grid mode (layout_spec provided): user-defined grid; column 0 must be role='time'.
             The labels strip is added as an extra bottom row in column 0 only.
         """
         import matplotlib.pyplot as plt
-        from matplotlib import gridspec as mgrid
-
+        from matplotlib.widgets import RectangleSelector
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+    
         # ---- Helper: create RectangleSelector on a given axis
         def _attach_rect_selector(ax: plt.Axes) -> None:
             rs = RectangleSelector(
@@ -165,7 +166,7 @@ class ViewBuildMixin:
                            linestyle="--", linewidth=2),
             )
             self.rect_selectors["primary"] = rs
-
+    
         # ========== GRID MODE ==========
         if isinstance(self.layout_spec, dict):
             spec = self.layout_spec
@@ -174,32 +175,51 @@ class ViewBuildMixin:
             areas = list(spec.get("areas", []))  # list of dicts
             width_ratios = spec.get("width_ratios", None)
             height_ratios = spec.get("height_ratios", None)
-
+            hspace = float(spec.get("hspace", 0.12))
+            wspace = float(spec.get("wspace", 0.04))
+    
             if not areas:
                 raise ValueError("layout_spec.areas must be a non-empty list.")
-
+    
             # Validate: column 0 must be time-only
             col0_roles = [a.get("role", "time") for a in areas if int(a.get("col", 0)) == 0]
             if not col0_roles:
                 raise ValueError("layout_spec must place at least one axes in column 0 (time lane).")
             if any(r != "time" for r in col0_roles):
                 raise ValueError("Column 0 must contain only role='time' axes.")
-
+    
+            # --- Parse lane gutter option ---
+            lane_opt = spec.get("time_lane_cbar_gutter", None)
+            use_lane_gutter = isinstance(lane_opt, dict)
+            lane_col = int(lane_opt.get("col", 0)) if use_lane_gutter else 0
+    
+            def _as_frac(val, default):
+                if isinstance(val, (int, float)):
+                    return float(val)
+                if isinstance(val, str) and val.endswith("%"):
+                    try:
+                        return float(val[:-1]) / 100.0
+                    except Exception:
+                        return default
+                return default
+    
+            gutter_frac = _as_frac(lane_opt.get("size", "6%"), 0.06) if use_lane_gutter else 0.0
+            gutter_pad  = _as_frac(lane_opt.get("pad",  "2%"), 0.02) if use_lane_gutter else 0.0
+    
             # We reserve an extra strip row at the bottom
             total_rows = nrows + 1
-            # Default height ratios: equal rows, thin strip
             if height_ratios is None:
                 height_ratios = [1.0] * nrows + [0.5]
             else:
-                # If provided, extend (or override) to include a final strip row
                 height_ratios = list(height_ratios)
                 if len(height_ratios) != nrows:
                     raise ValueError("layout_spec.height_ratios must have length == nrows")
                 height_ratios = height_ratios + [0.5]
-
-            hspace = float(spec.get("hspace", 0.12))   # tighter default
-            wspace = float(spec.get("wspace", 0.04))
-            self.fig = plt.Figure(figsize=(14, 8), constrained_layout=True)
+    
+            # IMPORTANT: when using a manual gutter we disable constrained_layout,
+            # or else Matplotlib will re-expand axes and invalidate our gutter.
+            use_constrained = not use_lane_gutter
+            self.fig = plt.Figure(figsize=(14, 8), constrained_layout=use_constrained)
             gs = self.fig.add_gridspec(
                 total_rows, ncols,
                 width_ratios=width_ratios,
@@ -207,14 +227,13 @@ class ViewBuildMixin:
                 hspace=hspace,
                 wspace=wspace,
             )
-
+    
             # Build data axes per area
             self.user_axes = {}
             self.axes_meta = {}
             self._time_axis_keys = set()
             self._primary_time_key = None
-
-            # First pass: instantiate axes
+    
             for a in areas:
                 key = str(a["key"])
                 row = int(a.get("row", 0))
@@ -222,45 +241,70 @@ class ViewBuildMixin:
                 rowspan = int(a.get("rowspan", 1))
                 colspan = int(a.get("colspan", 1))
                 role = str(a.get("role", "time")).lower()  # 'time' or 'xy'
-
+    
                 if row < 0 or row >= nrows or col < 0 or col >= ncols:
                     raise ValueError(f"Area {key} has out-of-bounds row/col.")
-
+    
                 ax = self.fig.add_subplot(gs[row:row+rowspan, col:col+colspan])
                 self.user_axes[key] = ax
                 self.axes_meta[key] = {"role": role, "row": row, "col": col,
                                        "rowspan": rowspan, "colspan": colspan}
-
+    
                 if role == "time":
                     self._time_axis_keys.add(key)
-                    # First time axis in col 0 becomes primary (rectangle selector & x-share anchor)
                     if self._primary_time_key is None and col == 0:
                         self._primary_time_key = key
-
+    
             # Safety: ensure we found a primary
             if self._primary_time_key is None:
-                # Fallback: first 'time' axis, even if not in col 0 (shouldn't happen after validation)
                 self._primary_time_key = next(iter(self._time_axis_keys))
-
-            # Share x among all time axes (globally) to the primary
+    
+            # Share x among all time axes to the primary
             primary_ax = self.user_axes[self._primary_time_key]
             for k in self._time_axis_keys:
-                if k == self._primary_time_key:
-                    continue
-                self.user_axes[k].sharex(primary_ax)
-
+                if k != self._primary_time_key:
+                    self.user_axes[k].sharex(primary_ax)
+    
             # Add the labels strip in the bottom extra row, column 0 only
             strip_row = nrows  # final row
             self.strip_ax = self.fig.add_subplot(gs[strip_row, 0])  # span only column 0
             self.strip_ax.set_ylabel("Labels", fontsize=9)
             self.strip_ax.set_ylim(0, 1)
             self.strip_ax.set_yticks([])
-
+    
             # Date formatting on time axes + strip
             for k in self._time_axis_keys:
                 self._apply_time_axis_format(self.user_axes[k])
             self._apply_time_axis_format(self.strip_ax)
-
+    
+            # ---- Apply the lane gutter by shrinking *all* axes in the lane ----
+            if use_lane_gutter and 0 <= lane_col < ncols:
+                # Collect time-lane axes (role='time' AND col == lane_col)
+                lane_axes = [self.user_axes[k]
+                             for k, meta in self.axes_meta.items()
+                             if meta["role"] == "time" and meta["col"] == lane_col]
+                # Include strip (it’s in column 0)
+                if lane_col == 0 and self.strip_ax is not None:
+                    lane_axes.append(self.strip_ax)
+    
+                if lane_axes:
+                    # Use the smallest current right edge to stay conservative
+                    current_right = min(ax.get_position().x1 for ax in lane_axes)
+                    target_right = max(0.0, current_right - (gutter_frac + gutter_pad))
+    
+                    for ax in lane_axes:
+                        pos = ax.get_position()
+                        new_w = max(0.01, target_right - pos.x0)
+                        ax.set_position([pos.x0, pos.y0, new_w, pos.height])
+    
+                    # Expose gutter box for colorbars (consumed by ensure_lane_colorbar)
+                    # Figure coordinates: x-left and width of the gutter
+                    self.fig._chrono_lane_gutter = {  # type: ignore[attr-defined]
+                        "col": lane_col,
+                        "x": target_right + gutter_pad,
+                        "w": gutter_frac,
+                    }
+    
             # Embed in Tk
             self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
             self.canvas.draw()
@@ -268,18 +312,17 @@ class ViewBuildMixin:
             toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
             toolbar.update()
             self.root.after(0, self.canvas.draw_idle)
-
+    
             # Wheel zoom/pan: connect once
             if getattr(self, "_scroll_cid", None) is None:
                 self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
-
+    
             # Rectangle selector on the primary time axis
             _attach_rect_selector(self.user_axes[self._primary_time_key])
-
+    
             # Interval pick on the strip
             if self.pick_cid is None:
                 self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)
-
             # Drag/resize/move on strip
             if self._press_cid is None:
                 self._press_cid = self.canvas.mpl_connect("button_press_event", self._on_strip_press)
@@ -287,15 +330,15 @@ class ViewBuildMixin:
                 self._motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_strip_motion)
             if self._release_cid is None:
                 self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
-
+    
             return  # grid mode done
-
+    
         # ========== LEGACY SIMPLE MODE (unchanged behavior) ==========
         n = self._resolve_n_panels()
-
+    
         self.fig = plt.Figure(figsize=(14, 8), constrained_layout=True)
         gs = self.fig.add_gridspec(n + 1, 1, height_ratios=[3] * n + [1], hspace=0.25)
-
+    
         self.user_axes = {}
         for i in range(n):
             ax = self.fig.add_subplot(gs[i, 0])
@@ -303,29 +346,29 @@ class ViewBuildMixin:
             self.user_axes[key] = ax
             if i > 0:
                 ax.sharex(self.user_axes["panel1"])
-
+    
         self.strip_ax = self.fig.add_subplot(gs[n, 0], sharex=self.user_axes["panel1"])
         self.strip_ax.set_ylabel("Labels", fontsize=9)
         self.strip_ax.set_ylim(0, 1)
         self.strip_ax.set_yticks([])
-
+    
         for ax in list(self.user_axes.values()) + [self.strip_ax]:
             self._apply_time_axis_format(ax)
-
+    
         self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
         toolbar.update()
         self.root.after(0, self.canvas.draw_idle)
-
+    
         if getattr(self, "_scroll_cid", None) is None:
             self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
-
+    
         # Primary = panel1
         self._time_axis_keys = set(self.user_axes.keys())
         self._primary_time_key = "panel1"
-
+    
         self.rect_selectors["primary"] = RectangleSelector(
             self.user_axes["panel1"],
             onselect=self._on_rectangle_select,
@@ -338,7 +381,7 @@ class ViewBuildMixin:
             props=dict(facecolor="yellow", edgecolor="orange", alpha=0.3,
                        linestyle="--", linewidth=2),
         )
-
+    
         if self.pick_cid is None:
             self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)
         if self._press_cid is None:
