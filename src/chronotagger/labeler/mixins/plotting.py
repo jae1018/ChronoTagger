@@ -63,6 +63,15 @@ class PlottingMixin:
             ax.set_xlim(self.t0, self.t1)
             self._apply_time_axis_format(ax)
             ax.margins(x=0.01)
+            
+        # Align limits + date formatting for time axes
+        for ax in time_axes.values():
+            ax.set_xlim(self.t0, self.t1)
+            self._apply_time_axis_format(ax)
+            ax.margins(x=0.01)
+        
+        # NEW: compact x labels per column
+        self._apply_time_xlabel_policy()
 
         # Non-time axes: do not touch xlim/formatting (users control them)
 
@@ -86,6 +95,46 @@ class PlottingMixin:
         self._update_intervals_list()
 
         self.canvas.draw()
+        
+    def _apply_time_xlabel_policy(self) -> None:
+        """
+        Compact x-labels for time axes:
+          - Column 0: hide on all time panels (the strip shows the time axis).
+          - Other columns: keep x labels only on the bottom-most time panel.
+        Also suppress the ConciseDateFormatter 'offset' line on hidden axes.
+        """
+        meta = getattr(self, "axes_meta", None)
+        if not isinstance(meta, dict) or not meta:
+            return  # legacy/simple mode
+    
+        # collect time axes by column
+        by_col: dict[int, list[tuple[str, dict]]] = {}
+        for key, m in meta.items():
+            if m.get("role") == "time":
+                by_col.setdefault(int(m.get("col", 0)), []).append((key, m))
+    
+        for col, items in by_col.items():
+            # bottom-most = max(row + rowspan - 1)
+            bottom_key = max(items, key=lambda kv: kv[1].get("row", 0) + kv[1].get("rowspan", 1) - 1)[0]
+            for key, _m in items:
+                ax = self.user_axes.get(key)
+                if ax is None:
+                    continue
+    
+                hide = (col == 0) or (key != bottom_key)  # strip owns col 0; otherwise bottom-most shows labels
+                if hide:
+                    ax.tick_params(axis="x", labelbottom=False)
+                    ax.set_xlabel("")
+                    # kill the ConciseDateFormatter offset line if present
+                    fmt = ax.xaxis.get_major_formatter()
+                    if hasattr(fmt, "show_offset"):
+                        fmt.show_offset = False
+                    ax.xaxis.get_offset_text().set_visible(False)
+                else:
+                    ax.tick_params(axis="x", labelbottom=True)
+                    fmt = ax.xaxis.get_major_formatter()
+                    if hasattr(fmt, "show_offset"):
+                        fmt.show_offset = True
 
     def _update_strip(self) -> None:
         """Redraw annotation strip (intervals + current selection preview)."""

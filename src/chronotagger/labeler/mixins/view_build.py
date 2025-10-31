@@ -197,12 +197,15 @@ class ViewBuildMixin:
                     raise ValueError("layout_spec.height_ratios must have length == nrows")
                 height_ratios = height_ratios + [0.5]
 
+            hspace = float(spec.get("hspace", 0.12))   # tighter default
+            wspace = float(spec.get("wspace", 0.04))
             self.fig = plt.Figure(figsize=(14, 8), constrained_layout=True)
             gs = self.fig.add_gridspec(
                 total_rows, ncols,
                 width_ratios=width_ratios,
                 height_ratios=height_ratios,
-                hspace=0.25,
+                hspace=hspace,
+                wspace=wspace,
             )
 
             # Build data axes per area
