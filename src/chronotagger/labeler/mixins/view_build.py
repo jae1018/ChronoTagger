@@ -108,6 +108,7 @@ class ViewBuildMixin:
         ttk.Separator(act, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         ttk.Button(act, text="Help (F1)", command=self._open_help_dialog).pack(side=tk.LEFT, padx=2)
 
+    # src/chronotagger/labeler/mixins/view_build.py
     def _build_plot(self, parent: ttk.Frame) -> None:
         # Resolve how many data panels to build
         n = self._resolve_n_panels()
@@ -143,37 +144,42 @@ class ViewBuildMixin:
         toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
         toolbar.update()
     
-        # Defer the first draw so Tk has correct geometry (prevents clipped labels)
+        # Defer first draw so Tk has correct geometry (prevents clipped labels)
         self.root.after(0, self.canvas.draw_idle)
     
-        # Mouse wheel zoom/pan
+        # Mouse wheel zoom/pan (already present)
         if getattr(self, "_scroll_cid", None) is None:
             self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
     
-        # Rectangle selectors on *every* user axis (not just panel1)
-        self.rect_selectors = {}
-        for name, ax in self.user_axes.items():
-            self.rect_selectors[name] = RectangleSelector(
-                ax,
-                onselect=self._on_rectangle_select,   # same callback for all panels
-                useblit=True,
-                button=[1],                           # left mouse
-                minspanx=5,
-                minspany=5,
-                spancoords="pixels",
-                interactive=False,
-                props=dict(
-                    facecolor="yellow",
-                    edgecolor="orange",
-                    alpha=0.3,
-                    linestyle="--",
-                    linewidth=2,
-                ),
-            )
+        # Rectangle selector on the first user panel
+        first_ax = self.user_axes["panel1"]
+        self.rect_selector = RectangleSelector(
+            first_ax,
+            onselect=self._on_rectangle_select,
+            useblit=True,
+            button=[1],  # left mouse
+            minspanx=5,
+            minspany=5,
+            spancoords="pixels",
+            interactive=False,
+            props=dict(
+                facecolor="yellow", edgecolor="orange",
+                alpha=0.3, linestyle="--", linewidth=2
+            ),
+        )
     
-        # One-time pick handler for the strip
+        # One-time pick handler for the strip (select interval)
         if self.pick_cid is None:
             self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)
+    
+        # NEW: mouse-based resize/move on strip axis
+        if self._press_cid is None:
+            self._press_cid = self.canvas.mpl_connect("button_press_event", self._on_strip_press)
+        if self._motion_cid is None:
+            self._motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_strip_motion)
+        if self._release_cid is None:
+            self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
+
 
     def _build_sidebar(self, parent: ttk.Frame) -> None:
         # Intervals list

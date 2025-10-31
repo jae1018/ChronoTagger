@@ -101,65 +101,71 @@ class TimeIntervalLabeler(
             raise TypeError("DataFrame must have a DatetimeIndex.")
         if not callable(plot_fn):
             raise TypeError("plot_fn must be callable.")
-
+    
         # Core data / plotting contract
         self.df = df
         self.plot_fn = plot_fn
-
+    
         # Label classes & colors
         if classes is None:
             classes = ["PlasmaSheet", "Lobe", "Magnetosheath", "SolarWind", "UNKNOWN"]
         self.classes: List[str] = list(classes)
-
+    
         if class_colors is None:
             class_colors = {
                 cls: self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)]
                 for i, cls in enumerate(self.classes)
             }
         self.class_colors: Dict[str, str] = dict(class_colors)
-
+    
         # Time bounds & window
         self.data_start: pd.Timestamp = df.index[0]
         self.data_end: pd.Timestamp = df.index[-1]
         self.window: pd.Timedelta = window
         self.step: pd.Timedelta = step
-
+    
         if start is None:
             start = self.data_start
         self.t0: pd.Timestamp = max(start, self.data_start)
         self.t1: pd.Timestamp = min(self.t0 + window, self.data_end)
-        
+    
         # Wheel zoom/pan config
         self.zoom_sensitivity: float = 0.20     # 20% per notch
         self.pan_sensitivity: float = 0.20      # 20% of window per notch
         self.min_window: pd.Timedelta = pd.Timedelta("5s")
         self.max_window: pd.Timedelta = self.data_end - self.data_start
-
+    
         # Intervals & selection
         self.intervals: List[Interval] = []
         self.selected_interval: Optional[Interval] = None
         self.current_selection: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None
-
+    
         # Undo/redo
         self.undo_stack: List[Command] = []
         self.redo_stack: List[Command] = []
         self.max_undo: int = 20
-
+    
         # Persistence
         self.autosave_path = Path(autosave_path) if autosave_path else None
         self.modified: bool = False
-
+    
         # GUI state (set by view_build)
         self.root: Optional[tk.Tk] = None
         self.fig: Optional[plt.Figure] = None
         self.canvas = None  # FigureCanvasTkAgg
         self.user_axes: Dict[str, plt.Axes] = {}
         self.strip_ax: Optional[plt.Axes] = None
-        self.rect_selectors = {}
+    
+        # Multiple rectangle selectors (one per user axis)
+        self.rect_selectors: Dict[str, RectangleSelector] = {}
+    
+        # Matplotlib connection ids
         self.pick_cid: Optional[int] = None
+        self._scroll_cid: Optional[int] = None
+    
         # Panels (None means "resolve automatically")
         self.n_panels = n_panels
-
+    
         # Widgets we update later (set by view_build)
         self.start_time_entry = None
         self.end_time_entry = None
@@ -170,6 +176,30 @@ class TimeIntervalLabeler(
         self.stats_text = None
         self.snap_var = None
         self.status_var = None
+    
+        # --- Drag/resize/move state (for strip editing) ---
+        # mode: "resize_left" | "resize_right" | "move" | None
+        self._drag_mode: Optional[str] = None
+        self._drag_iv: Optional[Interval] = None
+        self._drag_initial: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None  # original (start,end)
+        self._drag_offset: Optional[pd.Timedelta] = None  # for "move": click_ts - start
+        self._drag_preview: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None  # live (start,end)
+    
+        # Matplotlib event connection ids for drag lifecycle
+        self._press_cid: Optional[int] = None
+        self._motion_cid: Optional[int] = None
+        self._release_cid: Optional[int] = None
+    
+        # --- Minimal interval duration (used by resize/move clamping) ---
+        # Try to infer sampling from median diff; fallback to 1s if irregular/empty
+        try:
+            diffs = self.df.index.to_series().diff().dropna()
+            med = diffs.median()
+            if not isinstance(med, pd.Timedelta) or med <= pd.Timedelta(0):
+                med = pd.Timedelta(seconds=1)
+            self.min_duration: pd.Timedelta = med
+        except Exception:
+            self.min_duration = pd.Timedelta(seconds=1)
 
     # -------- Public entrypoint --------
 
