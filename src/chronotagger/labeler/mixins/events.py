@@ -110,43 +110,87 @@ class EventsMixin:
                 self.canvas.draw()  # type: ignore[union-attr]
                 break
 
+    def _focused_widget_is_editable(self) -> bool:
+        """
+        Return True if the current keyboard focus is on an editable widget
+        (Entry, Text, or Combobox). In that case we should not handle global
+        navigation/shortcut keys, so the widget's native editing behavior wins.
+        """
+        if getattr(self, "root", None) is None:
+            return False
+        w = self.root.focus_get()
+        if w is None:
+            return False
+    
+        # Prefer Tk class names — reliable across ttk/tk variants.
+        try:
+            cls = w.winfo_class()
+        except Exception:
+            return False
+    
+        # Common editable classes: 'Entry' (tk), 'TEntry' (ttk), 'Text', 'TCombobox'
+        return cls in {"Entry", "TEntry", "Text", "TCombobox"}
+
+
     def _on_key_press(self, event) -> None:
         key = event.keysym
-
-        # Class selection 1..9
+    
+        # ---- Focus-aware early exit -------------------------------------------
+        # If an editable widget has focus, let it handle typing & arrow keys.
+        # Still allow Ctrl-based app shortcuts (e.g., Ctrl+S / Ctrl+E).
+        if self._focused_widget_is_editable():
+            if not (event.state & 0x4):  # 0x4 => Control modifier
+                return
+        # -----------------------------------------------------------------------
+    
+        # Class selection with digits 1..9
         if key.isdigit() and int(key) > 0:
             idx = int(key) - 1
             if idx < len(self.classes):
                 self.current_class_var.set(self.classes[idx])  # type: ignore[union-attr]
                 self.status_var.set(f"Selected class: {self.classes[idx]}")  # type: ignore[union-attr]
-
+            return
+    
         # Navigation
-        elif key in ("n", "N", "Right"):
+        if key in ("n", "N", "Right"):
             self._next_window()
-        elif key in ("p", "P", "Left"):
+            return
+        if key in ("p", "P", "Left"):
             self._prev_window()
-
+            return
+    
         # Actions
-        elif key in ("a", "A", "Return"):
+        if key in ("a", "A", "Return"):
+            # Note: when an Entry has focus, the early-exit above prevents "Return"
+            # from reaching here; Entries bind Return separately (see below).
             self._add_interval()
-        elif key in ("d", "D", "Delete"):
+            return
+        if key in ("d", "D", "Delete"):
             self._delete_interval()
-        elif key in ("u", "U"):
+            return
+        if key in ("u", "U"):
             if "UNKNOWN" in self.classes:
                 self.current_class_var.set("UNKNOWN")  # type: ignore[union-attr]
                 self.status_var.set("Selected class: UNKNOWN")  # type: ignore[union-attr]
-
+            return
+    
         # Save / export (Ctrl+S / Ctrl+E)
-        elif key in ("s", "S") and event.state & 0x4:
+        if key in ("s", "S") and (event.state & 0x4):
             self._save_session()
-        elif key in ("e", "E") and event.state & 0x4:
+            return
+        if key in ("e", "E") and (event.state & 0x4):
             self._export_intervals()
-
+            return
+    
         # Undo / Redo (Ctrl+Z / Ctrl+Y) + Backspace ergonomics
-        elif (key == "z" and event.state & 0x4) or key == "BackSpace":
+        if (key == "z" and (event.state & 0x4)) or key == "BackSpace":
             self._undo()
-        elif (key == "y" and event.state & 0x4) or (key == "BackSpace" and event.state & 0x1):
+            return
+        if (key == "y" and (event.state & 0x4)) or (key == "BackSpace" and (event.state & 0x1)):
+            # Shift+Backspace => redo (state bit 0x1 is Shift)
             self._redo()
+            return
+
     
     
     
