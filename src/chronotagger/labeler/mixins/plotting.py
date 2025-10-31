@@ -31,13 +31,18 @@ class PlottingMixin:
 
     def _update_plot(self) -> None:
         """Redraw user panels and strip."""
-        # Clear data panels
+        # Clear data panels (but keep colorbars/inset axes if user created separately)
         for ax in self.user_axes.values():
             ax.clear()
 
-        # User plot function
+        # Choose the dataframe slice for time plots
         try:
             sub_df = self.df.loc[self.t0:self.t1]
+        except Exception:
+            sub_df = self.df
+
+        # User plot function
+        try:
             self.plot_fn(self.user_axes, sub_df, self.t0, self.t1)
         except Exception as e:
             for ax in self.user_axes.values():
@@ -46,20 +51,25 @@ class PlottingMixin:
                     ha="center", va="center"
                 )
 
-        # Align limits + date formatting
-        axes = list(self.user_axes.values())
-        if self.strip_ax is not None:
-            axes.append(self.strip_ax)
+        # Partition axes into time vs non-time
+        if getattr(self, "_time_axis_keys", None):
+            time_axes = {k: self.user_axes[k] for k in self._time_axis_keys if k in self.user_axes}
+        else:
+            # Legacy simple mode: all are time
+            time_axes = dict(self.user_axes)
 
-        for ax in axes:
+        # Align limits + date formatting for time axes
+        for ax in time_axes.values():
             ax.set_xlim(self.t0, self.t1)
             self._apply_time_axis_format(ax)
             ax.margins(x=0.01)
 
-        # NEW: draw faint background interval bands across all data panels
-        if self._overlays_enabled():
+        # Non-time axes: do not touch xlim/formatting (users control them)
+
+        # Background interval overlays across time panels only
+        if self._overlays_enabled() and time_axes:
             draw_interval_bands(
-                self.user_axes,
+                time_axes,
                 self.intervals,
                 self.t0, self.t1,
                 self.class_colors,
@@ -71,12 +81,11 @@ class PlottingMixin:
                 zorder=0.05,
             )
 
-        # Existing strip + sidebars
+        # Strip + sidebar
         self._update_strip()
         self._update_intervals_list()
 
-        #self.fig.tight_layout()   # type: ignore[union-attr]
-        self.canvas.draw()        # type: ignore[union-attr]
+        self.canvas.draw()
 
     def _update_strip(self) -> None:
         """Redraw annotation strip (intervals + current selection preview)."""

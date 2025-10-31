@@ -52,45 +52,40 @@ class ZoomMixin:
         event.button is 'up' or 'down'
         event.key includes modifiers like 'shift', 'control', etc.
         """
-        # Only react when the cursor is over a data axis or the strip
-        valid_axes = list(self.user_axes.values())
+        # Consider only time axes + strip
+        if getattr(self, "_time_axis_keys", None):
+            valid_axes = [self.user_axes[k] for k in self._time_axis_keys if k in self.user_axes]
+        else:
+            valid_axes = list(self.user_axes.values())
+
         if self.strip_ax is not None:
             valid_axes.append(self.strip_ax)
+
         if event.inaxes not in valid_axes:
             return
 
         direction = 1 if event.button == "up" else -1
-
-        # Shift+wheel -> pan; otherwise zoom
         is_pan = isinstance(event.key, str) and "shift" in event.key
 
         if is_pan:
-            # Pan by fraction of current window
             win = self.t1 - self.t0
             dx = direction * self.pan_sensitivity * win
             new_t0 = self.t0 - dx
             new_t1 = self.t1 - dx
             new_t0, new_t1 = self._clamp_to_bounds(new_t0, new_t1)
         else:
-            # Zoom around cursor position
             center = self._ts_from_mpl_x(event.xdata)
             win = self.t1 - self.t0
-
-            # Scale window; 'up' -> zoom in; 'down' -> zoom out
             scale = (1.0 - self.zoom_sensitivity) if direction > 0 else (1.0 + self.zoom_sensitivity)
             new_win = win * scale
-
-            # Respect min/max window limits
             if new_win < self.min_window:
                 new_win = self.min_window
             if new_win > self.max_window:
                 new_win = self.max_window
-
             half = new_win / 2
             new_t0 = center - half
             new_t1 = center + half
             new_t0, new_t1 = self._clamp_to_bounds(new_t0, new_t1)
 
-        # Apply
         self.t0, self.t1 = new_t0, new_t1
         self._sync_entries_and_plot()

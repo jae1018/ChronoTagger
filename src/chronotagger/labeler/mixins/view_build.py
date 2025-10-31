@@ -138,77 +138,213 @@ class ViewBuildMixin:
         self.root.bind("<F1>", lambda e: self._open_help_dialog())
 
 
-    # src/chronotagger/labeler/mixins/view_build.py
     def _build_plot(self, parent: ttk.Frame) -> None:
-        # Resolve how many data panels to build
+        """
+        Build the Matplotlib figure and axes.
+
+        Two modes:
+          - Legacy simple mode (no layout_spec): 1-column, N-rows time panels + strip.
+          - Grid mode (layout_spec provided): user-defined grid; column 0 must be role='time'.
+            The labels strip is added as an extra bottom row in column 0 only.
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib import gridspec as mgrid
+
+        # ---- Helper: create RectangleSelector on a given axis
+        def _attach_rect_selector(ax: plt.Axes) -> None:
+            rs = RectangleSelector(
+                ax,
+                onselect=self._on_rectangle_select,
+                useblit=True,
+                button=[1],
+                minspanx=5,
+                minspany=5,
+                spancoords="pixels",
+                interactive=False,
+                props=dict(facecolor="yellow", edgecolor="orange", alpha=0.3,
+                           linestyle="--", linewidth=2),
+            )
+            self.rect_selectors["primary"] = rs
+
+        # ========== GRID MODE ==========
+        if isinstance(self.layout_spec, dict):
+            spec = self.layout_spec
+            nrows: int = int(spec.get("nrows", 1))
+            ncols: int = int(spec.get("ncols", 1))
+            areas = list(spec.get("areas", []))  # list of dicts
+            width_ratios = spec.get("width_ratios", None)
+            height_ratios = spec.get("height_ratios", None)
+
+            if not areas:
+                raise ValueError("layout_spec.areas must be a non-empty list.")
+
+            # Validate: column 0 must be time-only
+            col0_roles = [a.get("role", "time") for a in areas if int(a.get("col", 0)) == 0]
+            if not col0_roles:
+                raise ValueError("layout_spec must place at least one axes in column 0 (time lane).")
+            if any(r != "time" for r in col0_roles):
+                raise ValueError("Column 0 must contain only role='time' axes.")
+
+            # We reserve an extra strip row at the bottom
+            total_rows = nrows + 1
+            # Default height ratios: equal rows, thin strip
+            if height_ratios is None:
+                height_ratios = [1.0] * nrows + [0.5]
+            else:
+                # If provided, extend (or override) to include a final strip row
+                height_ratios = list(height_ratios)
+                if len(height_ratios) != nrows:
+                    raise ValueError("layout_spec.height_ratios must have length == nrows")
+                height_ratios = height_ratios + [0.5]
+
+            self.fig = plt.Figure(figsize=(14, 8), constrained_layout=True)
+            gs = self.fig.add_gridspec(
+                total_rows, ncols,
+                width_ratios=width_ratios,
+                height_ratios=height_ratios,
+                hspace=0.25,
+            )
+
+            # Build data axes per area
+            self.user_axes = {}
+            self.axes_meta = {}
+            self._time_axis_keys = set()
+            self._primary_time_key = None
+
+            # First pass: instantiate axes
+            for a in areas:
+                key = str(a["key"])
+                row = int(a.get("row", 0))
+                col = int(a.get("col", 0))
+                rowspan = int(a.get("rowspan", 1))
+                colspan = int(a.get("colspan", 1))
+                role = str(a.get("role", "time")).lower()  # 'time' or 'xy'
+
+                if row < 0 or row >= nrows or col < 0 or col >= ncols:
+                    raise ValueError(f"Area {key} has out-of-bounds row/col.")
+
+                ax = self.fig.add_subplot(gs[row:row+rowspan, col:col+colspan])
+                self.user_axes[key] = ax
+                self.axes_meta[key] = {"role": role, "row": row, "col": col,
+                                       "rowspan": rowspan, "colspan": colspan}
+
+                if role == "time":
+                    self._time_axis_keys.add(key)
+                    # First time axis in col 0 becomes primary (rectangle selector & x-share anchor)
+                    if self._primary_time_key is None and col == 0:
+                        self._primary_time_key = key
+
+            # Safety: ensure we found a primary
+            if self._primary_time_key is None:
+                # Fallback: first 'time' axis, even if not in col 0 (shouldn't happen after validation)
+                self._primary_time_key = next(iter(self._time_axis_keys))
+
+            # Share x among all time axes (globally) to the primary
+            primary_ax = self.user_axes[self._primary_time_key]
+            for k in self._time_axis_keys:
+                if k == self._primary_time_key:
+                    continue
+                self.user_axes[k].sharex(primary_ax)
+
+            # Add the labels strip in the bottom extra row, column 0 only
+            strip_row = nrows  # final row
+            self.strip_ax = self.fig.add_subplot(gs[strip_row, 0])  # span only column 0
+            self.strip_ax.set_ylabel("Labels", fontsize=9)
+            self.strip_ax.set_ylim(0, 1)
+            self.strip_ax.set_yticks([])
+
+            # Date formatting on time axes + strip
+            for k in self._time_axis_keys:
+                self._apply_time_axis_format(self.user_axes[k])
+            self._apply_time_axis_format(self.strip_ax)
+
+            # Embed in Tk
+            self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
+            self.canvas.draw()
+            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
+            toolbar.update()
+            self.root.after(0, self.canvas.draw_idle)
+
+            # Wheel zoom/pan: connect once
+            if getattr(self, "_scroll_cid", None) is None:
+                self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
+
+            # Rectangle selector on the primary time axis
+            _attach_rect_selector(self.user_axes[self._primary_time_key])
+
+            # Interval pick on the strip
+            if self.pick_cid is None:
+                self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)
+
+            # Drag/resize/move on strip
+            if self._press_cid is None:
+                self._press_cid = self.canvas.mpl_connect("button_press_event", self._on_strip_press)
+            if self._motion_cid is None:
+                self._motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_strip_motion)
+            if self._release_cid is None:
+                self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
+
+            return  # grid mode done
+
+        # ========== LEGACY SIMPLE MODE (unchanged behavior) ==========
         n = self._resolve_n_panels()
-    
-        # Figure with constrained layout to manage whitespace cleanly
+
         self.fig = plt.Figure(figsize=(14, 8), constrained_layout=True)
         gs = self.fig.add_gridspec(n + 1, 1, height_ratios=[3] * n + [1], hspace=0.25)
-    
-        # User axes (share x with the first)
-        self.user_axes: Dict[str, plt.Axes] = {}
+
+        self.user_axes = {}
         for i in range(n):
             ax = self.fig.add_subplot(gs[i, 0])
             key = f"panel{i+1}"
             self.user_axes[key] = ax
             if i > 0:
                 ax.sharex(self.user_axes["panel1"])
-    
-        # Annotation strip
+
         self.strip_ax = self.fig.add_subplot(gs[n, 0], sharex=self.user_axes["panel1"])
         self.strip_ax.set_ylabel("Labels", fontsize=9)
         self.strip_ax.set_ylim(0, 1)
         self.strip_ax.set_yticks([])
-    
-        # Apply date formatting to all axes
+
         for ax in list(self.user_axes.values()) + [self.strip_ax]:
             self._apply_time_axis_format(ax)
-    
-        # Embed
+
         self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-    
         toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
         toolbar.update()
-    
-        # Defer first draw so Tk has correct geometry (prevents clipped labels)
         self.root.after(0, self.canvas.draw_idle)
-    
-        # Mouse wheel zoom/pan (already present)
+
         if getattr(self, "_scroll_cid", None) is None:
             self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
-    
-        # Rectangle selector on the first user panel
-        first_ax = self.user_axes["panel1"]
-        self.rect_selector = RectangleSelector(
-            first_ax,
+
+        # Primary = panel1
+        self._time_axis_keys = set(self.user_axes.keys())
+        self._primary_time_key = "panel1"
+
+        self.rect_selectors["primary"] = RectangleSelector(
+            self.user_axes["panel1"],
             onselect=self._on_rectangle_select,
             useblit=True,
-            button=[1],  # left mouse
+            button=[1],
             minspanx=5,
             minspany=5,
             spancoords="pixels",
             interactive=False,
-            props=dict(
-                facecolor="yellow", edgecolor="orange",
-                alpha=0.3, linestyle="--", linewidth=2
-            ),
+            props=dict(facecolor="yellow", edgecolor="orange", alpha=0.3,
+                       linestyle="--", linewidth=2),
         )
-    
-        # One-time pick handler for the strip (select interval)
+
         if self.pick_cid is None:
             self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)
-    
-        # NEW: mouse-based resize/move on strip axis
         if self._press_cid is None:
             self._press_cid = self.canvas.mpl_connect("button_press_event", self._on_strip_press)
         if self._motion_cid is None:
             self._motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_strip_motion)
         if self._release_cid is None:
             self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
+
 
 
     def _build_sidebar(self, parent: ttk.Frame) -> None:
@@ -281,6 +417,80 @@ class ViewBuildMixin:
         ttk.Label(parent, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(
             side=tk.BOTTOM, fill=tk.X
         )
+        
+    def _build_axes_from_layout(self, parent: ttk.Frame, layout: dict) -> None:
+        """
+        Build axes from a declarative layout:
+    
+        layout = {
+          "grid": {
+            "nrows": int, "ncols": int,
+            "hspace": float, "wspace": float,             # optional
+            "height_ratios": [..], "width_ratios": [..],  # optional
+          },
+          "areas": [
+            {"key": "n_log",     "row": 0, "col": 0, "rowspan": 1, "colspan": 2, "role": "time", "sharex_with": "n_log"},
+            {"key": "spec_main", "row": 1, "col": 0,                 "role": "time", "sharex_with": "n_log"},
+            {"key": "spec_cbar", "row": 1, "col": 1,                 "role": "colorbar", "attach_to": "spec_main"},
+            {"key": "scpot",     "row": 2, "col": 0, "colspan": 2,   "role": "time", "sharex_with": "n_log"},
+            {"key": "p_log",     "row": 3, "col": 0, "colspan": 2,   "role": "time", "sharex_with": "n_log"},
+            {"key": "b_comps",   "row": 4, "col": 0, "colspan": 2,   "role": "time", "sharex_with": "n_log"},
+            {"key": "strip",     "row": 5, "col": 0, "colspan": 2,   "role": "strip"},
+          ]
+        }
+        """
+        g = layout.get("grid", {})
+        nrows = int(g.get("nrows", 2))
+        ncols = int(g.get("ncols", 1))
+        hspace = g.get("hspace", 0.25)
+        wspace = g.get("wspace", 0.05)
+        height_ratios = g.get("height_ratios", None)
+        width_ratios = g.get("width_ratios", None)
+    
+        gs = self.fig.add_gridspec(
+            nrows, ncols,
+            hspace=hspace, wspace=wspace,
+            height_ratios=height_ratios, width_ratios=width_ratios,
+        )
+    
+        self.user_axes = {}
+        self.axes_roles = {}
+        self.strip_ax = None
+        self.primary_time_key = None
+    
+        # First pass: create all axes
+        created: Dict[str, plt.Axes] = {}
+        for area in layout.get("areas", []):
+            key = str(area["key"])
+            row = int(area.get("row", 0))
+            col = int(area.get("col", 0))
+            rowspan = int(area.get("rowspan", 1))
+            colspan = int(area.get("colspan", 1))
+            role = str(area.get("role", "time")).lower()
+    
+            ax = self.fig.add_subplot(gs[row:row+rowspan, col:col+colspan])
+            created[key] = ax
+            self.axes_roles[key] = role
+    
+            if role == "strip":
+                self.strip_ax = ax
+            else:
+                self.user_axes[key] = ax
+                if role == "time" and self.primary_time_key is None:
+                    self.primary_time_key = key
+    
+        if self.strip_ax is None:
+            raise ValueError("Layout must include exactly one area with role='strip'.")
+    
+        # Second pass: sharex relationships for time panels
+        for area in layout.get("areas", []):
+            key = str(area["key"])
+            role = self.axes_roles.get(key)
+            if role != "time":
+                continue
+            share_key = area.get("sharex_with", self.primary_time_key or key)
+            if share_key and share_key in created and share_key != key:
+                created[key].sharex(created[share_key])
         
     def _resolve_n_panels(self) -> int:
         """
