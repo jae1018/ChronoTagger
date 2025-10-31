@@ -126,6 +126,9 @@ class ViewBuildMixin:
         ttk.Button(act, text="Delete", command=self._delete_interval).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Undo", command=self._undo).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Redo", command=self._redo).pack(side=tk.LEFT, padx=2)
+        
+        # NEW: always-visible export button
+        ttk.Button(act, text="Export Labels…", command=self._export_labels_dialog).pack(side=tk.LEFT, padx=8)
     
         # --- Help button to show controls ---
         help_box = ttk.Frame(parent)
@@ -257,6 +260,9 @@ class ViewBuildMixin:
         ttk.Button(files, text="Load Session", command=self._load_session).pack(fill=tk.X, pady=2)
         ttk.Button(files, text="Export Intervals", command=self._export_intervals).pack(fill=tk.X, pady=2)
         ttk.Button(files, text="Export Per-Sample", command=self._export_per_sample).pack(fill=tk.X, pady=2)
+        
+        # ML-friendly per-sample export (CSV + sidecar)
+        ttk.Button(files, text="Export Labels…", command=self._export_labels_dialog).pack(fill=tk.X, pady=2)
 
         # Options
         opts = ttk.LabelFrame(parent, text="Options", padding=5)
