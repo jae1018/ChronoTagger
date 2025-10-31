@@ -114,6 +114,10 @@ class ViewBuildMixin:
             width=18,
         )
         self.class_combo.pack(side=tk.LEFT, padx=2)
+        
+        # Manage labels button
+        ttk.Button(cls_frame, text="Manage Labels…", command=self._open_label_manager)\
+            .pack(side=tk.LEFT, padx=(6, 0))
     
         # ── Quick actions ─────────────────────────────────────────────────────────
         act = ttk.Frame(parent)

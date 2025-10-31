@@ -37,6 +37,7 @@ from .mixins.zoom import ZoomMixin
 from .mixins.intervals import IntervalsMixin
 from .mixins.stats import StatsMixin
 from .mixins.io_export import IOExportMixin
+from .mixins.labels import LabelsMixin
 
 
 
@@ -48,6 +49,7 @@ class TimeIntervalLabeler(
     HelpMixin,
     ZoomMixin,
     IntervalsMixin,
+    LabelsMixin,
     StatsMixin,
     IOExportMixin,
 ):
