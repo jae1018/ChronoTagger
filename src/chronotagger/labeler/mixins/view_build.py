@@ -51,7 +51,7 @@ class ViewBuildMixin:
         self.root.bind("<F1>", self._open_help_dialog)
 
     def _build_top_controls(self, parent: ttk.Frame) -> None:
-        from tkinter import filedialog  # ensure Tk is initialized on Windows
+        from tkinter import filedialog  # ensures Tk is initialized on Windows
         _ = filedialog  # silence linter
     
         # Time range box
@@ -62,38 +62,45 @@ class ViewBuildMixin:
         self.start_time_entry = ttk.Entry(rng, width=20)
         self.start_time_entry.insert(0, str(self.t0))
         self.start_time_entry.grid(row=0, column=1, padx=2)
-        # Let Enter apply the new window while editing:
-        self.start_time_entry.bind("<Return>", lambda e: self._update_time_window())
     
         ttk.Label(rng, text="End:").grid(row=0, column=2, padx=2)
         self.end_time_entry = ttk.Entry(rng, width=20)
         self.end_time_entry.insert(0, str(self.t1))
         self.end_time_entry.grid(row=0, column=3, padx=2)
-        # Let Enter apply the new window while editing:
-        self.end_time_entry.bind("<Return>", lambda e: self._update_time_window())
     
         ttk.Button(rng, text="Update Window", command=self._update_time_window).grid(
             row=0, column=4, padx=5
         )
     
-        # Navigation
-        nav = ttk.Frame(parent)
+        # Navigation (centered with grid)
+        nav = ttk.LabelFrame(parent, text="Navigation", padding=5)
         nav.pack(side=tk.LEFT, padx=5)
     
-        ttk.Button(nav, text="<- Prev", command=self._prev_window).pack(side=tk.LEFT, padx=2)
-        ttk.Button(nav, text="Next ->", command=self._next_window).pack(side=tk.LEFT, padx=2)
+        # Make three columns; outer ones stretch to center the middle
+        nav.grid_columnconfigure(0, weight=1)
+        nav.grid_columnconfigure(1, weight=0)
+        nav.grid_columnconfigure(2, weight=1)
     
-        ttk.Label(nav, text="Step:").pack(side=tk.LEFT, padx=(10, 2))
-        self.step_entry = ttk.Entry(nav, width=10)
+        # Row 0: Prev / Next centered
+        row1 = ttk.Frame(nav)
+        row1.grid(row=0, column=1, pady=2)
+        ttk.Button(row1, text="<- Prev", command=self._prev_window).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row1, text="Next ->", command=self._next_window).pack(side=tk.LEFT, padx=4)
+    
+        # Row 1: Step controls centered
+        row2 = ttk.Frame(nav)
+        row2.grid(row=1, column=1, pady=2)
+        ttk.Label(row2, text="Step:").pack(side=tk.LEFT, padx=(0, 6))
+        self.step_entry = ttk.Entry(row2, width=16)
         self.step_entry.insert(0, str(self.step))
-        self.step_entry.pack(side=tk.LEFT, padx=2)
-        # (Optional) If you want Enter in Step to also apply the current Start/End:
-        # self.step_entry.bind("<Return>", lambda e: self._update_time_window())
+        self.step_entry.pack(side=tk.LEFT)
+        self.step_entry.bind("<Return>", lambda _: self._apply_step_entry())
+        ttk.Button(row2, text="x2", width=4, command=self._double_step).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row2, text="/2", width=4, command=self._halve_step).pack(side=tk.LEFT, padx=2)
     
         # Current label
         cls_frame = ttk.LabelFrame(parent, text="Current Label", padding=5)
         cls_frame.pack(side=tk.LEFT, padx=5)
-    
         self.current_class_var = tk.StringVar(value=self.classes[0])
         self.class_combo = ttk.Combobox(
             cls_frame,
@@ -111,6 +118,7 @@ class ViewBuildMixin:
         ttk.Button(act, text="Delete", command=self._delete_interval).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Undo", command=self._undo).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Redo", command=self._redo).pack(side=tk.LEFT, padx=2)
+
 
     # src/chronotagger/labeler/mixins/view_build.py
     def _build_plot(self, parent: ttk.Frame) -> None:
