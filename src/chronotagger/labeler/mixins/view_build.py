@@ -126,6 +126,13 @@ class ViewBuildMixin:
         ttk.Button(act, text="Delete", command=self._delete_interval).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Undo", command=self._undo).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Redo", command=self._redo).pack(side=tk.LEFT, padx=2)
+    
+        # --- Help button to show controls ---
+        help_box = ttk.Frame(parent)
+        help_box.pack(side=tk.LEFT, padx=6)
+        ttk.Button(help_box, text="Help (F1)", command=self._open_help_dialog).pack()
+        # make sure F1 still opens help (safe to call even if previously bound)
+        self.root.bind("<F1>", lambda e: self._open_help_dialog())
 
 
     # src/chronotagger/labeler/mixins/view_build.py
