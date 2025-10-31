@@ -51,45 +51,49 @@ class ViewBuildMixin:
         self.root.bind("<F1>", self._open_help_dialog)
 
     def _build_top_controls(self, parent: ttk.Frame) -> None:
-        from tkinter import filedialog  # ensures Tk is initialized on Windows
-        _ = filedialog  # silence linter
+        from tkinter import filedialog  # ensure Tk is initialized on Windows
+        _ = filedialog
     
-        # Time range box
-        rng = ttk.LabelFrame(parent, text="Time Range", padding=5)
+        # ── Time Range (two-row layout, button centered on the right) ──────────────
+        rng = ttk.LabelFrame(parent, text="Time Range", padding=6)
         rng.pack(side=tk.LEFT, padx=5)
     
-        ttk.Label(rng, text="Start:").grid(row=0, column=0, padx=2)
-        self.start_time_entry = ttk.Entry(rng, width=20)
+        # Make the entry column stretchy so entries can grow
+        rng.grid_columnconfigure(1, weight=1)
+    
+        # Row 0: Start
+        ttk.Label(rng, text="Start:").grid(row=0, column=0, padx=(2, 6), pady=2, sticky="w")
+        self.start_time_entry = ttk.Entry(rng, width=22)
         self.start_time_entry.insert(0, str(self.t0))
-        self.start_time_entry.grid(row=0, column=1, padx=2)
+        self.start_time_entry.grid(row=0, column=1, padx=(0, 6), pady=2, sticky="ew")
     
-        ttk.Label(rng, text="End:").grid(row=0, column=2, padx=2)
-        self.end_time_entry = ttk.Entry(rng, width=20)
+        # Row 1: End
+        ttk.Label(rng, text="End:").grid(row=1, column=0, padx=(2, 6), pady=2, sticky="w")
+        self.end_time_entry = ttk.Entry(rng, width=22)
         self.end_time_entry.insert(0, str(self.t1))
-        self.end_time_entry.grid(row=0, column=3, padx=2)
+        self.end_time_entry.grid(row=1, column=1, padx=(0, 6), pady=2, sticky="ew")
     
-        ttk.Button(rng, text="Update Window", command=self._update_time_window).grid(
-            row=0, column=4, padx=5
-        )
+        # Right column: a tiny container so the button sits vertically centered
+        right_col = ttk.Frame(rng)
+        right_col.grid(row=0, column=2, rowspan=2, padx=(8, 2), sticky="ns")
+        ttk.Button(right_col, text="Update Window", command=self._update_time_window)\
+            .pack(expand=True)  # expand centers it between Start/End
     
-        # Navigation (centered with grid)
+        # ── Navigation (centered) ─────────────────────────────────────────────────
         nav = ttk.LabelFrame(parent, text="Navigation", padding=5)
-        nav.pack(side=tk.LEFT, padx=5)
+        nav.pack(side=tk.LEFT, padx=8)
     
-        # Make three columns; outer ones stretch to center the middle
         nav.grid_columnconfigure(0, weight=1)
         nav.grid_columnconfigure(1, weight=0)
         nav.grid_columnconfigure(2, weight=1)
     
-        # Row 0: Prev / Next centered
         row1 = ttk.Frame(nav)
-        row1.grid(row=0, column=1, pady=2)
+        row1.grid(row=0, column=1, pady=(0, 2))
         ttk.Button(row1, text="<- Prev", command=self._prev_window).pack(side=tk.LEFT, padx=4)
         ttk.Button(row1, text="Next ->", command=self._next_window).pack(side=tk.LEFT, padx=4)
     
-        # Row 1: Step controls centered
         row2 = ttk.Frame(nav)
-        row2.grid(row=1, column=1, pady=2)
+        row2.grid(row=1, column=1, pady=(2, 0))
         ttk.Label(row2, text="Step:").pack(side=tk.LEFT, padx=(0, 6))
         self.step_entry = ttk.Entry(row2, width=16)
         self.step_entry.insert(0, str(self.step))
@@ -98,9 +102,9 @@ class ViewBuildMixin:
         ttk.Button(row2, text="x2", width=4, command=self._double_step).pack(side=tk.LEFT, padx=4)
         ttk.Button(row2, text="/2", width=4, command=self._halve_step).pack(side=tk.LEFT, padx=2)
     
-        # Current label
+        # ── Current label ─────────────────────────────────────────────────────────
         cls_frame = ttk.LabelFrame(parent, text="Current Label", padding=5)
-        cls_frame.pack(side=tk.LEFT, padx=5)
+        cls_frame.pack(side=tk.LEFT, padx=8)
         self.current_class_var = tk.StringVar(value=self.classes[0])
         self.class_combo = ttk.Combobox(
             cls_frame,
@@ -111,7 +115,7 @@ class ViewBuildMixin:
         )
         self.class_combo.pack(side=tk.LEFT, padx=2)
     
-        # Quick actions
+        # ── Quick actions ─────────────────────────────────────────────────────────
         act = ttk.Frame(parent)
         act.pack(side=tk.LEFT, padx=10)
         ttk.Button(act, text="Add Label", command=self._add_interval).pack(side=tk.LEFT, padx=2)
