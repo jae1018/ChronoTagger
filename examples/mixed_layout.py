@@ -30,9 +30,9 @@ def make_df():
 
 layout_spec = {
     "nrows": 4, "ncols": 2,
-    "height_ratios": [1.2, 1.6, 1.2, 1.2],
-    "width_ratios": [2.2, 1.6],
-    "hspace": 0.20, "wspace": 0.10,
+    #"height_ratios": [1.2, 1.6, 1.2, 1.2],
+    #"width_ratios": [2.2, 1.6],
+    #"hspace": 0.20, "wspace": 0.10,
     "areas": [
         {"key":"n",     "row":0, "col":0, "role":"time"},
         {"key":"b",     "row":1, "col":0, "role":"time"},
@@ -42,7 +42,7 @@ layout_spec = {
         {"key":"xy_bottom", "row":2, "col":1, "role":"xy", "rowspan":2},
     ],
     # Reserve a gutter on the right of the time lane for colorbars
-    "time_lane_cbar_gutter": {"col": 0, "size": "7%", "pad": "2%"},
+    #"time_lane_cbar_gutter": {"col": 0, "size": "7%", "pad": "2%"},
 }
 
 def plot_fn(axs, df, t0, t1):

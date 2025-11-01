@@ -172,166 +172,134 @@ class ViewBuildMixin:
             spec = self.layout_spec
             nrows: int = int(spec.get("nrows", 1))
             ncols: int = int(spec.get("ncols", 1))
-            areas = list(spec.get("areas", []))  # list of dicts
+            areas = list(spec.get("areas", []))
             width_ratios = spec.get("width_ratios", None)
             height_ratios = spec.get("height_ratios", None)
             hspace = float(spec.get("hspace", 0.12))
             wspace = float(spec.get("wspace", 0.04))
-    
+        
             if not areas:
                 raise ValueError("layout_spec.areas must be a non-empty list.")
-    
-            # Validate: column 0 must be time-only
-            col0_roles = [a.get("role", "time") for a in areas if int(a.get("col", 0)) == 0]
-            if not col0_roles:
-                raise ValueError("layout_spec must place at least one axes in column 0 (time lane).")
-            if any(r != "time" for r in col0_roles):
-                raise ValueError("Column 0 must contain only role='time' axes.")
-    
-            # --- Parse lane gutter option ---
-            lane_opt = spec.get("time_lane_cbar_gutter", None)
-            use_lane_gutter = isinstance(lane_opt, dict)
-            lane_col = int(lane_opt.get("col", 0)) if use_lane_gutter else 0
-    
-            def _as_frac(val, default):
-                if isinstance(val, (int, float)):
-                    return float(val)
-                if isinstance(val, str) and val.endswith("%"):
-                    try:
-                        return float(val[:-1]) / 100.0
-                    except Exception:
-                        return default
-                return default
-    
-            gutter_frac = _as_frac(lane_opt.get("size", "6%"), 0.06) if use_lane_gutter else 0.0
-            gutter_pad  = _as_frac(lane_opt.get("pad",  "2%"), 0.02) if use_lane_gutter else 0.0
-    
-            # We reserve an extra strip row at the bottom
-            total_rows = nrows + 1
+        
+            # validate: at least one time axis in col 0
+            if not any(int(a.get("col", 0)) == 0 and str(a.get("role", "time")).lower() == "time" for a in areas):
+                raise ValueError("layout_spec must place at least one role='time' axis in column 0.")
+        
+            # Try to REUSE an empty row in col 0 for the strip; else append a thin row
+            reuse_row = self._find_reusable_strip_row(nrows, areas)
+            append_row = reuse_row is None
+            total_rows = nrows + (1 if append_row else 0)
+        
+            # height ratios
             if height_ratios is None:
-                height_ratios = [1.0] * nrows + [0.5]
+                hrs = [1.0] * nrows
             else:
-                height_ratios = list(height_ratios)
                 if len(height_ratios) != nrows:
                     raise ValueError("layout_spec.height_ratios must have length == nrows")
-                height_ratios = height_ratios + [0.5]
-    
-            # IMPORTANT: when using a manual gutter we disable constrained_layout,
-            # or else Matplotlib will re-expand axes and invalidate our gutter.
+                hrs = list(map(float, height_ratios))
+        
+            if append_row:
+                strip_height_ratio = float(spec.get("strip_height_ratio", 0.12))
+                hrs = hrs + [strip_height_ratio]
+        
+            # Lane gutter behaviour unchanged; you can keep it on/off via spec
+            use_lane_gutter = isinstance(spec.get("time_lane_cbar_gutter", None), dict)
             use_constrained = not use_lane_gutter
+        
+            import matplotlib.pyplot as plt
             self.fig = plt.Figure(figsize=(14, 8), constrained_layout=use_constrained)
             gs = self.fig.add_gridspec(
                 total_rows, ncols,
-                width_ratios=width_ratios,
-                height_ratios=height_ratios,
-                hspace=hspace,
-                wspace=wspace,
+                width_ratios=width_ratios, height_ratios=hrs,
+                hspace=hspace, wspace=wspace,
             )
-    
-            # Build data axes per area
+        
+            # Build data axes exactly at user-specified rows/cols (no remap)
             self.user_axes = {}
             self.axes_meta = {}
             self._time_axis_keys = set()
             self._primary_time_key = None
-    
+        
             for a in areas:
                 key = str(a["key"])
                 row = int(a.get("row", 0))
                 col = int(a.get("col", 0))
                 rowspan = int(a.get("rowspan", 1))
                 colspan = int(a.get("colspan", 1))
-                role = str(a.get("role", "time")).lower()  # 'time' or 'xy'
-    
+                role = str(a.get("role", "time")).lower()
+        
                 if row < 0 or row >= nrows or col < 0 or col >= ncols:
                     raise ValueError(f"Area {key} has out-of-bounds row/col.")
-    
+        
                 ax = self.fig.add_subplot(gs[row:row+rowspan, col:col+colspan])
                 self.user_axes[key] = ax
                 self.axes_meta[key] = {"role": role, "row": row, "col": col,
                                        "rowspan": rowspan, "colspan": colspan}
-    
                 if role == "time":
                     self._time_axis_keys.add(key)
                     if self._primary_time_key is None and col == 0:
                         self._primary_time_key = key
-    
-            # Safety: ensure we found a primary
-            if self._primary_time_key is None:
+        
+            # Ensure we have a primary time axis
+            if self._primary_time_key is None and self._time_axis_keys:
                 self._primary_time_key = next(iter(self._time_axis_keys))
-    
-            # Share x among all time axes to the primary
-            primary_ax = self.user_axes[self._primary_time_key]
-            for k in self._time_axis_keys:
-                if k != self._primary_time_key:
-                    self.user_axes[k].sharex(primary_ax)
-    
-            # Add the labels strip in the bottom extra row, column 0 only
-            strip_row = nrows  # final row
-            self.strip_ax = self.fig.add_subplot(gs[strip_row, 0])  # span only column 0
+        
+            # Share x among time axes
+            if self._primary_time_key is not None:
+                primary_ax = self.user_axes[self._primary_time_key]
+                for k in self._time_axis_keys:
+                    if k != self._primary_time_key:
+                        self.user_axes[k].sharex(primary_ax)
+        
+            # Place strip: reuse row in col 0 if available, else append last row
+            strip_row = reuse_row if reuse_row is not None else (total_rows - 1)
+            self.strip_ax = self.fig.add_subplot(gs[strip_row, 0])
             self.strip_ax.set_ylabel("Labels", fontsize=9)
             self.strip_ax.set_ylim(0, 1)
             self.strip_ax.set_yticks([])
-    
-            # Date formatting on time axes + strip
+            self._apply_time_axis_format(self.strip_ax)
+        
+            # Time axis formatting for all time panels
             for k in self._time_axis_keys:
                 self._apply_time_axis_format(self.user_axes[k])
-            self._apply_time_axis_format(self.strip_ax)
-    
-            # ---- Apply the lane gutter by shrinking *all* axes in the lane ----
-            if use_lane_gutter and 0 <= lane_col < ncols:
-                # Collect time-lane axes (role='time' AND col == lane_col)
-                lane_axes = [self.user_axes[k]
-                             for k, meta in self.axes_meta.items()
-                             if meta["role"] == "time" and meta["col"] == lane_col]
-                # Include strip (it’s in column 0)
-                if lane_col == 0 and self.strip_ax is not None:
-                    lane_axes.append(self.strip_ax)
-    
-                if lane_axes:
-                    # Use the smallest current right edge to stay conservative
-                    current_right = min(ax.get_position().x1 for ax in lane_axes)
-                    target_right = max(0.0, current_right - (gutter_frac + gutter_pad))
-    
-                    for ax in lane_axes:
-                        pos = ax.get_position()
-                        new_w = max(0.01, target_right - pos.x0)
-                        ax.set_position([pos.x0, pos.y0, new_w, pos.height])
-    
-                    # Expose gutter box for colorbars (consumed by ensure_lane_colorbar)
-                    # Figure coordinates: x-left and width of the gutter
-                    self.fig._chrono_lane_gutter = {  # type: ignore[attr-defined]
-                        "col": lane_col,
-                        "x": target_right + gutter_pad,
-                        "w": gutter_frac,
-                    }
-    
+        
             # Embed in Tk
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
             self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
             self.canvas.draw()
             self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
             toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
             toolbar.update()
             self.root.after(0, self.canvas.draw_idle)
-    
-            # Wheel zoom/pan: connect once
+        
+            # Wheel zoom/pan
             if getattr(self, "_scroll_cid", None) is None:
                 self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
-    
-            # Rectangle selector on the primary time axis
-            _attach_rect_selector(self.user_axes[self._primary_time_key])
-    
-            # Interval pick on the strip
+        
+            # Rectangle selector on the primary time axis (if any)
+            if self._primary_time_key is not None:
+                from matplotlib.widgets import RectangleSelector
+                rs = RectangleSelector(
+                    self.user_axes[self._primary_time_key],
+                    onselect=self._on_rectangle_select,
+                    useblit=True, button=[1], minspanx=5, minspany=5,
+                    spancoords="pixels", interactive=False,
+                    props=dict(facecolor="yellow", edgecolor="orange", alpha=0.3,
+                               linestyle="--", linewidth=2),
+                )
+                self.rect_selectors["primary"] = rs
+        
+            # Strip interactions
             if self.pick_cid is None:
                 self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)
-            # Drag/resize/move on strip
             if self._press_cid is None:
                 self._press_cid = self.canvas.mpl_connect("button_press_event", self._on_strip_press)
             if self._motion_cid is None:
                 self._motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_strip_motion)
             if self._release_cid is None:
                 self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
-    
-            return  # grid mode done
+        
+            return
     
         # ========== LEGACY SIMPLE MODE (unchanged behavior) ==========
         n = self._resolve_n_panels()
@@ -463,6 +431,34 @@ class ViewBuildMixin:
         ttk.Label(parent, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(
             side=tk.BOTTOM, fill=tk.X
         )
+        
+    def _find_reusable_strip_row(self, nrows: int, areas: list[dict]) -> int | None:
+        """
+        Return a row index r (0..nrows-1) in column 0 that is *unused* in col 0
+        and comes *after* the last time-lane row. If none exists, return None.
+        """
+        occ_col0: set[int] = set()
+        last_time_row = -1
+        for a in areas:
+            col = int(a.get("col", 0))
+            row = int(a.get("row", 0))
+            rs  = int(a.get("rowspan", 1))
+            role = str(a.get("role", "time")).lower()
+            if col == 0:
+                # mark occupied rows in col 0
+                for r in range(row, row + rs):
+                    occ_col0.add(r)
+                if role == "time":
+                    last_time_row = max(last_time_row, row + rs - 1)
+    
+        if last_time_row < 0:
+            return None  # no time lane in col 0 (shouldn't happen)
+    
+        # first unused row in col 0 after the time lane
+        for r in range(last_time_row + 1, nrows):
+            if r not in occ_col0:
+                return r
+        return None
         
     def _build_axes_from_layout(self, parent: ttk.Frame, layout: dict) -> None:
         """

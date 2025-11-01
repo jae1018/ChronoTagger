@@ -75,7 +75,7 @@ class PlottingMixin:
             ax.margins(x=0.01)
     
         # Only hide x labels on *time* axes in column 0
-        self._apply_xlabel_policy_per_column()
+        self._apply_xlabel_policy_simple()
     
         # Overlays on time axes only
         if self._overlays_enabled() and time_axes:
@@ -97,63 +97,36 @@ class PlottingMixin:
         self._update_intervals_list()
         self.canvas.draw()
         
-    def _apply_xlabel_policy_per_column(self) -> None:
+    def _apply_xlabel_policy_simple(self) -> None:
         """
-        Column-aware x-label policy that avoids label collisions:
-    
-          • Column 0 (time lane): hide x labels on all time-role axes, since the strip owns the time axis.
-          • Columns >= 1: show x labels only on the bottom-most axes in each column; hide on others.
-    
-        Works for both time and XY roles and does not rely on constrained_layout.
+        Keep Matplotlib defaults everywhere, except:
+          • hide x tick labels and xlabel for time-role axes in column 0
+            (the strip owns the time axis).
         """
         meta = getattr(self, "axes_meta", None)
         if not isinstance(meta, dict) or not meta:
-            # legacy/simple mode (1 col): keep existing behavior (strip shows time)
             return
     
-        # Group all user axes by column
-        by_col: dict[int, list[tuple[str, dict]]] = {}
         for key, m in meta.items():
-            # only consider actual user axes we created
-            if key in self.user_axes:
-                by_col.setdefault(int(m.get("col", 0)), []).append((key, m))
+            ax = self.user_axes.get(key)
+            if ax is None:
+                continue
     
-        for col, items in by_col.items():
-            # Identify the bottom-most axes in this column
-            # (max of row + rowspan - 1)
-            bottom_key = max(items, key=lambda kv: kv[1].get("row", 0) + kv[1].get("rowspan", 1) - 1)[0]
+            col = int(m.get("col", 0))
+            role = str(m.get("role", "time")).lower()
     
-            for key, m in items:
-                ax = self.user_axes.get(key)
-                if ax is None:
-                    continue
-    
-                role = str(m.get("role", "time")).lower()
-                is_bottom = (key == bottom_key)
-    
-                if col == 0 and role == "time":
-                    # Time lane: strip owns the x axis → hide all time-panel x labels
-                    ax.tick_params(axis="x", labelbottom=False)
-                    ax.set_xlabel("")
-                    fmt = ax.xaxis.get_major_formatter()
-                    if hasattr(fmt, "show_offset"):
-                        fmt.show_offset = False
-                    ax.xaxis.get_offset_text().set_visible(False)
-                else:
-                    # Other columns: only bottom-most keeps x labels
-                    if is_bottom:
-                        ax.tick_params(axis="x", labelbottom=True, pad=2)
-                        # If this is a time axis using ConciseDateFormatter, enable the offset line
-                        fmt = ax.xaxis.get_major_formatter()
-                        if hasattr(fmt, "show_offset"):
-                            fmt.show_offset = True
-                    else:
-                        ax.tick_params(axis="x", labelbottom=False)
-                        ax.set_xlabel("")
-                        fmt = ax.xaxis.get_major_formatter()
-                        if hasattr(fmt, "show_offset"):
-                            fmt.show_offset = False
-                        ax.xaxis.get_offset_text().set_visible(False)
+            if col == 0 and role == "time":
+                ax.tick_params(axis="x", labelbottom=False)
+                ax.set_xlabel("")
+                fmt = ax.xaxis.get_major_formatter()
+                if hasattr(fmt, "show_offset"):
+                    fmt.show_offset = False
+                ax.xaxis.get_offset_text().set_visible(False)
+            else:
+                # Show normal labels and make sure they aren't clipped by their own axes box
+                ax.tick_params(axis="x", labelbottom=True)
+                for lbl in ax.get_xticklabels():
+                    lbl.set_clip_on(False)
             
     def _build_window_attrs_view(self, j0: int, j1: int) -> dict:
         """
