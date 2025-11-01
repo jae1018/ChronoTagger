@@ -134,15 +134,21 @@ class EventsMixin:
 
     def _on_key_press(self, event) -> None:
         key = event.keysym
-    
+
+        # ---- Escape cancels two-click preview / current selection ----
+        if key == "Escape":
+            if getattr(self, "_pick_anchor_ts", None) is not None or self.current_selection is not None:
+                self._clear_two_click_state()
+                if self.status_var is not None:
+                    self.status_var.set("Selection canceled")
+                return
+
         # ---- Focus-aware early exit -------------------------------------------
-        # If an editable widget has focus, let it handle typing & arrow keys.
-        # Still allow Ctrl-based app shortcuts (e.g., Ctrl+S / Ctrl+E).
         if self._focused_widget_is_editable():
             if not (event.state & 0x4):  # 0x4 => Control modifier
                 return
         # -----------------------------------------------------------------------
-    
+
         # Class selection with digits 1..9
         if key.isdigit() and int(key) > 0:
             idx = int(key) - 1
@@ -150,7 +156,7 @@ class EventsMixin:
                 self.current_class_var.set(self.classes[idx])  # type: ignore[union-attr]
                 self.status_var.set(f"Selected class: {self.classes[idx]}")  # type: ignore[union-attr]
             return
-    
+
         # Navigation
         if key in ("n", "N", "Right"):
             self._next_window()
@@ -158,11 +164,9 @@ class EventsMixin:
         if key in ("p", "P", "Left"):
             self._prev_window()
             return
-    
+
         # Actions
         if key in ("a", "A", "Return"):
-            # Note: when an Entry has focus, the early-exit above prevents "Return"
-            # from reaching here; Entries bind Return separately (see below).
             self._add_interval()
             return
         if key in ("d", "D", "Delete"):
@@ -173,7 +177,7 @@ class EventsMixin:
                 self.current_class_var.set("UNKNOWN")  # type: ignore[union-attr]
                 self.status_var.set("Selected class: UNKNOWN")  # type: ignore[union-attr]
             return
-    
+
         # Save / export (Ctrl+S / Ctrl+E)
         if key in ("s", "S") and (event.state & 0x4):
             self._save_session()
@@ -181,13 +185,12 @@ class EventsMixin:
         if key in ("e", "E") and (event.state & 0x4):
             self._export_intervals()
             return
-    
+
         # Undo / Redo (Ctrl+Z / Ctrl+Y) + Backspace ergonomics
         if (key == "z" and (event.state & 0x4)) or key == "BackSpace":
             self._undo()
             return
         if (key == "y" and (event.state & 0x4)) or (key == "BackSpace" and (event.state & 0x1)):
-            # Shift+Backspace => redo (state bit 0x1 is Shift)
             self._redo()
             return
 
@@ -397,3 +400,115 @@ class EventsMixin:
         self._drag_offset = None
         self._drag_preview = None
         self._set_cursor(None)
+    
+    
+    def _is_time_lane_axis(self, ax) -> bool:
+        """
+        Return True if `ax` is a time-series axis in column 0 (the 'time lane').
+        In legacy/simple mode (no axes_meta), treat all user axes as time axes.
+        """
+        if ax is None or ax is self.strip_ax:
+            return False
+
+        meta = getattr(self, "axes_meta", None)
+        if isinstance(meta, dict) and meta:
+            for k, a in self.user_axes.items():
+                if a is ax:
+                    m = meta.get(k, {})
+                    return m.get("role") == "time" and int(m.get("col", 0)) == 0
+            return False
+        # legacy: all user axes are time
+        return ax in self.user_axes.values()
+
+    def _clear_two_click_state(self, *, keep_selection: bool = False) -> None:
+        """Stop preview + clear anchor; optionally keep the current preview selection."""
+        if getattr(self, "_twoclick_motion_cid", None) is not None and self.canvas is not None:
+            try:
+                self.canvas.mpl_disconnect(self._twoclick_motion_cid)
+            except Exception:
+                pass
+            self._twoclick_motion_cid = None
+
+        self._pick_anchor_ts = None
+
+        if not keep_selection:
+            self.current_selection = None
+            self._update_strip()
+            if self.canvas is not None:
+                self.canvas.draw_idle()
+
+    def _on_time_motion_preview(self, event) -> None:
+        """While anchor is set, live-preview the span anchor → cursor (time panels only)."""
+        if self._pick_anchor_ts is None:
+            return
+        if not self._is_time_lane_axis(getattr(event, "inaxes", None)):
+            return
+
+        ts = self._ts_from_event(event)
+        if ts is None:
+            return
+
+        s_new, e_new = self._apply_snap_clamp(self._pick_anchor_ts, ts)
+        self._preview_selection(s_new, e_new)
+
+    def _on_time_click(self, event) -> None:
+        """
+        Two-click picker on time panels:
+          - Left click 1: set anchor at x; start preview following mouse
+          - Left click 2: finalize [anchor, x] selection; (optional) auto-add
+          - Right click: cancel
+        """
+        if not getattr(self, "two_click_mode", False):
+            return
+
+        btn = getattr(event, "button", None)
+        ax = getattr(event, "inaxes", None)
+
+        # Right-click cancels (anywhere)
+        if btn == 3:
+            self._clear_two_click_state()
+            if self.status_var is not None:
+                self.status_var.set("Selection canceled")
+            return
+
+        # Only left-clicks on time-lane axes
+        if btn != 1 or not self._is_time_lane_axis(ax):
+            return
+
+        ts = self._ts_from_event(event)
+        if ts is None:
+            return
+
+        # First click: anchor
+        if self._pick_anchor_ts is None:
+            self._pick_anchor_ts = ts
+            self.current_selection = (ts, ts)
+            self._update_strip()
+            if self.canvas is not None:
+                self.canvas.draw_idle()
+
+            # start motion preview
+            if getattr(self, "_twoclick_motion_cid", None) is None and self.canvas is not None:
+                self._twoclick_motion_cid = self.canvas.mpl_connect(
+                    "motion_notify_event", self._on_time_motion_preview
+                )
+
+            if self.status_var is not None:
+                self.status_var.set(f"Start set: {ts.strftime('%H:%M:%S')}")
+            return
+
+        # Second click: finalize
+        s_new, e_new = self._apply_snap_clamp(self._pick_anchor_ts, ts)
+        self.current_selection = (s_new, e_new)
+        self._update_strip()
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+        self._clear_two_click_state(keep_selection=True)
+
+        if self.status_var is not None:
+            self.status_var.set(f"Selected: {s_new.strftime('%H:%M:%S')} → {e_new.strftime('%H:%M:%S')}")
+
+        # Optional fast path: auto-add the interval immediately
+        if getattr(self, "two_click_auto_add", False):
+            self._add_interval()

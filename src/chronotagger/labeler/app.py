@@ -156,6 +156,14 @@ class TimeIntervalLabeler(
         self._press_cid: Optional[int] = None
         self._motion_cid: Optional[int] = None
         self._release_cid: Optional[int] = None
+        
+        # === Two-click time selection (new) ===
+        self.two_click_mode: bool = True         # default on; disable to use drag-selector
+        self.two_click_auto_add: bool = False    # if True, auto-creates interval on 2nd click
+
+        self._pick_anchor_ts: Optional[pd.Timestamp] = None  # first click time
+        self._twoclick_motion_cid: Optional[int] = None      # mpl connection for preview
+        self._time_click_cid: Optional[int] = None           # mpl connection for clicks
 
         # Minimal interval duration inference (unchanged) ...
         try:

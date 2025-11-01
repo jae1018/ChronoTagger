@@ -177,19 +177,19 @@ class ViewBuildMixin:
             height_ratios = spec.get("height_ratios", None)
             hspace = float(spec.get("hspace", 0.12))
             wspace = float(spec.get("wspace", 0.04))
-        
+    
             if not areas:
                 raise ValueError("layout_spec.areas must be a non-empty list.")
-        
+    
             # validate: at least one time axis in col 0
             if not any(int(a.get("col", 0)) == 0 and str(a.get("role", "time")).lower() == "time" for a in areas):
                 raise ValueError("layout_spec must place at least one role='time' axis in column 0.")
-        
+    
             # Try to REUSE an empty row in col 0 for the strip; else append a thin row
             reuse_row = self._find_reusable_strip_row(nrows, areas)
             append_row = reuse_row is None
             total_rows = nrows + (1 if append_row else 0)
-        
+    
             # height ratios
             if height_ratios is None:
                 hrs = [1.0] * nrows
@@ -197,29 +197,28 @@ class ViewBuildMixin:
                 if len(height_ratios) != nrows:
                     raise ValueError("layout_spec.height_ratios must have length == nrows")
                 hrs = list(map(float, height_ratios))
-        
+    
             if append_row:
                 strip_height_ratio = float(spec.get("strip_height_ratio", 0.12))
                 hrs = hrs + [strip_height_ratio]
-        
-            # Lane gutter behaviour unchanged; you can keep it on/off via spec
+    
+            # Lane gutter behavior unchanged (kept off unless user provides it)
             use_lane_gutter = isinstance(spec.get("time_lane_cbar_gutter", None), dict)
             use_constrained = not use_lane_gutter
-        
-            import matplotlib.pyplot as plt
+    
             self.fig = plt.Figure(figsize=(14, 8), constrained_layout=use_constrained)
             gs = self.fig.add_gridspec(
                 total_rows, ncols,
                 width_ratios=width_ratios, height_ratios=hrs,
                 hspace=hspace, wspace=wspace,
             )
-        
+    
             # Build data axes exactly at user-specified rows/cols (no remap)
             self.user_axes = {}
             self.axes_meta = {}
             self._time_axis_keys = set()
             self._primary_time_key = None
-        
+    
             for a in areas:
                 key = str(a["key"])
                 row = int(a.get("row", 0))
@@ -227,10 +226,10 @@ class ViewBuildMixin:
                 rowspan = int(a.get("rowspan", 1))
                 colspan = int(a.get("colspan", 1))
                 role = str(a.get("role", "time")).lower()
-        
+    
                 if row < 0 or row >= nrows or col < 0 or col >= ncols:
                     raise ValueError(f"Area {key} has out-of-bounds row/col.")
-        
+    
                 ax = self.fig.add_subplot(gs[row:row+rowspan, col:col+colspan])
                 self.user_axes[key] = ax
                 self.axes_meta[key] = {"role": role, "row": row, "col": col,
@@ -239,18 +238,18 @@ class ViewBuildMixin:
                     self._time_axis_keys.add(key)
                     if self._primary_time_key is None and col == 0:
                         self._primary_time_key = key
-        
+    
             # Ensure we have a primary time axis
             if self._primary_time_key is None and self._time_axis_keys:
                 self._primary_time_key = next(iter(self._time_axis_keys))
-        
+    
             # Share x among time axes
             if self._primary_time_key is not None:
                 primary_ax = self.user_axes[self._primary_time_key]
                 for k in self._time_axis_keys:
                     if k != self._primary_time_key:
                         self.user_axes[k].sharex(primary_ax)
-        
+    
             # Place strip: reuse row in col 0 if available, else append last row
             strip_row = reuse_row if reuse_row is not None else (total_rows - 1)
             self.strip_ax = self.fig.add_subplot(gs[strip_row, 0])
@@ -258,27 +257,25 @@ class ViewBuildMixin:
             self.strip_ax.set_ylim(0, 1)
             self.strip_ax.set_yticks([])
             self._apply_time_axis_format(self.strip_ax)
-        
+    
             # Time axis formatting for all time panels
             for k in self._time_axis_keys:
                 self._apply_time_axis_format(self.user_axes[k])
-        
+    
             # Embed in Tk
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
             self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
             self.canvas.draw()
             self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
             toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
             toolbar.update()
             self.root.after(0, self.canvas.draw_idle)
-        
+    
             # Wheel zoom/pan
             if getattr(self, "_scroll_cid", None) is None:
                 self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
-        
+    
             # Rectangle selector on the primary time axis (if any)
             if self._primary_time_key is not None:
-                from matplotlib.widgets import RectangleSelector
                 rs = RectangleSelector(
                     self.user_axes[self._primary_time_key],
                     onselect=self._on_rectangle_select,
@@ -288,7 +285,32 @@ class ViewBuildMixin:
                                linestyle="--", linewidth=2),
                 )
                 self.rect_selectors["primary"] = rs
-        
+    
+            # ---- Two-click selection wiring (NEW) ----
+            if getattr(self, "two_click_mode", False):
+                # Disable drag-rectangle; use two-click
+                rs = self.rect_selectors.get("primary")
+                if rs is not None:
+                    try:
+                        rs.set_active(False)
+                    except Exception:
+                        pass
+                if getattr(self, "_time_click_cid", None) is None:
+                    self._time_click_cid = self.canvas.mpl_connect(
+                        "button_press_event", self._on_time_click
+                    )
+            else:
+                # Legacy drag-rectangle behavior
+                rs = self.rect_selectors.get("primary")
+                if rs is not None:
+                    try:
+                        rs.set_active(True)
+                    except Exception:
+                        pass
+                if getattr(self, "_time_click_cid", None) is not None:
+                    self.canvas.mpl_disconnect(self._time_click_cid)
+                    self._time_click_cid = None
+    
             # Strip interactions
             if self.pick_cid is None:
                 self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)
@@ -298,7 +320,7 @@ class ViewBuildMixin:
                 self._motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_strip_motion)
             if self._release_cid is None:
                 self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
-        
+    
             return
     
         # ========== LEGACY SIMPLE MODE (unchanged behavior) ==========
@@ -349,6 +371,29 @@ class ViewBuildMixin:
             props=dict(facecolor="yellow", edgecolor="orange", alpha=0.3,
                        linestyle="--", linewidth=2),
         )
+    
+        # ---- Two-click selection wiring (NEW) ----
+        if getattr(self, "two_click_mode", False):
+            rs = self.rect_selectors.get("primary")
+            if rs is not None:
+                try:
+                    rs.set_active(False)
+                except Exception:
+                    pass
+            if getattr(self, "_time_click_cid", None) is None:
+                self._time_click_cid = self.canvas.mpl_connect(
+                    "button_press_event", self._on_time_click
+                )
+        else:
+            rs = self.rect_selectors.get("primary")
+            if rs is not None:
+                try:
+                    rs.set_active(True)
+                except Exception:
+                    pass
+            if getattr(self, "_time_click_cid", None) is not None:
+                self.canvas.mpl_disconnect(self._time_click_cid)
+                self._time_click_cid = None
     
         if self.pick_cid is None:
             self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)
