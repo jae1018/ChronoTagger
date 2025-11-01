@@ -75,7 +75,7 @@ class PlottingMixin:
             ax.margins(x=0.01)
     
         # Only hide x labels on *time* axes in column 0
-        self._apply_time_xlabel_policy()
+        self._apply_xlabel_policy_per_column()
     
         # Overlays on time axes only
         if self._overlays_enabled() and time_axes:
@@ -97,34 +97,63 @@ class PlottingMixin:
         self._update_intervals_list()
         self.canvas.draw()
         
-    def _apply_time_xlabel_policy(self) -> None:
+    def _apply_xlabel_policy_per_column(self) -> None:
         """
-        X-label policy for *time* axes only:
-          - Column 0 (time lane): hide x tick labels on all time panels; the strip owns the time axis.
-          - Other columns: leave x tick labels alone.
-        Non-time axes are never touched.
+        Column-aware x-label policy that avoids label collisions:
+    
+          • Column 0 (time lane): hide x labels on all time-role axes, since the strip owns the time axis.
+          • Columns >= 1: show x labels only on the bottom-most axes in each column; hide on others.
+    
+        Works for both time and XY roles and does not rely on constrained_layout.
         """
         meta = getattr(self, "axes_meta", None)
         if not isinstance(meta, dict) or not meta:
-            return  # legacy/simple mode
+            # legacy/simple mode (1 col): keep existing behavior (strip shows time)
+            return
     
+        # Group all user axes by column
+        by_col: dict[int, list[tuple[str, dict]]] = {}
         for key, m in meta.items():
-            if m.get("role") != "time":
-                continue
-            col = int(m.get("col", 0))
-            ax = self.user_axes.get(key)
-            if ax is None:
-                continue
+            # only consider actual user axes we created
+            if key in self.user_axes:
+                by_col.setdefault(int(m.get("col", 0)), []).append((key, m))
     
-            if col == 0:
-                # Hide labels: the strip is the canonical time axis
-                ax.tick_params(axis="x", labelbottom=False)
-                ax.set_xlabel("")
-                fmt = ax.xaxis.get_major_formatter()
-                if hasattr(fmt, "show_offset"):
-                    fmt.show_offset = False
-                ax.xaxis.get_offset_text().set_visible(False)
-            # else: leave labels as-is
+        for col, items in by_col.items():
+            # Identify the bottom-most axes in this column
+            # (max of row + rowspan - 1)
+            bottom_key = max(items, key=lambda kv: kv[1].get("row", 0) + kv[1].get("rowspan", 1) - 1)[0]
+    
+            for key, m in items:
+                ax = self.user_axes.get(key)
+                if ax is None:
+                    continue
+    
+                role = str(m.get("role", "time")).lower()
+                is_bottom = (key == bottom_key)
+    
+                if col == 0 and role == "time":
+                    # Time lane: strip owns the x axis → hide all time-panel x labels
+                    ax.tick_params(axis="x", labelbottom=False)
+                    ax.set_xlabel("")
+                    fmt = ax.xaxis.get_major_formatter()
+                    if hasattr(fmt, "show_offset"):
+                        fmt.show_offset = False
+                    ax.xaxis.get_offset_text().set_visible(False)
+                else:
+                    # Other columns: only bottom-most keeps x labels
+                    if is_bottom:
+                        ax.tick_params(axis="x", labelbottom=True, pad=2)
+                        # If this is a time axis using ConciseDateFormatter, enable the offset line
+                        fmt = ax.xaxis.get_major_formatter()
+                        if hasattr(fmt, "show_offset"):
+                            fmt.show_offset = True
+                    else:
+                        ax.tick_params(axis="x", labelbottom=False)
+                        ax.set_xlabel("")
+                        fmt = ax.xaxis.get_major_formatter()
+                        if hasattr(fmt, "show_offset"):
+                            fmt.show_offset = False
+                        ax.xaxis.get_offset_text().set_visible(False)
             
     def _build_window_attrs_view(self, j0: int, j1: int) -> dict:
         """
