@@ -48,44 +48,50 @@ class ZoomMixin:
     def _on_scroll_zoom(self, event) -> None:
         """
         Matplotlib 'scroll_event' handler.
-
-        event.button is 'up' or 'down'
-        event.key includes modifiers like 'shift', 'control', etc.
+          - Wheel = zoom around cursor (self.zoom_sensitivity per notch).
+          - Shift + Wheel = pan (self.pan_sensitivity * window per notch).
+        Operates only on time axes (and the strip); ignores XY panes.
         """
-        # Consider only time axes + strip
+        # Build the set of valid axes (time axes + strip)
         if getattr(self, "_time_axis_keys", None):
             valid_axes = [self.user_axes[k] for k in self._time_axis_keys if k in self.user_axes]
         else:
             valid_axes = list(self.user_axes.values())
-
         if self.strip_ax is not None:
             valid_axes.append(self.strip_ax)
-
+    
         if event.inaxes not in valid_axes:
             return
-
-        direction = 1 if event.button == "up" else -1
-        is_pan = isinstance(event.key, str) and "shift" in event.key
-
+    
+        # Direction (+1 zoom in / pan left, -1 zoom out / pan right)
+        direction = 1 if getattr(event, "button", None) == "up" else -1
+        is_pan = isinstance(getattr(event, "key", None), str) and ("shift" in event.key)
+    
         if is_pan:
+            # Pan by a fraction of the current window
             win = self.t1 - self.t0
             dx = direction * self.pan_sensitivity * win
             new_t0 = self.t0 - dx
             new_t1 = self.t1 - dx
             new_t0, new_t1 = self._clamp_to_bounds(new_t0, new_t1)
         else:
-            center = self._ts_from_mpl_x(event.xdata)
+            # Zoom around the cursor (fall back to window center)
+            import matplotlib.dates as mdates
+            center = self._ts_from_mpl_x(getattr(event, "xdata", None))
             win = self.t1 - self.t0
+    
+            # one notch scales window by (1 ± zoom_sensitivity)
             scale = (1.0 - self.zoom_sensitivity) if direction > 0 else (1.0 + self.zoom_sensitivity)
             new_win = win * scale
             if new_win < self.min_window:
                 new_win = self.min_window
             if new_win > self.max_window:
                 new_win = self.max_window
+    
             half = new_win / 2
             new_t0 = center - half
             new_t1 = center + half
             new_t0, new_t1 = self._clamp_to_bounds(new_t0, new_t1)
-
+    
         self.t0, self.t1 = new_t0, new_t1
         self._sync_entries_and_plot()

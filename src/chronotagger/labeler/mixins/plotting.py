@@ -30,52 +30,54 @@ class PlottingMixin:
             return True
 
     def _update_plot(self) -> None:
-        """Redraw user panels and strip."""
-        # Clear data panels (but keep colorbars/inset axes if user created separately)
+        """Redraw user panels and strip (window-aware: df and df.attrs are sliced for you)."""
+        # Clear data panels (keep any user-added inset/colorbar axes)
         for ax in self.user_axes.values():
             ax.clear()
-
-        # Choose the dataframe slice for time plots
+    
+        # --- window slice ---
+        idx = self.df.index
+        if len(idx):
+            j0 = idx.get_indexer([self.t0], method="nearest")[0]
+            j1 = idx.get_indexer([self.t1], method="nearest")[0] + 1
+            if j1 <= j0:  # keep at least one sample robustly
+                j1 = min(j0 + 1, len(idx))
+        else:
+            j0 = j1 = 0
+    
+        # DataFrame time slice (safe fallback)
         try:
             sub_df = self.df.loc[self.t0:self.t1]
         except Exception:
             sub_df = self.df
-
-        # User plot function
+    
+        # Build a window-scoped attrs view so plot_fn doesn't need to slice anything.
+        sub_df.attrs = self._build_window_attrs_view(j0, j1)
+    
+        # --- user plot (defensive) ---
         try:
             self.plot_fn(self.user_axes, sub_df, self.t0, self.t1)
         except Exception as e:
             for ax in self.user_axes.values():
-                ax.text(
-                    0.5, 0.5, f"Plot error:\n{e}", transform=ax.transAxes,
-                    ha="center", va="center"
-                )
-
+                ax.text(0.5, 0.5, f"Plot error:\n{e}", transform=ax.transAxes,
+                        ha="center", va="center")
+    
         # Partition axes into time vs non-time
         if getattr(self, "_time_axis_keys", None):
             time_axes = {k: self.user_axes[k] for k in self._time_axis_keys if k in self.user_axes}
         else:
-            # Legacy simple mode: all are time
-            time_axes = dict(self.user_axes)
-
+            time_axes = dict(self.user_axes)  # legacy: all are time
+    
         # Align limits + date formatting for time axes
         for ax in time_axes.values():
             ax.set_xlim(self.t0, self.t1)
             self._apply_time_axis_format(ax)
             ax.margins(x=0.01)
-            
-        # Align limits + date formatting for time axes
-        for ax in time_axes.values():
-            ax.set_xlim(self.t0, self.t1)
-            self._apply_time_axis_format(ax)
-            ax.margins(x=0.01)
-        
-        # NEW: compact x labels per column
+    
+        # Only hide x labels on *time* axes in column 0
         self._apply_time_xlabel_policy()
-
-        # Non-time axes: do not touch xlim/formatting (users control them)
-
-        # Background interval overlays across time panels only
+    
+        # Overlays on time axes only
         if self._overlays_enabled() and time_axes:
             draw_interval_bands(
                 time_axes,
@@ -84,57 +86,126 @@ class PlottingMixin:
                 self.class_colors,
                 selected_interval=self.selected_interval,
                 preview=self.current_selection,
-                alpha=0.10,
+                alpha=0.15,
                 alpha_selected=0.16,
                 alpha_preview=0.12,
                 zorder=0.05,
             )
-
+    
         # Strip + sidebar
         self._update_strip()
         self._update_intervals_list()
-
         self.canvas.draw()
         
     def _apply_time_xlabel_policy(self) -> None:
         """
-        Compact x-labels for time axes:
-          - Column 0: hide on all time panels (the strip shows the time axis).
-          - Other columns: keep x labels only on the bottom-most time panel.
-        Also suppress the ConciseDateFormatter 'offset' line on hidden axes.
+        X-label policy for *time* axes only:
+          - Column 0 (time lane): hide x tick labels on all time panels; the strip owns the time axis.
+          - Other columns: leave x tick labels alone.
+        Non-time axes are never touched.
         """
         meta = getattr(self, "axes_meta", None)
         if not isinstance(meta, dict) or not meta:
             return  # legacy/simple mode
     
-        # collect time axes by column
-        by_col: dict[int, list[tuple[str, dict]]] = {}
         for key, m in meta.items():
-            if m.get("role") == "time":
-                by_col.setdefault(int(m.get("col", 0)), []).append((key, m))
+            if m.get("role") != "time":
+                continue
+            col = int(m.get("col", 0))
+            ax = self.user_axes.get(key)
+            if ax is None:
+                continue
     
-        for col, items in by_col.items():
-            # bottom-most = max(row + rowspan - 1)
-            bottom_key = max(items, key=lambda kv: kv[1].get("row", 0) + kv[1].get("rowspan", 1) - 1)[0]
-            for key, _m in items:
-                ax = self.user_axes.get(key)
-                if ax is None:
+            if col == 0:
+                # Hide labels: the strip is the canonical time axis
+                ax.tick_params(axis="x", labelbottom=False)
+                ax.set_xlabel("")
+                fmt = ax.xaxis.get_major_formatter()
+                if hasattr(fmt, "show_offset"):
+                    fmt.show_offset = False
+                ax.xaxis.get_offset_text().set_visible(False)
+            # else: leave labels as-is
+            
+    def _build_window_attrs_view(self, j0: int, j1: int) -> dict:
+        """
+        Build a dict for sub_df.attrs where array-likes that look 'time-like' are
+        sliced to the current window. Handles:
+          • 1D arrays length N == len(index)          -> v[j0:j1]
+          • ND arrays with last axis N == len(index)  -> v[..., j0:j1]
+          • tuple/list of such arrays                  -> elementwise sliced
+        If N != len(index) but N is plausibly time-like, we apply a
+        *proportional* slice: map [j0, j1] from base length to N.
+        Everything else is passed through unchanged.
+        """
+        import numpy as _np
+    
+        base = getattr(self.df, "attrs", {}) or {}
+        base_len = len(self.df.index)
+        out: dict = {}
+    
+        def _proj_bounds(n: int) -> tuple[int, int]:
+            """
+            Proportionally project [j0, j1] (in base_len units) to [p0, p1] in n units.
+            Keeps at least one element when possible.
+            """
+            if base_len <= 0 or n <= 0:
+                return 0, 0
+            p0 = int(round(j0 * n / base_len))
+            p1 = int(round(j1 * n / base_len))
+            if p1 <= p0:
+                p1 = min(p0 + 1, n)
+            p0 = max(0, min(p0, n))
+            p1 = max(0, min(p1, n))
+            return p0, p1
+    
+        def _slice_like(v):
+            # numpy / array-ish with ndim
+            if hasattr(v, "shape") and getattr(v, "ndim", 0) >= 1:
+                n_last = v.shape[-1]
+                # exact last-axis alignment
+                if base_len and n_last == base_len:
+                    return v[..., j0:j1]
+                # proportional fallback if length is plausibly time-like (not wildly different)
+                ratio = (n_last / base_len) if base_len else 0
+                if base_len and n_last >= 8 and 0.1 <= ratio <= 10.0:
+                    p0, p1 = _proj_bounds(n_last)
+                    return v[..., p0:p1]
+                return v
+    
+            # generic sequences (lists/tuples) — leave slicing to the container case below
+            return v
+    
+        for k, v in base.items():
+            try:
+                # Handle tuples/lists by element
+                if isinstance(v, (list, tuple)):
+                    sliced_elems = []
+                    changed = False
+                    for item in v:
+                        new_item = _slice_like(item)
+                        if new_item is not item:
+                            changed = True
+                        sliced_elems.append(new_item)
+                    out[k] = type(v)(sliced_elems) if changed else v
                     continue
     
-                hide = (col == 0) or (key != bottom_key)  # strip owns col 0; otherwise bottom-most shows labels
-                if hide:
-                    ax.tick_params(axis="x", labelbottom=False)
-                    ax.set_xlabel("")
-                    # kill the ConciseDateFormatter offset line if present
-                    fmt = ax.xaxis.get_major_formatter()
-                    if hasattr(fmt, "show_offset"):
-                        fmt.show_offset = False
-                    ax.xaxis.get_offset_text().set_visible(False)
-                else:
-                    ax.tick_params(axis="x", labelbottom=True)
-                    fmt = ax.xaxis.get_major_formatter()
-                    if hasattr(fmt, "show_offset"):
-                        fmt.show_offset = True
+                # 1D pandas Series treated like arrays (len check)
+                if hasattr(v, "__len__") and not hasattr(v, "shape"):
+                    n = len(v)
+                    if base_len and n == base_len:
+                        return_v = v[j0:j1]
+                        out[k] = return_v
+                        continue
+                    if base_len and n >= 8 and 0.1 <= (n / base_len) <= 10.0:
+                        p0, p1 = _proj_bounds(n)
+                        out[k] = v[p0:p1]
+                        continue
+    
+                out[k] = _slice_like(v)
+            except Exception:
+                out[k] = v
+    
+        return out
 
     def _update_strip(self) -> None:
         """Redraw annotation strip (intervals + current selection preview)."""
