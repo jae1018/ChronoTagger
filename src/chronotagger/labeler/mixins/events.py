@@ -193,6 +193,217 @@ class EventsMixin:
         if (key == "y" and (event.state & 0x4)) or (key == "BackSpace" and (event.state & 0x1)):
             self._redo()
             return
+        
+    
+    def _px_to_data_dx(self, ax, px=2) -> float:
+        """Return the data-domain x-width that corresponds to ~px screen pixels."""
+        inv = ax.transData.inverted()
+        # use the vertical center of the axis for stable mapping
+        x0 = ax.bbox.x0 + ax.bbox.width * 0.5
+        ymid = ax.bbox.y0 + ax.bbox.height * 0.5
+        (x_data0, _y0) = inv.transform((x0, ymid))
+        (x_data1, _y1) = inv.transform((x0 + float(px), ymid))
+        return abs(x_data1 - x_data0) or 1e-12
+    
+    
+    def _x_from_anywhere(self, event) -> float | None:
+        """
+        Get a time-axis x (mdates float) no matter where the cursor is.
+        If we're over a time axis, use event.xdata. Otherwise, map screen x
+        into the primary time axis.
+        """
+        import matplotlib as mpl
+    
+        if getattr(self, "_primary_time_key", None) is None:
+            return None
+    
+        primary_ax = self.user_axes.get(self._primary_time_key)
+        if primary_ax is None:
+            return None
+    
+        # If we're already on a time axis (or the strip), event.xdata is correct.
+        if getattr(self, "_time_axis_keys", None):
+            time_axes = {self.user_axes[k] for k in self._time_axis_keys}
+        else:
+            time_axes = set(self.user_axes.values())
+        if getattr(self, "strip_ax", None) is not None:
+            time_axes.add(self.strip_ax)
+    
+        if event.inaxes in time_axes and event.xdata is not None:
+            return float(event.xdata)
+    
+        # Otherwise, map canvas pixel x to primary time-axis data x.
+        inv = primary_ax.transData.inverted()
+        # pick a y inside the primary axes bbox
+        ymid = primary_ax.bbox.y0 + primary_ax.bbox.height * 0.5
+        try:
+            x_data, _ = inv.transform((event.x, ymid))
+            return float(x_data)
+        except Exception:
+            return None
+    
+    
+    def _update_time_overlays(self, x0: float, x1: float) -> None:
+        """Show/align the preview band on every time-series panel (and strip)."""
+        if not getattr(self, "_time_overlays", None):
+            return
+        left = min(x0, x1)
+        width = max(abs(x1 - x0), 0.0)
+        for r in self._time_overlays.values():
+            r.set_xy((left, 0))
+            r.set_width(width)
+            if not r.get_visible():
+                r.set_visible(True)
+        self._two_click_last_x = x1
+        if getattr(self, "canvas", None) is not None:
+            self.canvas.draw_idle()
+    
+    
+    def _hide_time_overlays(self) -> None:
+        if not getattr(self, "_time_overlays", None):
+            return
+        for r in self._time_overlays.values():
+            if r.get_visible():
+                r.set_visible(False)
+        if getattr(self, "canvas", None) is not None:
+            self.canvas.draw_idle()
+    
+    
+    def _init_time_overlays(self) -> None:
+        """
+        Create/refresh a translucent band on every time-lane panel (col 0, role='time')
+        plus the strip, for two-click preview. Full-height in axes coords.
+        """
+        import matplotlib.patches as mpatches
+        from matplotlib.transforms import blended_transform_factory
+    
+        self._time_overlays = {}
+        self._two_click_active = False
+        self._two_click_t0 = None
+        self._two_click_last_x = None
+    
+        axes = []
+        # only time-lane axes in column 0
+        if getattr(self, "_time_axis_keys", None):
+            for k in self._time_axis_keys:
+                ax = self.user_axes.get(k)
+                if ax is not None and self._is_time_lane_axis(ax):
+                    axes.append(ax)
+        if getattr(self, "strip_ax", None) is not None:
+            axes.append(self.strip_ax)
+    
+        for ax in axes:
+            trans = blended_transform_factory(ax.transData, ax.transAxes)
+            r = mpatches.Rectangle(
+                (0, 0), 0, 1,
+                transform=trans,
+                facecolor="tab:orange",
+                edgecolor="none",
+                alpha=0.25,
+                zorder=ax.get_zorder() + 10,
+                visible=False,
+            )
+            ax.add_patch(r)
+            self._time_overlays[ax] = r
+    
+    
+    def _on_time_click(self, event):
+        """
+        Two-click behavior:
+          1st left-click on any time-lane axis or strip: start preview at t0,
+             show a thin visible band immediately on ALL time-lane panels.
+          2nd left-click: commit [t0, t1] through the existing rectangle-select path.
+          Right-click: cancel.
+        """
+        # right-click cancels anywhere
+        if getattr(event, "button", None) == 3:
+            self._two_click_active = False
+            self._two_click_t0 = None
+            self._two_click_last_x = None
+            self._hide_time_overlays()
+            # also clear strip preview
+            self.current_selection = None
+            self._update_strip()
+            if self.canvas is not None:
+                self.canvas.draw_idle()
+            return
+    
+        # only left-clicks on the time lane (col 0 time axes) or the strip
+        if getattr(event, "button", None) != 1:
+            return
+        ax = getattr(event, "inaxes", None)
+        if not (self._is_time_lane_axis(ax) or ax is self.strip_ax):
+            return
+    
+        # map to float-date x
+        import matplotlib.dates as mdates
+        x = getattr(event, "xdata", None)
+        if x is None:
+            return
+    
+        # first click: start & show ~2px sliver immediately
+        if not self._two_click_active:
+            self._two_click_active = True
+            self._two_click_t0 = float(x)
+    
+            # show sliver on all overlays
+            primary_ax = self.user_axes.get(self._primary_time_key, ax)
+            eps = self._px_to_data_dx(primary_ax, 2) if primary_ax is not None else 1e-10
+            self._update_time_overlays(self._two_click_t0, self._two_click_t0 + eps)
+    
+            # also seed strip preview so users see it there too
+            t0 = mdates.num2date(self._two_click_t0)
+            if getattr(t0, "tzinfo", None) is not None:
+                t0 = t0.replace(tzinfo=None)
+            import pandas as pd
+            ts0 = pd.Timestamp(t0)
+            self.current_selection = (ts0, ts0)
+            self._update_strip()
+            if self.canvas is not None:
+                self.canvas.draw_idle()
+            return
+    
+        # second click: finalize
+        t0, t1 = self._two_click_t0, float(x)
+        self._two_click_active = False
+        self._two_click_t0 = None
+        self._two_click_last_x = None
+        self._hide_time_overlays()
+    
+        # call the existing rectangle-select logic on the primary time axis
+        import types
+        primary_ax = self.user_axes.get(self._primary_time_key, ax)
+        e1 = types.SimpleNamespace(xdata=t0, ydata=0.0, inaxes=primary_ax)
+        e2 = types.SimpleNamespace(xdata=t1, ydata=1.0, inaxes=primary_ax)
+        self._on_rectangle_select(e1, e2)
+    
+    
+    def _on_time_motion(self, event):
+        """
+        While first-click is active, keep the multi-panel overlay AND the strip preview
+        in sync with the cursor.
+        """
+        if not self._two_click_active:
+            return
+        # only track motion over time-lane axes or strip (ignore XY panels)
+        ax = getattr(event, "inaxes", None)
+        if not (self._is_time_lane_axis(ax) or ax is self.strip_ax):
+            return
+        x = getattr(event, "xdata", None)
+        if x is None:
+            return
+    
+        self._update_time_overlays(self._two_click_t0, float(x))
+    
+        # keep the strip preview in lockstep
+        import matplotlib.dates as mdates, pandas as pd
+        s = pd.Timestamp(mdates.num2date(min(self._two_click_t0, float(x))).replace(tzinfo=None))
+        e = pd.Timestamp(mdates.num2date(max(self._two_click_t0, float(x))).replace(tzinfo=None))
+        s, e = self._apply_snap_clamp(s, e)
+        self.current_selection = (s, e)
+        self._update_strip()
+        if self.canvas is not None:
+            self.canvas.draw_idle()
 
     
     
@@ -436,79 +647,11 @@ class EventsMixin:
             self._update_strip()
             if self.canvas is not None:
                 self.canvas.draw_idle()
+        
+        # also cancel overlay two-click state
+        self._two_click_active = False
+        self._two_click_t0 = None
+        self._two_click_last_x = None
+        self._hide_time_overlays()
 
-    def _on_time_motion_preview(self, event) -> None:
-        """While anchor is set, live-preview the span anchor → cursor (time panels only)."""
-        if self._pick_anchor_ts is None:
-            return
-        if not self._is_time_lane_axis(getattr(event, "inaxes", None)):
-            return
-
-        ts = self._ts_from_event(event)
-        if ts is None:
-            return
-
-        s_new, e_new = self._apply_snap_clamp(self._pick_anchor_ts, ts)
-        self._preview_selection(s_new, e_new)
-
-    def _on_time_click(self, event) -> None:
-        """
-        Two-click picker on time panels:
-          - Left click 1: set anchor at x; start preview following mouse
-          - Left click 2: finalize [anchor, x] selection; (optional) auto-add
-          - Right click: cancel
-        """
-        if not getattr(self, "two_click_mode", False):
-            return
-
-        btn = getattr(event, "button", None)
-        ax = getattr(event, "inaxes", None)
-
-        # Right-click cancels (anywhere)
-        if btn == 3:
-            self._clear_two_click_state()
-            if self.status_var is not None:
-                self.status_var.set("Selection canceled")
-            return
-
-        # Only left-clicks on time-lane axes
-        if btn != 1 or not self._is_time_lane_axis(ax):
-            return
-
-        ts = self._ts_from_event(event)
-        if ts is None:
-            return
-
-        # First click: anchor
-        if self._pick_anchor_ts is None:
-            self._pick_anchor_ts = ts
-            self.current_selection = (ts, ts)
-            self._update_strip()
-            if self.canvas is not None:
-                self.canvas.draw_idle()
-
-            # start motion preview
-            if getattr(self, "_twoclick_motion_cid", None) is None and self.canvas is not None:
-                self._twoclick_motion_cid = self.canvas.mpl_connect(
-                    "motion_notify_event", self._on_time_motion_preview
-                )
-
-            if self.status_var is not None:
-                self.status_var.set(f"Start set: {ts.strftime('%H:%M:%S')}")
-            return
-
-        # Second click: finalize
-        s_new, e_new = self._apply_snap_clamp(self._pick_anchor_ts, ts)
-        self.current_selection = (s_new, e_new)
-        self._update_strip()
-        if self.canvas is not None:
-            self.canvas.draw_idle()
-
-        self._clear_two_click_state(keep_selection=True)
-
-        if self.status_var is not None:
-            self.status_var.set(f"Selected: {s_new.strftime('%H:%M:%S')} → {e_new.strftime('%H:%M:%S')}")
-
-        # Optional fast path: auto-add the interval immediately
-        if getattr(self, "two_click_auto_add", False):
-            self._add_interval()
+    

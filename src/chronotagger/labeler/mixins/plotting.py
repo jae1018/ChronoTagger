@@ -30,54 +30,44 @@ class PlottingMixin:
             return True
 
     def _update_plot(self) -> None:
-        """Redraw user panels and strip (window-aware: df and df.attrs are sliced for you)."""
-        # Clear data panels (keep any user-added inset/colorbar axes)
+        """Redraw user panels and strip, preserving two-click preview overlays."""
+        # Clear data panels (but keep colorbars/inset axes if user created separately)
         for ax in self.user_axes.values():
             ax.clear()
     
-        # --- window slice ---
-        idx = self.df.index
-        if len(idx):
-            j0 = idx.get_indexer([self.t0], method="nearest")[0]
-            j1 = idx.get_indexer([self.t1], method="nearest")[0] + 1
-            if j1 <= j0:  # keep at least one sample robustly
-                j1 = min(j0 + 1, len(idx))
-        else:
-            j0 = j1 = 0
-    
-        # DataFrame time slice (safe fallback)
+        # Choose the dataframe slice for time plots
         try:
             sub_df = self.df.loc[self.t0:self.t1]
         except Exception:
             sub_df = self.df
     
-        # Build a window-scoped attrs view so plot_fn doesn't need to slice anything.
-        sub_df.attrs = self._build_window_attrs_view(j0, j1)
-    
-        # --- user plot (defensive) ---
+        # User plot function
         try:
             self.plot_fn(self.user_axes, sub_df, self.t0, self.t1)
         except Exception as e:
             for ax in self.user_axes.values():
-                ax.text(0.5, 0.5, f"Plot error:\n{e}", transform=ax.transAxes,
-                        ha="center", va="center")
+                ax.text(
+                    0.5, 0.5, f"Plot error:\n{e}", transform=ax.transAxes,
+                    ha="center", va="center"
+                )
     
         # Partition axes into time vs non-time
         if getattr(self, "_time_axis_keys", None):
             time_axes = {k: self.user_axes[k] for k in self._time_axis_keys if k in self.user_axes}
         else:
-            time_axes = dict(self.user_axes)  # legacy: all are time
+            # Legacy simple mode: all are time
+            time_axes = dict(self.user_axes)
     
-        # Align limits + date formatting for time axes
+        # Align limits + date formatting for time axes (single pass)
         for ax in time_axes.values():
             ax.set_xlim(self.t0, self.t1)
             self._apply_time_axis_format(ax)
             ax.margins(x=0.01)
     
-        # Only hide x labels on *time* axes in column 0
-        self._apply_xlabel_policy_simple()
+        # Compact x-labels per column (unchanged policy)
+        self._apply_time_xlabel_policy()
     
-        # Overlays on time axes only
+        # Background interval overlays across time panels only
         if self._overlays_enabled() and time_axes:
             draw_interval_bands(
                 time_axes,
@@ -86,7 +76,7 @@ class PlottingMixin:
                 self.class_colors,
                 selected_interval=self.selected_interval,
                 preview=self.current_selection,
-                alpha=0.15,
+                alpha=0.15,          # match tests
                 alpha_selected=0.16,
                 alpha_preview=0.12,
                 zorder=0.05,
@@ -95,9 +85,23 @@ class PlottingMixin:
         # Strip + sidebar
         self._update_strip()
         self._update_intervals_list()
+    
+        # --- Keep two-click preview overlays alive across redraws (NEW) ---
+        if getattr(self, "two_click_mode", False):
+            # Recreate overlay patches if ax.clear() removed them
+            try:
+                self._rebuild_time_overlays_if_needed()
+                # If user is mid-selection, restore current preview band
+                if getattr(self, "_two_click_active", False) and getattr(self, "_two_click_t0", None) is not None:
+                    last = getattr(self, "_two_click_last_x", self._two_click_t0)
+                    self._update_time_overlays(self._two_click_t0, last)
+            except Exception:
+                # Fail-safe: do not break drawing if overlays stumble
+                pass
+    
         self.canvas.draw()
         
-    def _apply_xlabel_policy_simple(self) -> None:
+    def _apply_time_xlabel_policy(self) -> None:
         """
         Keep Matplotlib defaults everywhere, except:
           • hide x tick labels and xlabel for time-role axes in column 0
@@ -127,6 +131,51 @@ class PlottingMixin:
                 ax.tick_params(axis="x", labelbottom=True)
                 for lbl in ax.get_xticklabels():
                     lbl.set_clip_on(False)
+                    
+    def _rebuild_time_overlays_if_needed(self) -> None:
+        """
+        Ensure the two-click preview rectangles exist on each time axis + strip
+        after a redraw that cleared axes.
+        """
+        import matplotlib.patches as mpatches
+        from matplotlib.transforms import blended_transform_factory
+    
+        if not getattr(self, "two_click_mode", False):
+            return
+    
+        if not hasattr(self, "_time_overlays"):
+            # First-time init from EventsMixin
+            if hasattr(self, "_init_time_overlays"):
+                self._init_time_overlays()
+            return
+    
+        axes = []
+        if getattr(self, "_time_axis_keys", None):
+            axes.extend(self.user_axes[k] for k in self._time_axis_keys if k in self.user_axes)
+        if getattr(self, "strip_ax", None) is not None:
+            axes.append(self.strip_ax)
+    
+        # Recreate missing patches
+        for ax in axes:
+            rect = self._time_overlays.get(ax)
+            if rect is None or rect not in ax.patches:
+                trans = blended_transform_factory(ax.transData, ax.transAxes)
+                r = mpatches.Rectangle(
+                    (0, 0), 0, 1,
+                    transform=trans,
+                    facecolor="tab:orange",
+                    edgecolor="none",
+                    alpha=0.25,
+                    zorder=ax.get_zorder() + 10,
+                    visible=False,
+                )
+                ax.add_patch(r)
+                self._time_overlays[ax] = r
+    
+        # Remove stale entries (axes that no longer exist)
+        stale = [ax for ax in self._time_overlays.keys() if ax not in axes]
+        for ax in stale:
+            self._time_overlays.pop(ax, None)
             
     def _build_window_attrs_view(self, j0: int, j1: int) -> dict:
         """

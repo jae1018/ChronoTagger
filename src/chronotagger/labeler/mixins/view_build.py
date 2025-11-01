@@ -299,6 +299,13 @@ class ViewBuildMixin:
                     self._time_click_cid = self.canvas.mpl_connect(
                         "button_press_event", self._on_time_click
                     )
+                if getattr(self, "_time_motion_cid", None) is None:
+                    self._time_motion_cid = self.canvas.mpl_connect(
+                        "motion_notify_event", self._on_time_motion
+                    )
+                # create the multi-panel overlay patches now that axes exist
+                if hasattr(self, "_init_time_overlays"):
+                    self._init_time_overlays()
             else:
                 # Legacy drag-rectangle behavior
                 rs = self.rect_selectors.get("primary")
@@ -384,6 +391,10 @@ class ViewBuildMixin:
                 self._time_click_cid = self.canvas.mpl_connect(
                     "button_press_event", self._on_time_click
                 )
+            if getattr(self, "_time_motion_cid", None) is None:
+                self._time_motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_time_motion)
+            if hasattr(self, "_init_time_overlays"):
+                self._init_time_overlays()
         else:
             rs = self.rect_selectors.get("primary")
             if rs is not None:
