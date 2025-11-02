@@ -261,6 +261,9 @@ class ViewBuildMixin:
             # Time axis formatting for all time panels
             for k in self._time_axis_keys:
                 self._apply_time_axis_format(self.user_axes[k])
+                
+            # Keep toolbar zoom/pan in sync with t0/t1 and the rest of the panels
+            self._hook_time_xlim()
     
             # Embed in Tk
             self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
@@ -331,6 +334,8 @@ class ViewBuildMixin:
     
         for ax in list(self.user_axes.values()) + [self.strip_ax]:
             self._apply_time_axis_format(ax)
+            
+        self._hook_time_xlim()
     
         self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
         self.canvas.draw()

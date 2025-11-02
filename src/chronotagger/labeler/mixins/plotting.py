@@ -12,12 +12,23 @@ from __future__ import annotations
 import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 
+from contextlib import contextmanager
+
 from ..utils.timeaxis import apply_time_axis_format
 from ..utils.overlays import draw_interval_bands
 
 
 class PlottingMixin:
     # Expects on self: fig, canvas, user_axes, strip_ax, class_colors, etc.
+
+    @contextmanager
+    def _squelch_xlim_events(self):
+        prev = getattr(self, "_squelch_xlim", False)
+        self._squelch_xlim = True
+        try:
+            yield
+        finally:
+            self._squelch_xlim = prev
 
     def _apply_time_axis_format(self, ax) -> None:
         apply_time_axis_format(ax)
@@ -31,17 +42,40 @@ class PlottingMixin:
 
     def _update_plot(self) -> None:
         """Redraw user panels and strip, preserving two-click preview overlays."""
-        # Clear data panels (but keep colorbars/inset axes if user created separately)
-        for ax in self.user_axes.values():
-            ax.clear()
+        import pandas as pd
     
-        # Choose the dataframe slice for time plots
+        # Clear data panels (but keep colorbars/inset axes if user created separately)
+        with self._squelch_xlim_events():
+            for ax in self.user_axes.values():
+                ax.clear()
+    
+        # --- Window the dataframe ---
         try:
             sub_df = self.df.loc[self.t0:self.t1]
         except Exception:
             sub_df = self.df
     
-        # User plot function
+        # Also window any time-like arrays carried in df.attrs so plot_fn can use them.
+        # (Uses half-open [j0, j1) semantics.)
+        try:
+            if len(self.df.index) and len(sub_df.index):
+                # j0 = index position of sub_df's first row; j1 = j0 + len(window)
+                j0 = self.df.index.get_indexer([sub_df.index[0]])[0]
+                j0 = max(0, int(j0))
+                j1 = j0 + len(sub_df.index)
+            else:
+                j0, j1 = 0, 0
+        except Exception:
+            j0, j1 = 0, len(sub_df.index)
+    
+        try:
+            # shallow copy so we can set attrs without touching self.df
+            sub_df = sub_df.copy(deep=False)
+            sub_df.attrs = self._build_window_attrs_view(j0, j1)
+        except Exception:
+            pass
+    
+        # --- User plot function ---
         try:
             self.plot_fn(self.user_axes, sub_df, self.t0, self.t1)
         except Exception as e:
@@ -59,16 +93,18 @@ class PlottingMixin:
             time_axes = dict(self.user_axes)
     
         # Align limits + date formatting for time axes (single pass)
-        for ax in time_axes.values():
-            ax.set_xlim(self.t0, self.t1)
-            self._apply_time_axis_format(ax)
-            ax.margins(x=0.01)
+        with self._squelch_xlim_events():
+            for ax in time_axes.values():
+                ax.set_xlim(self.t0, self.t1, emit=False)  # <- prevent re-entrant events
+                self._apply_time_axis_format(ax)
+                ax.margins(x=0.01)
     
         # Compact x-labels per column (unchanged policy)
         self._apply_time_xlabel_policy()
     
         # Background interval overlays across time panels only
         if self._overlays_enabled() and time_axes:
+            from ..utils.overlays import draw_interval_bands
             draw_interval_bands(
                 time_axes,
                 self.intervals,
@@ -77,7 +113,7 @@ class PlottingMixin:
                 selected_interval=self.selected_interval,
                 preview=self.current_selection,
                 preview_spans=getattr(self, "current_spans", None),
-                alpha=0.15,          # match tests
+                alpha=0.15,
                 alpha_selected=0.16,
                 alpha_preview=0.12,
                 zorder=0.05,
@@ -87,17 +123,14 @@ class PlottingMixin:
         self._update_strip()
         self._update_intervals_list()
     
-        # --- Keep two-click preview overlays alive across redraws (NEW) ---
+        # --- Keep two-click preview overlays alive across redraws (existing logic) ---
         if getattr(self, "two_click_mode", False):
-            # Recreate overlay patches if ax.clear() removed them
             try:
                 self._rebuild_time_overlays_if_needed()
-                # If user is mid-selection, restore current preview band
                 if getattr(self, "_two_click_active", False) and getattr(self, "_two_click_t0", None) is not None:
                     last = getattr(self, "_two_click_last_x", self._two_click_t0)
                     self._update_time_overlays(self._two_click_t0, last)
             except Exception:
-                # Fail-safe: do not break drawing if overlays stumble
                 pass
     
         self.canvas.draw()
@@ -177,6 +210,50 @@ class PlottingMixin:
         stale = [ax for ax in self._time_overlays.keys() if ax not in axes]
         for ax in stale:
             self._time_overlays.pop(ax, None)
+            
+    def _hook_time_xlim(self) -> None:
+        """Connect 'xlim_changed' on the primary time axis only."""
+        if getattr(self, "_xlim_cb_cid", None) is not None:
+            return
+        key = getattr(self, "_primary_time_key", None)
+        if key is None:
+            return
+        ax = self.user_axes.get(key)
+        if ax is None:
+            return
+        self._xlim_cb_cid = ax.callbacks.connect("xlim_changed", self._on_time_xlim_changed)
+    
+    
+    def _on_time_xlim_changed(self, ax) -> None:
+        """Toolbar zoom/pan -> update t0/t1 -> full redraw. Guard against feedback."""
+        if getattr(self, "_squelch_xlim", False):
+            return
+    
+        import matplotlib.dates as mdates
+        import pandas as pd
+    
+        lo, hi = ax.get_xlim()
+        try:
+            t0_new = pd.Timestamp(mdates.num2date(lo)).tz_localize(None)
+            t1_new = pd.Timestamp(mdates.num2date(hi)).tz_localize(None)
+        except Exception:
+            return
+    
+        # No-op if the limits didn't really change (avoid float churn)
+        if getattr(self, "t0", None) is not None and getattr(self, "t1", None) is not None:
+            if self.t0 == t0_new and self.t1 == t1_new:
+                return
+    
+        self.t0, self.t1 = t0_new, t1_new
+    
+        # keep Start/End UI in sync if present
+        try:
+            self.start_time_entry.delete(0, "end"); self.start_time_entry.insert(0, str(self.t0))
+            self.end_time_entry.delete(0, "end");   self.end_time_entry.insert(0, str(self.t1))
+        except Exception:
+            pass
+    
+        self._update_plot()
             
     def _build_window_attrs_view(self, j0: int, j1: int) -> dict:
         """
@@ -264,14 +341,15 @@ class PlottingMixin:
         import matplotlib.dates as mdates
         
         ax = self.strip_ax  # type: ignore[assignment]
-        ax.clear()
-        ax.set_ylim(0, 1)
-        ax.set_yticks([])
-        ax.set_ylabel("Labels", fontsize=9)
-
-        # Reset limits/formatting because clearing resets formatter
-        ax.set_xlim(self.t0, self.t1)
-        self._apply_time_axis_format(ax)
+        with self._squelch_xlim_events():
+            ax.clear()
+            ax.set_ylim(0, 1)
+            ax.set_yticks([])
+            ax.set_ylabel("Labels", fontsize=9)
+        
+            # Reset limits/formatting because clearing resets formatter
+            ax.set_xlim(self.t0, self.t1, emit=False)
+            self._apply_time_axis_format(ax)
 
         # Labeled intervals in strip
         for iv in self.intervals:
