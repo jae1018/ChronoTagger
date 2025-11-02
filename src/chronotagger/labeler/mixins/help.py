@@ -27,10 +27,11 @@ KEYBOARD_SHORTCUTS: Tuple[Tuple[str, str], ...] = (
 )
 
 MOUSE_CONTROLS: Tuple[Tuple[str, str], ...] = (
-    ("Drag on panel",          "Create selection (add with 'a')"),
-    ("Click interval (strip)", "Select interval"),
-    ("Wheel",                  "Zoom around cursor"),
-    ("Shift + Wheel",          "Pan left/right"),
+    ("Left-click (time axes)",          "Two-click interval selection (click start, click end)"),
+    ("Left-drag (time axes)",           "Box-select points → contiguous blocks previewed"),
+    ("Click interval (strip)",          "Select interval"),
+    ("Wheel",                           "Zoom around cursor"),
+    ("Shift + Wheel",                   "Pan left/right"),
 )
 
 

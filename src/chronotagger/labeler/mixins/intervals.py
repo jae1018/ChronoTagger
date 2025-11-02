@@ -21,17 +21,82 @@ from chronotagger.core.commands import (
 class IntervalsMixin:
     # ---- user actions ----
     def _add_interval(self) -> None:
-        if not self.current_selection:
-            messagebox.showwarning("No Selection", "Drag on a plot to select a time range first.")
+        """
+        Add one or more intervals:
+          • If self.current_spans is non-empty -> add each span (multi-add).
+          • Else if self.current_selection is set -> add that single span.
+          • Else warn the user.
+        """
+        # Multi-span from box-select: prefer half-open commit spans if present
+        commit_spans = getattr(self, "_commit_spans", []) or []
+        preview_spans = getattr(self, "current_spans", []) or []
+        
+        if commit_spans or preview_spans:
+            spans_to_add = commit_spans if commit_spans else self._normalize_preview_spans_to_half_open(preview_spans)
+            label = self.current_class_var.get()  # type: ignore[union-attr]
+            count = 0
+            for s, e in spans_to_add:
+                if e <= s:
+                    continue
+                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+                count += 1
+        
+            # Clear selection state
+            if commit_spans:
+                self._commit_spans.clear()
+            self.current_spans.clear()
+            self.current_selection = None
+        
+            if count > 0:
+                self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
+                self._update_plot()
+                self._maybe_autosave()
+            else:
+                messagebox.showwarning("No Selection", "Box contained no valid points/spans.")
             return
+
+        # Single-span (two-click or drag full-height)
+        if not self.current_selection:
+            messagebox.showwarning("No Selection", "Select a time range first (drag or click×2).")
+            return
+
         s, e = self.current_selection
         label = self.current_class_var.get()  # type: ignore[union-attr]
-        cmd = AddIntervalCommand(self, Interval(s, e, label))
-        self._execute_command(cmd)
+        self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
         self.current_selection = None
         self.status_var.set(f"Added {label} interval")  # type: ignore[union-attr]
         self._update_plot()
         self._maybe_autosave()
+        
+    def _normalize_preview_spans_to_half_open(
+        self, spans: List[Tuple[pd.Timestamp, pd.Timestamp]]
+    ) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Convert preview spans that end AT the last included sample into half-open:
+          [s, e]  -> [s, next(e))   (or e+1ns if e is the last sample)
+        """
+        out: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
+        idx = self.df.index
+    
+        for s, e in spans:
+            try:
+                loc = idx.get_loc(e)
+                # handle duplicate timestamps (slice) or scalar int
+                if isinstance(loc, slice):
+                    j = loc.stop - 1
+                else:
+                    j = int(loc)
+                if j + 1 < len(idx):
+                    e2 = idx[j + 1]
+                else:
+                    e2 = e + pd.Timedelta(nanoseconds=1)
+                out.append((s, e2))
+            except KeyError:
+                # e not exactly on a sample -> keep as-is (already half-open-ish)
+                out.append((s, e))
+            except Exception:
+                out.append((s, e))
+        return out
 
     def _relabel_interval(self) -> None:
         if not self.selected_interval:

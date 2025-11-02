@@ -76,6 +76,7 @@ class PlottingMixin:
                 self.class_colors,
                 selected_interval=self.selected_interval,
                 preview=self.current_selection,
+                preview_spans=getattr(self, "current_spans", None),
                 alpha=0.15,          # match tests
                 alpha_selected=0.16,
                 alpha_preview=0.12,
@@ -260,6 +261,8 @@ class PlottingMixin:
 
     def _update_strip(self) -> None:
         """Redraw annotation strip (intervals + current selection preview)."""
+        import matplotlib.dates as mdates
+        
         ax = self.strip_ax  # type: ignore[assignment]
         ax.clear()
         ax.set_ylim(0, 1)
@@ -294,7 +297,7 @@ class PlottingMixin:
             )
             ax.add_patch(rect)
 
-        # Preview rectangle (strip)
+        # single-span preview
         if self.current_selection:
             s, e = self.current_selection
             rect = Rectangle(
@@ -308,3 +311,18 @@ class PlottingMixin:
                 linestyle="--",
             )
             ax.add_patch(rect)
+
+        # multi-span preview
+        if getattr(self, "current_spans", None):
+            for (s, e) in self.current_spans:
+                rect = Rectangle(
+                    (mdates.date2num(s), 0.05),
+                    mdates.date2num(e) - mdates.date2num(s),
+                    0.9,
+                    facecolor="yellow",
+                    edgecolor="orange",
+                    linewidth=2,
+                    alpha=0.3,
+                    linestyle="--",
+                )
+                ax.add_patch(rect)

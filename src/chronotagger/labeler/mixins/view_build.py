@@ -286,37 +286,17 @@ class ViewBuildMixin:
                 )
                 self.rect_selectors["primary"] = rs
     
-            # ---- Two-click selection wiring (NEW) ----
-            if getattr(self, "two_click_mode", False):
-                # Disable drag-rectangle; use two-click
-                rs = self.rect_selectors.get("primary")
-                if rs is not None:
-                    try:
-                        rs.set_active(False)
-                    except Exception:
-                        pass
-                if getattr(self, "_time_click_cid", None) is None:
-                    self._time_click_cid = self.canvas.mpl_connect(
-                        "button_press_event", self._on_time_click
-                    )
-                if getattr(self, "_time_motion_cid", None) is None:
-                    self._time_motion_cid = self.canvas.mpl_connect(
-                        "motion_notify_event", self._on_time_motion
-                    )
-                # create the multi-panel overlay patches now that axes exist
-                if hasattr(self, "_init_time_overlays"):
-                    self._init_time_overlays()
-            else:
-                # Legacy drag-rectangle behavior
-                rs = self.rect_selectors.get("primary")
-                if rs is not None:
-                    try:
-                        rs.set_active(True)
-                    except Exception:
-                        pass
-                if getattr(self, "_time_click_cid", None) is not None:
-                    self.canvas.mpl_disconnect(self._time_click_cid)
-                    self._time_click_cid = None
+            # Two-click selection wiring (coexists with drag-rectangle)
+            if self._time_click_cid is None:
+                self._time_click_cid = self.canvas.mpl_connect(
+                    "button_press_event", self._on_time_click
+                )
+            if self._time_motion_cid is None:
+                self._time_motion_cid = self.canvas.mpl_connect(
+                    "motion_notify_event", self._on_time_motion
+                )
+            if hasattr(self, "_init_time_overlays"):
+                self._init_time_overlays()
     
             # Strip interactions
             if self.pick_cid is None:
@@ -379,32 +359,17 @@ class ViewBuildMixin:
                        linestyle="--", linewidth=2),
         )
     
-        # ---- Two-click selection wiring (NEW) ----
-        if getattr(self, "two_click_mode", False):
-            rs = self.rect_selectors.get("primary")
-            if rs is not None:
-                try:
-                    rs.set_active(False)
-                except Exception:
-                    pass
-            if getattr(self, "_time_click_cid", None) is None:
-                self._time_click_cid = self.canvas.mpl_connect(
-                    "button_press_event", self._on_time_click
-                )
-            if getattr(self, "_time_motion_cid", None) is None:
-                self._time_motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_time_motion)
-            if hasattr(self, "_init_time_overlays"):
-                self._init_time_overlays()
-        else:
-            rs = self.rect_selectors.get("primary")
-            if rs is not None:
-                try:
-                    rs.set_active(True)
-                except Exception:
-                    pass
-            if getattr(self, "_time_click_cid", None) is not None:
-                self.canvas.mpl_disconnect(self._time_click_cid)
-                self._time_click_cid = None
+        # Two-click selection wiring (coexists with drag-rectangle)
+        if self._time_click_cid is None:
+            self._time_click_cid = self.canvas.mpl_connect(
+                "button_press_event", self._on_time_click
+            )
+        if self._time_motion_cid is None:
+            self._time_motion_cid = self.canvas.mpl_connect(
+                "motion_notify_event", self._on_time_motion
+            )
+        if hasattr(self, "_init_time_overlays"):
+            self._init_time_overlays()
     
         if self.pick_cid is None:
             self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)

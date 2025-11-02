@@ -26,13 +26,14 @@ def _clip_interval(
 
 def draw_interval_bands(
     axs: Dict[str, matplotlib.axes.Axes],
-    intervals: Iterable,  # Iterable[Interval]-like; must have .start, .end, .label
+    intervals: Iterable,
     t0: pd.Timestamp,
     t1: pd.Timestamp,
     class_colors: Dict[str, str],
     *,
     selected_interval: Optional[object] = None,
     preview: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None,
+    preview_spans: Optional[Iterable[Tuple[pd.Timestamp, pd.Timestamp]]] = None,
     alpha: float = 0.10,
     alpha_selected: float = 0.16,
     alpha_preview: float = 0.12,
@@ -81,7 +82,7 @@ def draw_interval_bands(
                 label="_nolegend_",
             )
 
-    # Draw preview band (if any)
+    # Draw preview band (single)
     if preview is not None:
         ps, pe = preview
         clipped = _clip_interval(ps, pe, t0, t1)
@@ -89,11 +90,21 @@ def draw_interval_bands(
             ps, pe = clipped
             for ax in axs.values():
                 ax.axvspan(
-                    ps, pe,
-                    ymin=0.0, ymax=1.0,
-                    facecolor="yellow",
-                    edgecolor="none",      # keep it subtle; we already show dashed edge in strip
-                    alpha=alpha_preview,
-                    zorder=zorder + 0.01,  # slightly above normal bands, still under data
-                    label="_nolegend_",
+                    ps, pe, ymin=0.0, ymax=1.0,
+                    facecolor="yellow", edgecolor="none",
+                    alpha=alpha_preview, zorder=zorder + 0.01, label="_nolegend_",
+                )
+
+    # Draw preview bands (multiple)
+    if preview_spans:
+        for (ps, pe) in preview_spans:
+            clipped = _clip_interval(ps, pe, t0, t1)
+            if clipped is None:
+                continue
+            ps, pe = clipped
+            for ax in axs.values():
+                ax.axvspan(
+                    ps, pe, ymin=0.0, ymax=1.0,
+                    facecolor="yellow", edgecolor="none",
+                    alpha=alpha_preview, zorder=zorder + 0.01, label="_nolegend_",
                 )

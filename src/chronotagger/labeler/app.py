@@ -162,8 +162,9 @@ class TimeIntervalLabeler(
         self.two_click_auto_add: bool = False    # if True, auto-creates interval on 2nd click
 
         self._pick_anchor_ts: Optional[pd.Timestamp] = None  # first click time
-        self._twoclick_motion_cid: Optional[int] = None      # mpl connection for preview
+        self._twoclick_motion_cid: Optional[int] = None      # (legacy) preview wire-up
         self._time_click_cid: Optional[int] = None           # mpl connection for clicks
+        self._time_motion_cid: Optional[int] = None          # mpl connection for motion
 
         # Minimal interval duration inference (unchanged) ...
         try:
@@ -174,6 +175,20 @@ class TimeIntervalLabeler(
             self.min_duration: pd.Timedelta = med
         except Exception:
             self.min_duration = pd.Timedelta(seconds=1)
+            
+         # Selection state
+        self.current_selection: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None
+        # NEW: multiple preview spans from box-select (each becomes an interval)
+        self.current_spans: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
+        self._commit_spans: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
+
+        # --- Two-click time selection (existing) ---
+        self.two_click_mode: bool = True
+
+        # NEW: click-vs-drag arbitration (pixel slop)
+        self.CLICK_DRAG_SLOP_PX: int = 6
+        self._press_xy_px: Optional[Tuple[int, int]] = None
+        self._dragging_box: bool = False
 
     # -------- Public entrypoint --------
 

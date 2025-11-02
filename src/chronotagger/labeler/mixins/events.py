@@ -18,7 +18,9 @@ from chronotagger.core.commands import ResizeIntervalCommand
 import tkinter as tk
 from tkinter import messagebox
 import matplotlib.dates as mdates
+
 import pandas as pd
+import numpy as np
 
 
 HANDLE_PX = 8  # hit tolerance in screen pixels for edge resize
@@ -67,28 +69,207 @@ class EventsMixin:
             self.selected_interval = None
 
     def _on_rectangle_select(self, eclick, erelease) -> None:
-        # Guard: selection outside data area yields None
+        """
+        Handle both:
+          • Full-height time selection (t0..t1)  -> single preview span (legacy)
+          • Box selection (t/y bounded)          -> one or more preview spans from points
+    
+        Rule of thumb:
+          If the selection covers ~entire y-range of the axis (>=95%), we treat it as time-only.
+          Otherwise, we treat it as a box over data points on time-lane panels.
+        """
         if eclick.xdata is None or erelease.xdata is None:
             return
-        x1, x2 = sorted([eclick.xdata, erelease.xdata])
-
-        def _to_naive_ts(x: float) -> pd.Timestamp:
-            dt = mdates.num2date(x)
-            if getattr(dt, "tzinfo", None) is not None:
-                dt = dt.replace(tzinfo=None)
-            return pd.Timestamp(dt)
-
-        t_start, t_end = _to_naive_ts(x1), _to_naive_ts(x2)
-
+        ax = getattr(eclick, "inaxes", None)
+        if ax is None:
+            return
+        
+        # If the two-click preview was armed by the initial mouse press,
+        # cancel it so rectangle-select takes precedence.
+        if getattr(self, "_two_click_active", False) or getattr(self, "_twoclick_motion_cid", None):
+            self._clear_two_click_state(keep_selection=True)  # hides overlays + disconnects motion
+    
+        # Compute data-rect
+        x1, x2 = float(eclick.xdata), float(erelease.xdata)
+        y1 = float(getattr(eclick, "ydata", np.nan))
+        y2 = float(getattr(erelease, "ydata", np.nan))
+        x_lo, x_hi = (x1, x2) if x1 <= x2 else (x2, x1)
+        y_lo, y_hi = (y1, y2) if y1 <= y2 else (y2, y1)
+    
+        # Heuristic: full-height band => treat as time-only
+        try:
+            ymin, ymax = ax.get_ylim()
+            y_span = max(1e-12, float(ymax) - float(ymin))
+            sel_span = max(0.0, min(float(ymax), y_hi) - max(float(ymin), y_lo))
+            full_height = (sel_span / y_span) >= 0.95
+        except Exception:
+            full_height = True  # safest fallback
+    
+        # Reset arbitration flags from a completed drag
+        self._dragging_box = False
+        self._press_xy_px = None
+    
+        if full_height:
+            # === TIME-ONLY path (backwards-compatible) ===
+            import matplotlib.dates as mdates
+            def _to_naive_ts(xf: float) -> pd.Timestamp:
+                dt = mdates.num2date(xf)
+                if getattr(dt, "tzinfo", None) is not None:
+                    dt = dt.replace(tzinfo=None)
+                return pd.Timestamp(dt)
+    
+            t_start, t_end = _to_naive_ts(x_lo), _to_naive_ts(x_hi)
+    
+            if self.snap_var.get():  # type: ignore[union-attr]
+                t_start, t_end = self._snap_to_samples(t_start, t_end)
+    
+            self.current_spans.clear()
+            self.current_selection = (min(t_start, t_end), max(t_start, t_end))
+            self._commit_spans = []
+            self.status_var.set(  # type: ignore[union-attr]
+                f"Selected: {self.current_selection[0].strftime('%H:%M:%S')} → {self.current_selection[1].strftime('%H:%M:%S')}"
+            )
+            self._update_strip()
+            self.canvas.draw_idle()  # type: ignore[union-attr]
+            return
+    
+        # === BOX-SELECT path (points-in-rect over time lane axes) ===
+        import matplotlib.dates as mdates
+    
+        # which axes count as "time lane"?
+        time_axes = []
+        if getattr(self, "_time_axis_keys", None):
+            for k in self._time_axis_keys:
+                a = self.user_axes.get(k)
+                if a is not None and self._is_time_lane_axis(a):
+                    time_axes.append(a)
+        else:
+            # legacy: treat all user axes as time
+            time_axes = list(self.user_axes.values())
+    
+        xlo, xhi = float(x_lo), float(x_hi)
+        ylo, yhi = float(y_lo), float(y_hi)
+    
+        # Collect timestamps from lines & scatters inside the box
+        picked_ts: list[pd.Timestamp] = []
+    
+        for a in time_axes:
+            # Line2D objects
+            for ln in a.lines:
+                try:
+                    xs = np.asarray(ln.get_xdata(orig=False), dtype=float)
+                    ys = np.asarray(ln.get_ydata(orig=False), dtype=float)
+                    if xs.size != ys.size or xs.size == 0:
+                        continue
+                    m = (xs >= xlo) & (xs <= xhi) & (ys >= ylo) & (ys <= yhi)
+                    if not m.any():
+                        continue
+                    xs_sel = xs[m]
+                    # Convert selected xs (float days) to naive timestamps
+                    for xf in xs_sel:
+                        dt = mdates.num2date(float(xf))
+                        if getattr(dt, "tzinfo", None) is not None:
+                            dt = dt.replace(tzinfo=None)
+                        picked_ts.append(pd.Timestamp(dt))
+                except Exception:
+                    continue
+    
+            # Scatter-style PathCollections
+            for coll in a.collections:
+                if not hasattr(coll, "get_offsets"):
+                    continue
+                try:
+                    off = np.asarray(coll.get_offsets())
+                    if off.size == 0:
+                        continue
+                    # offsets are Nx2 in data coords [x, y]
+                    xs = off[:, 0].astype(float, copy=False)
+                    ys = off[:, 1].astype(float, copy=False)
+                    m = (xs >= xlo) & (xs <= xhi) & (ys >= ylo) & (ys <= yhi)
+                    if not m.any():
+                        continue
+                    for xf in xs[m]:
+                        dt = mdates.num2date(float(xf))
+                        if getattr(dt, "tzinfo", None) is not None:
+                            dt = dt.replace(tzinfo=None)
+                        picked_ts.append(pd.Timestamp(dt))
+                except Exception:
+                    continue
+    
+        # Nothing in the box → just clear preview
+        if not picked_ts:
+            self.current_spans.clear()
+            self.current_selection = None
+            self._commit_spans = []
+            self.status_var.set("No points in selection")  # type: ignore[union-attr]
+            self._update_strip()
+            self.canvas.draw_idle()  # type: ignore[union-attr]
+            return
+    
+        # Convert timestamps to index positions (nearest) and keep only those inside current data bounds
+        idx_full = self.df.index
+        pos = []
+        for ts in picked_ts:
+            j = idx_full.get_indexer([ts], method="nearest")[0]
+            if 0 <= j < len(idx_full):
+                pos.append(j)
+    
+        if not pos:
+            self.current_spans.clear()
+            self.current_selection = None
+            self._commit_spans = []
+            self.status_var.set("No points in selection")  # type: ignore[union-attr]
+            self._update_strip()
+            self.canvas.draw_idle()  # type: ignore[union-attr]
+            return
+    
+        pos = sorted(set(pos))
+    
+        # Split into contiguous runs (diff == 1)
+        runs: list[tuple[int, int]] = []
+        run_start = pos[0]
+        prev = pos[0]
+        for j in pos[1:]:
+            if j == prev + 1:
+                prev = j
+                continue
+            runs.append((run_start, prev))
+            run_start = prev = j
+        runs.append((run_start, prev))
+    
+        # Turn runs into half-open [start, end) spans
+        # --- Build both views of the runs ---
+        # (a) What we COMMIT: half-open [first, just-after-last]
+        spans_commit = self._runs_to_half_open_intervals(idx_full, runs)
+        
+        # (b) What we PREVIEW on panels/strip: [first, last] (ends AT last included point)
+        spans_preview: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+        for i0, i1 in runs:
+            s = pd.Timestamp(idx_full[i0])
+            e = pd.Timestamp(idx_full[i1])  # last included sample time
+            s = max(s, self.data_start)
+            e = min(e, self.data_end)
+            if e >= s:
+                spans_preview.append((s, e))
+        
+        # Optional snap (preview only; commit stays half-open)
         if self.snap_var.get():  # type: ignore[union-attr]
-            t_start, t_end = self._snap_to_samples(t_start, t_end)
-
-        self.current_selection = (t_start, t_end)
-        self.status_var.set(  # type: ignore[union-attr]
-            f"Selected: {t_start.strftime('%H:%M:%S')} → {t_end.strftime('%H:%M:%S')}"
+            snapped_prev: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+            for s, e in spans_preview:
+                ss, ee = self._snap_to_samples(s, e)
+                snapped_prev.append((ss, ee))
+            spans_preview = snapped_prev
+        
+        # Stash both: preview for drawing, commit for "Add Label"
+        self.current_selection = None
+        self.current_spans = spans_preview        # was: self.current_spans = spans
+        self._commit_spans = spans_commit         # NEW: used by _add_interval
+        self.status_var.set(
+            f"Selected {len(spans_preview)} contiguous block(s) from {len(pos)} point(s)"
         )
         self._update_strip()
-        self.canvas.draw()  # type: ignore[union-attr]
+        self.canvas.draw_idle()
+
 
     def _on_strip_click(self, event) -> None:
         if event.artist not in self.strip_ax.patches:  # type: ignore[union-attr]
@@ -309,100 +490,113 @@ class EventsMixin:
     
     def _on_time_click(self, event):
         """
-        Two-click behavior:
-          1st left-click on any time-lane axis or strip: start preview at t0,
-             show a thin visible band immediately on ALL time-lane panels.
-          2nd left-click: commit [t0, t1] through the existing rectangle-select path.
-          Right-click: cancel.
+        Two-click behavior, canvas-wide:
+          • Left-click #1: arm at t0 (from cursor x mapped into primary time axis),
+            show slim preview band on ALL time-lane panels + seed strip preview.
+          • Left-click #2: finalize [t0, t1] and route through _on_rectangle_select.
+          • Right-click anywhere: cancel.
         """
-        # right-click cancels anywhere
-        if getattr(event, "button", None) == 3:
+        btn = getattr(event, "button", None)
+    
+        # Right-click cancels anywhere
+        if btn == 3:
             self._two_click_active = False
             self._two_click_t0 = None
             self._two_click_last_x = None
             self._hide_time_overlays()
-            # also clear strip preview
             self.current_selection = None
             self._update_strip()
-            if self.canvas is not None:
+            if getattr(self, "canvas", None) is not None:
                 self.canvas.draw_idle()
             return
     
-        # only left-clicks on the time lane (col 0 time axes) or the strip
-        if getattr(event, "button", None) != 1:
-            return
-        ax = getattr(event, "inaxes", None)
-        if not (self._is_time_lane_axis(ax) or ax is self.strip_ax):
+        # Only respond to left-click
+        if btn != 1:
             return
     
-        # map to float-date x
-        import matplotlib.dates as mdates
-        x = getattr(event, "xdata", None)
-        if x is None:
+        # Map click location to primary time-axis x, no matter where we clicked
+        x_any = self._x_from_anywhere(event)
+        if x_any is None:
             return
     
-        # first click: start & show ~2px sliver immediately
-        if not self._two_click_active:
+        # Clamp to current primary view to avoid odd values just outside the axes box
+        primary_ax = self.user_axes.get(self._primary_time_key, None)
+        if primary_ax is not None:
+            lo, hi = sorted([primary_ax.viewLim.x0, primary_ax.viewLim.x1])
+            x_any = min(max(float(x_any), lo), hi)
+    
+        # FIRST CLICK: arm selection
+        if not getattr(self, "_two_click_active", False):
             self._two_click_active = True
-            self._two_click_t0 = float(x)
+            self._two_click_t0 = float(x_any)
     
-            # show sliver on all overlays
-            primary_ax = self.user_axes.get(self._primary_time_key, ax)
-            eps = self._px_to_data_dx(primary_ax, 2) if primary_ax is not None else 1e-10
+            # Show a ~2px sliver immediately so the user sees it “took”
+            eps = self._px_to_data_dx(primary_ax or event.inaxes, 2) if (primary_ax or event.inaxes) is not None else 1e-10
             self._update_time_overlays(self._two_click_t0, self._two_click_t0 + eps)
     
-            # also seed strip preview so users see it there too
-            t0 = mdates.num2date(self._two_click_t0)
-            if getattr(t0, "tzinfo", None) is not None:
-                t0 = t0.replace(tzinfo=None)
-            import pandas as pd
-            ts0 = pd.Timestamp(t0)
-            self.current_selection = (ts0, ts0)
+            # Seed strip preview at a zero-width interval
+            import pandas as pd, matplotlib.dates as mdates
+            t0 = pd.Timestamp(mdates.num2date(self._two_click_t0).replace(tzinfo=None))
+            self.current_selection = (t0, t0)
             self._update_strip()
-            if self.canvas is not None:
+            if getattr(self, "canvas", None) is not None:
                 self.canvas.draw_idle()
             return
     
-        # second click: finalize
-        t0, t1 = self._two_click_t0, float(x)
+        # SECOND CLICK: finalize
+        t0 = float(getattr(self, "_two_click_t0", x_any))
+        t1 = float(x_any)
+    
+        # Disarm first so a double-dispatch doesn't immediately re-arm
         self._two_click_active = False
         self._two_click_t0 = None
         self._two_click_last_x = None
         self._hide_time_overlays()
     
-        # call the existing rectangle-select logic on the primary time axis
+        # Synthesize a rectangle-select using primary time axis
         import types
-        primary_ax = self.user_axes.get(self._primary_time_key, ax)
+        primary_ax = self.user_axes.get(self._primary_time_key, event.inaxes)
         e1 = types.SimpleNamespace(xdata=t0, ydata=0.0, inaxes=primary_ax)
         e2 = types.SimpleNamespace(xdata=t1, ydata=1.0, inaxes=primary_ax)
         self._on_rectangle_select(e1, e2)
+    
+        if getattr(self, "canvas", None) is not None:
+            self.canvas.draw_idle()
     
     
     def _on_time_motion(self, event):
         """
         While first-click is active, keep the multi-panel overlay AND the strip preview
-        in sync with the cursor.
+        in sync with the cursor. Works anywhere on the canvas (not just time axes).
         """
-        if not self._two_click_active:
-            return
-        # only track motion over time-lane axes or strip (ignore XY panels)
-        ax = getattr(event, "inaxes", None)
-        if not (self._is_time_lane_axis(ax) or ax is self.strip_ax):
-            return
-        x = getattr(event, "xdata", None)
-        if x is None:
+        if not getattr(self, "_two_click_active", False):
             return
     
-        self._update_time_overlays(self._two_click_t0, float(x))
+        # Map the mouse x (in pixels) to the primary time-axis data x,
+        # regardless of which axes the cursor is hovering.
+        x_any = self._x_from_anywhere(event)
+        if x_any is None:
+            return
     
-        # keep the strip preview in lockstep
+        # Clamp to the primary axis view to avoid odd previews far outside the window.
+        primary_ax = self.user_axes.get(self._primary_time_key, None)
+        if primary_ax is not None:
+            x0, x1 = primary_ax.viewLim.x0, primary_ax.viewLim.x1
+            if x0 > x1:  # safety, but shouldn't happen
+                x0, x1 = x1, x0
+            x_any = max(x0, min(x_any, x1))
+    
+        # Update translucent band across time panels
+        self._update_time_overlays(self._two_click_t0, float(x_any))
+    
+        # Keep the strip preview in lockstep (snap + clamp + min duration)
         import matplotlib.dates as mdates, pandas as pd
-        s = pd.Timestamp(mdates.num2date(min(self._two_click_t0, float(x))).replace(tzinfo=None))
-        e = pd.Timestamp(mdates.num2date(max(self._two_click_t0, float(x))).replace(tzinfo=None))
+        s = pd.Timestamp(mdates.num2date(min(self._two_click_t0, float(x_any))).replace(tzinfo=None))
+        e = pd.Timestamp(mdates.num2date(max(self._two_click_t0, float(x_any))).replace(tzinfo=None))
         s, e = self._apply_snap_clamp(s, e)
         self.current_selection = (s, e)
         self._update_strip()
-        if self.canvas is not None:
+        if getattr(self, "canvas", None) is not None:
             self.canvas.draw_idle()
 
     
@@ -486,6 +680,47 @@ class EventsMixin:
             s, e = (ss, ee) if ss <= ee else (ee, ss)
     
         return s, e
+    
+    def _end_after_inclusive(self, last_ts: pd.Timestamp) -> pd.Timestamp:
+        """
+        Return an end timestamp that is just after `last_ts` so [start, end)
+        includes the last selected sample without guessing sampling cadence.
+        """
+        try:
+            return last_ts + pd.Timedelta(nanoseconds=1)
+        except Exception:
+            # ultra-conservative fallback
+            return last_ts + pd.Timedelta(microseconds=1)
+    
+    
+    def _runs_to_half_open_intervals(
+        self,
+        idx: pd.DatetimeIndex,
+        runs: list[tuple[int, int]],   # inclusive index ranges [(i0, i1), ...]
+    ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Convert inclusive index runs to half-open [start, end) timestamp pairs:
+          start = time of first included sample
+          end   = time of the sample AFTER the last included (if it exists),
+                  else a tiny epsilon after the last sample.
+        """
+        out: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+        n = len(idx)
+    
+        for i0, i1 in runs:
+            s = pd.Timestamp(idx[i0])
+            if i1 + 1 < n:
+                e = pd.Timestamp(idx[i1 + 1])
+            else:
+                e = self._end_after_inclusive(pd.Timestamp(idx[i1]))
+    
+            # allow at most an epsilon beyond data_end
+            cap = self.data_end + pd.Timedelta(nanoseconds=1)
+            if e > cap:
+                e = cap
+    
+            out.append((s, e))
+        return out
     
     
     
