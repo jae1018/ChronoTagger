@@ -67,6 +67,18 @@ class EventsMixin:
                 self.canvas.draw()  # type: ignore[union-attr]
         except Exception:
             self.selected_interval = None
+            
+    def _to_timestamp(self, x):
+        import pandas as pd, matplotlib.dates as mdates
+        # x is a Matplotlib date float or a datetime
+        return pd.Timestamp(mdates.num2date(x) if isinstance(x, (int, float)) else x).tz_localize(None)
+    
+    def _snap_nearest(self, t):
+        # snap t to the nearest df.index sample (no “inside” trimming)
+        import pandas as pd
+        idx = self.df.index.get_indexer([t], method="nearest")[0]
+        return pd.Timestamp(self.df.index[idx]).tz_localize(None) if idx >= 0 else t
+
 
     def _on_rectangle_select(self, eclick, erelease) -> None:
         """
@@ -539,22 +551,51 @@ class EventsMixin:
         # SECOND CLICK: finalize
         t0 = float(getattr(self, "_two_click_t0", x_any))
         t1 = float(x_any)
-    
+
         # Disarm first so a double-dispatch doesn't immediately re-arm
         self._two_click_active = False
         self._two_click_t0 = None
         self._two_click_last_x = None
         self._hide_time_overlays()
-    
-        # Synthesize a rectangle-select using primary time axis
-        import types
-        primary_ax = self.user_axes.get(self._primary_time_key, event.inaxes)
-        e1 = types.SimpleNamespace(xdata=t0, ydata=0.0, inaxes=primary_ax)
-        e2 = types.SimpleNamespace(xdata=t1, ydata=1.0, inaxes=primary_ax)
-        self._on_rectangle_select(e1, e2)
-    
+
+        # Convert to timestamps, snap to NEAREST (not strictly inside), clip to window
+        import pandas as pd, matplotlib.dates as mdates
+
+        lo_f, hi_f = sorted([t0, t1])
+        t0_ts = pd.Timestamp(mdates.num2date(lo_f)).tz_localize(None)
+        t1_ts = pd.Timestamp(mdates.num2date(hi_f)).tz_localize(None)
+
+        # Optional "Snap to samples" -> NEAREST sample on both ends
+        try:
+            if self.snap_var.get():
+                i0 = self.df.index.get_indexer([t0_ts], method="nearest")[0]
+                i1 = self.df.index.get_indexer([t1_ts], method="nearest")[0]
+                if i0 >= 0:
+                    t0_ts = pd.Timestamp(self.df.index[i0]).tz_localize(None)
+                if i1 >= 0:
+                    t1_ts = pd.Timestamp(self.df.index[i1]).tz_localize(None)
+        except Exception:
+            pass
+
+        # Clip to current visible window, but don't "shrink inside"
+        try:
+            if getattr(self, "t0", None) is not None and getattr(self, "t1", None) is not None:
+                t0_ts = max(t0_ts, self.t0)
+                t1_ts = min(t1_ts, self.t1)
+        except Exception:
+            pass
+
+        # Store preview selection and show band on panels + strip
+        self.current_selection = (t0_ts, t1_ts)
+
+        x0 = mdates.date2num(t0_ts)
+        x1 = mdates.date2num(t1_ts)
+        self._update_time_overlays(x0, x1)
+        self._update_strip()
+
         if getattr(self, "canvas", None) is not None:
             self.canvas.draw_idle()
+        return
     
     
     def _on_time_motion(self, event):
@@ -565,30 +606,59 @@ class EventsMixin:
         if not getattr(self, "_two_click_active", False):
             return
     
-        # Map the mouse x (in pixels) to the primary time-axis data x,
-        # regardless of which axes the cursor is hovering.
+        # Map mouse x to primary time-axis x, wherever the cursor is
         x_any = self._x_from_anywhere(event)
         if x_any is None:
             return
     
-        # Clamp to the primary axis view to avoid odd previews far outside the window.
+        # Clamp to primary axis view
         primary_ax = self.user_axes.get(self._primary_time_key, None)
         if primary_ax is not None:
-            x0, x1 = primary_ax.viewLim.x0, primary_ax.viewLim.x1
-            if x0 > x1:  # safety, but shouldn't happen
-                x0, x1 = x1, x0
-            x_any = max(x0, min(x_any, x1))
+            lo, hi = sorted([primary_ax.viewLim.x0, primary_ax.viewLim.x1])
+            x_any = min(max(float(x_any), lo), hi)
     
-        # Update translucent band across time panels
-        self._update_time_overlays(self._two_click_t0, float(x_any))
+        import pandas as pd, matplotlib.dates as mdates
     
-        # Keep the strip preview in lockstep (snap + clamp + min duration)
-        import matplotlib.dates as mdates, pandas as pd
-        s = pd.Timestamp(mdates.num2date(min(self._two_click_t0, float(x_any))).replace(tzinfo=None))
-        e = pd.Timestamp(mdates.num2date(max(self._two_click_t0, float(x_any))).replace(tzinfo=None))
-        s, e = self._apply_snap_clamp(s, e)
-        self.current_selection = (s, e)
+        # Convert both ends to timestamps
+        lo_f, hi_f = sorted([float(self._two_click_t0), float(x_any)])
+        s_ts = pd.Timestamp(mdates.num2date(lo_f)).tz_localize(None)
+        e_ts = pd.Timestamp(mdates.num2date(hi_f)).tz_localize(None)
+    
+        # Optional: snap both ends to the NEAREST index sample (not strictly inside)
+        try:
+            if self.snap_var.get():
+                i0 = self.df.index.get_indexer([s_ts], method="nearest")[0]
+                i1 = self.df.index.get_indexer([e_ts], method="nearest")[0]
+                if i0 >= 0:
+                    s_ts = pd.Timestamp(self.df.index[i0]).tz_localize(None)
+                if i1 >= 0:
+                    e_ts = pd.Timestamp(self.df.index[i1]).tz_localize(None)
+        except Exception:
+            pass
+    
+        # Clamp to current visible window [t0, t1]
+        try:
+            if getattr(self, "t0", None) is not None and getattr(self, "t1", None) is not None:
+                s_ts = max(s_ts, self.t0)
+                e_ts = min(e_ts, self.t1)
+        except Exception:
+            pass
+    
+        # Update overlays using the snapped/clamped bounds
+        x0 = mdates.date2num(s_ts)
+        x1 = mdates.date2num(e_ts)
+        if x1 <= x0:
+            # keep a visible sliver if the mouse is on top of the first click
+            eps = self._px_to_data_dx(primary_ax or event.inaxes, 2) if (primary_ax or event.inaxes) is not None else 1e-10
+            x1 = x0 + eps
+            e_ts = pd.Timestamp(mdates.num2date(x1)).tz_localize(None)
+    
+        self._update_time_overlays(x0, x1)
+    
+        # Keep the strip preview in lockstep
+        self.current_selection = (s_ts, e_ts)
         self._update_strip()
+    
         if getattr(self, "canvas", None) is not None:
             self.canvas.draw_idle()
 

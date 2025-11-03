@@ -203,8 +203,10 @@ class ViewBuildMixin:
                 hrs = list(map(float, height_ratios))
     
             if append_row:
-                strip_height_ratio = float(spec.get("strip_height_ratio", 0.12))
-                hrs = hrs + [strip_height_ratio]
+                # default to matching other rows; still allow override via layout_spec["strip_height_ratio"]
+                default_ratio = hrs[-1] if hrs else 1.0
+                strip_height_ratio = float(spec.get("strip_height_ratio", default_ratio))
+                hrs.append(strip_height_ratio)
     
             # Lane gutter behavior unchanged (kept off unless user provides it)
             use_lane_gutter = isinstance(spec.get("time_lane_cbar_gutter", None), dict)
