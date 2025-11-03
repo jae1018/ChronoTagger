@@ -4,6 +4,8 @@ View construction mixin.
 Responsibilities:
 - Build the Tk window and main frames
 - Build the top controls, plot area, sidebar
+
+Note that the module assumes matplotlib 3.8+ is used.
 """
 
 from __future__ import annotations
@@ -259,6 +261,12 @@ class ViewBuildMixin:
             self.strip_ax.set_ylim(0, 1)
             self.strip_ax.set_yticks([])
             self._apply_time_axis_format(self.strip_ax)
+            
+            # --- Make the strip share x with the primary time axis (hard lock) ---
+            if self._primary_time_key is not None:
+                primary_ax = self.user_axes[self._primary_time_key]
+                # sharex makes them part of the same shared group
+                self.strip_ax.sharex(primary_ax)
     
             # Time axis formatting for all time panels
             for k in self._time_axis_keys:

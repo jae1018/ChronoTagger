@@ -14,6 +14,9 @@ from matplotlib.patches import Rectangle
 
 from contextlib import contextmanager
 
+from pandas.plotting import register_matplotlib_converters
+register_matplotlib_converters()
+
 from ..utils.timeaxis import apply_time_axis_format
 from ..utils.overlays import draw_interval_bands
 
@@ -48,6 +51,17 @@ class PlottingMixin:
         with self._squelch_xlim_events():
             for ax in self.user_axes.values():
                 ax.clear()
+                
+        # Identify all time-role axes and force them into date mode *before* plotting.
+        if getattr(self, "_time_axis_keys", None):
+            for k in self._time_axis_keys:
+                ax = self.user_axes.get(k)
+                if ax is None:
+                    continue
+                ax.xaxis_date()                 # tell Matplotlib this axis is dates
+                self._apply_time_axis_format(ax)
+                # Set the bounds now so autoscale can't switch units later
+                ax.set_xlim(self.t0, self.t1, emit=False)
     
         # --- Window the dataframe ---
         try:
@@ -93,9 +107,18 @@ class PlottingMixin:
         # Align limits + date formatting for time axes (single pass)
         with self._squelch_xlim_events():
             for ax in time_axes.values():
-                ax.set_xlim(self.t0, self.t1, emit=False)  # <- prevent re-entrant events
+                # zero horizontal padding
+                try:
+                    ax.set_xmargin(0.0)
+                except Exception:
+                    pass
+                try:
+                    ax.margins(x=0.0)
+                except Exception:
+                    pass
+                # hard-limit to the window
+                ax.set_xlim(self.t0, self.t1, emit=False)
                 self._apply_time_axis_format(ax)
-                ax.margins(x=0.01)
     
         # Compact x-labels per column (unchanged policy)
         self._apply_time_xlabel_policy()
@@ -348,6 +371,16 @@ class PlottingMixin:
             # Reset limits/formatting because clearing resets formatter
             ax.set_xlim(self.t0, self.t1, emit=False)
             self._apply_time_axis_format(ax)
+            
+            # zero horizontal padding so the strip matches time panels exactly
+            try:
+                ax.set_xmargin(0.0)
+            except Exception:
+                pass
+            try:
+                ax.margins(x=0.0)
+            except Exception:
+                pass
 
         # Labeled intervals in strip
         for iv in self.intervals:
