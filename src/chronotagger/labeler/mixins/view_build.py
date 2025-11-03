@@ -123,6 +123,7 @@ class ViewBuildMixin:
         act = ttk.Frame(parent)
         act.pack(side=tk.LEFT, padx=10)
         ttk.Button(act, text="Add Label", command=self._add_interval).pack(side=tk.LEFT, padx=2)
+        ttk.Button(act, text="Label by Rule...", command=self._open_label_by_rule_dialog).pack(side=tk.LEFT, padx=6)
         ttk.Button(act, text="Delete", command=self._delete_interval).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Undo", command=self._undo).pack(side=tk.LEFT, padx=2)
         ttk.Button(act, text="Redo", command=self._redo).pack(side=tk.LEFT, padx=2)

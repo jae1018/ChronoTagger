@@ -14,54 +14,94 @@ from chronotagger.core.commands import (
     AddIntervalCommand,
     DeleteIntervalCommand,
     RelabelIntervalCommand,
+    ResizeIntervalCommand,
 )
 
 
 
 class IntervalsMixin:
+    
     # ---- user actions ----
     def _add_interval(self) -> None:
         """
         Add one or more intervals:
-          • If self.current_spans is non-empty -> add each span (multi-add).
-          • Else if self.current_selection is set -> add that single span.
+          • If self._commit_spans is non-empty -> add each span exactly as provided
+            (already policy-processed by dialogs).
+          • Else if self.current_spans is set -> normalize to half-open and apply policy here.
           • Else warn the user.
         """
-        # Multi-span from box-select: prefer half-open commit spans if present
         commit_spans = getattr(self, "_commit_spans", []) or []
         preview_spans = getattr(self, "current_spans", []) or []
-        
-        if commit_spans or preview_spans:
-            spans_to_add = commit_spans if commit_spans else self._normalize_preview_spans_to_half_open(preview_spans)
-            label = self.current_class_var.get()  # type: ignore[union-attr]
-            count = 0
-            for s, e in spans_to_add:
+    
+        label = self.current_class_var.get()  # type: ignore[union-attr]
+        policy = getattr(self, "_overlap_policy", "skip")
+        count = 0
+    
+        # === 1) Rule-driven path: commit spans are authoritative ===
+        if commit_spans:
+            # If you later implement "replace", you may carve here. For now, we just add.
+            for s, e in commit_spans:
                 if e <= s:
                     continue
                 self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
                 count += 1
-        
+    
             # Clear selection state
-            if commit_spans:
-                self._commit_spans.clear()
+            self._commit_spans.clear()
             self.current_spans.clear()
             self.current_selection = None
-        
+    
             if count > 0:
                 self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
                 self._update_plot()
                 self._maybe_autosave()
             else:
+                # More informative message if policy produced emptiness
+                from tkinter import messagebox
+                messagebox.showwarning(
+                    "No Selection",
+                    "No valid spans after applying the overlap policy."
+                )
+            return
+    
+        # === 2) Box-select / two-click path ===
+        if preview_spans:
+            spans_to_add = self._normalize_preview_spans_to_half_open(preview_spans)
+    
+            final_spans: List[Tuple[pd.Timestamp, pd.Timestamp]]
+            if policy == "skip":
+                final_spans = []
+                for s, e in spans_to_add:
+                    final_spans.extend(self._subtract_overlaps_from_span(s, e))
+            else:
+                # Future: handle "replace" by carving, for now just add as-is
+                final_spans = spans_to_add
+    
+            for s, e in final_spans:
+                if e <= s:
+                    continue
+                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+                count += 1
+    
+            self.current_spans.clear()
+            self.current_selection = None
+    
+            if count > 0:
+                self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
+                self._update_plot()
+                self._maybe_autosave()
+            else:
+                from tkinter import messagebox
                 messagebox.showwarning("No Selection", "Box contained no valid points/spans.")
             return
-
-        # Single-span (two-click or drag full-height)
+    
+        # === 3) Single-span path ===
         if not self.current_selection:
+            from tkinter import messagebox
             messagebox.showwarning("No Selection", "Select a time range first (drag or click×2).")
             return
-
+    
         s, e = self.current_selection
-        label = self.current_class_var.get()  # type: ignore[union-attr]
         self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
         self.current_selection = None
         self.status_var.set(f"Added {label} interval")  # type: ignore[union-attr]
@@ -158,6 +198,90 @@ class IntervalsMixin:
         self.status_var.set(f"Assigned {len(gaps)} UNKNOWN intervals")  # type: ignore[union-attr]
         self._update_plot()
         self._maybe_autosave()
+        
+    def _carve_existing_for_new_span(self, s: pd.Timestamp, e: pd.Timestamp) -> None:
+        """
+        Modify existing intervals so that [s, e) becomes free space:
+          - Fully covered intervals are deleted.
+          - Left/right edge overlaps are resized.
+          - Middle overlaps (new span cuts an interval in two) are split by
+            deleting the original and adding two trimmed intervals.
+        All changes are executed via commands for proper undo/redo.
+        """
+        if e <= s:
+            return
+
+        # Iterate over a stable snapshot; commands mutate self.intervals
+        existing = list(self.intervals)
+        for iv in existing:
+            # no overlap
+            if iv.end <= s or iv.start >= e:
+                continue
+
+            # Case A: fully covered by [s,e) -> delete
+            if iv.start >= s and iv.end <= e:
+                self._execute_command(DeleteIntervalCommand(self, iv))
+                continue
+
+            # Case B: overlap on the right edge (keep left)
+            if iv.start < s <= iv.end <= e:
+                self._execute_command(ResizeIntervalCommand(self, iv, iv.start, s))
+                continue
+
+            # Case C: overlap on the left edge (keep right)
+            if s <= iv.start < e < iv.end:
+                self._execute_command(ResizeIntervalCommand(self, iv, e, iv.end))
+                continue
+
+            # Case D: [s,e) strictly inside iv => split into left + right
+            if iv.start < s and iv.end > e:
+                # delete original
+                self._execute_command(DeleteIntervalCommand(self, iv))
+                # add left + right fragments with same label/notes
+                left_start, left_end = iv.start, s
+                right_start, right_end = e, iv.end
+                from chronotagger.core.models import Interval
+                self._execute_command(AddIntervalCommand(self, Interval(left_start, left_end, iv.label, iv.notes)))
+                self._execute_command(AddIntervalCommand(self, Interval(right_start, right_end, iv.label, iv.notes)))
+                continue
+            
+    def _commit_to_preview_spans(
+        self, spans: List[Tuple[pd.Timestamp, pd.Timestamp]]
+    ) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Convert half-open [s, e) commit spans into preview spans that end AT
+        the last included sample (s, e_last_included] so they render correctly
+        in the strip / overlays.
+        """
+        out: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
+        idx = self.df.index
+        for s, e in spans:
+            j = idx.searchsorted(e, side="left") - 1
+            if j >= 0:
+                out.append((s, pd.Timestamp(idx[j])))
+        return out
+    
+    
+    def _apply_overlap_policy_to_spans(
+        self, spans: List[Tuple[pd.Timestamp, pd.Timestamp]], policy: str
+    ) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Return spans after applying the requested overlap policy against
+        current self.intervals.
+    
+        policy:
+          - "skip"     -> remove any portions that overlap existing intervals
+          - "replace"  -> (preview) leave spans as-is; carving happens when we add
+          - anything else -> passthrough
+        """
+        policy = (policy or "").lower()
+        if policy == "skip":
+            pieces: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
+            for s, e in spans:
+                pieces.extend(self._subtract_overlaps_from_span(s, e))
+            return pieces
+        # For preview, "replace" shows what you'll add; carving is done at add-time.
+        return spans
 
     # ---- core operations ----
     def _execute_command(self, cmd: Command) -> None:
@@ -189,6 +313,39 @@ class IntervalsMixin:
         self.status_var.set("Redo")  # type: ignore[union-attr]
         self._update_plot()
         self._maybe_autosave()
+        
+    def _subtract_overlaps_from_span(
+        self,
+        s: pd.Timestamp,
+        e: pd.Timestamp,
+    ) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Given a candidate half-open span [s, e), subtract any currently labeled
+        intervals and return a list of non-overlapping subspans inside [s, e).
+        """
+        out: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
+        if e <= s:
+            return out
+
+        # Collect overlaps with existing intervals
+        overlaps = [iv for iv in self.intervals if not (iv.end <= s or iv.start >= e)]
+        overlaps.sort(key=lambda iv: iv.start)
+
+        cur = s
+        for iv in overlaps:
+            if iv.start > cur:
+                left_end = min(iv.start, e)
+                if left_end > cur:
+                    out.append((cur, left_end))
+            if iv.end > cur:
+                cur = max(cur, iv.end)
+            if cur >= e:
+                break
+
+        if cur < e:
+            out.append((cur, e))
+
+        return out
 
     def _remove_overlapping_intervals(
         self, new_interval: Interval

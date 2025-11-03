@@ -31,6 +31,7 @@ from chronotagger.core.commands import (
 from .mixins.view_build import ViewBuildMixin
 from .mixins.plotting import PlottingMixin
 from .mixins.events import EventsMixin
+from .mixins.rules import RulesMixin
 from .mixins.navigation import NavigationMixin
 from .mixins.help import HelpMixin
 from .mixins.zoom import ZoomMixin
@@ -45,6 +46,7 @@ class TimeIntervalLabeler(
     ViewBuildMixin,
     PlottingMixin,
     EventsMixin,
+    RulesMixin,
     NavigationMixin,
     HelpMixin,
     ZoomMixin,
@@ -185,10 +187,13 @@ class TimeIntervalLabeler(
         # --- Two-click time selection (existing) ---
         self.two_click_mode: bool = True
 
-        # NEW: click-vs-drag arbitration (pixel slop)
+        # click-vs-drag arbitration (pixel slop)
         self.CLICK_DRAG_SLOP_PX: int = 6
         self._press_xy_px: Optional[Tuple[int, int]] = None
         self._dragging_box: bool = False
+        
+        # label-rule policy
+        self._overlap_policy: str = "skip"   # v1 default for rule-based adds
 
     # -------- Public entrypoint --------
 
