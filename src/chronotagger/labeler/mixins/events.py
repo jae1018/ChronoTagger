@@ -136,16 +136,12 @@ class EventsMixin:
         # === BOX-SELECT path (points-in-rect over time lane axes) ===
         import matplotlib.dates as mdates
     
-        # which axes count as "time lane"?
+        # which axes count as "time lane"? (grid-only)
         time_axes = []
-        if getattr(self, "_time_axis_keys", None):
-            for k in self._time_axis_keys:
-                a = self.user_axes.get(k)
-                if a is not None and self._is_time_lane_axis(a):
-                    time_axes.append(a)
-        else:
-            # legacy: treat all user axes as time
-            time_axes = list(self.user_axes.values())
+        for k in (self._time_axis_keys or []):
+            a = self.user_axes.get(k)
+            if a is not None and self._is_time_lane_axis(a):
+                time_axes.append(a)
     
         xlo, xhi = float(x_lo), float(x_hi)
         ylo, yhi = float(y_lo), float(y_hi)
@@ -403,10 +399,7 @@ class EventsMixin:
             return None
     
         # If we're already on a time axis (or the strip), event.xdata is correct.
-        if getattr(self, "_time_axis_keys", None):
-            time_axes = {self.user_axes[k] for k in self._time_axis_keys}
-        else:
-            time_axes = set(self.user_axes.values())
+        time_axes = {self.user_axes[k] for k in (self._time_axis_keys or [])}
         if getattr(self, "strip_ax", None) is not None:
             time_axes.add(self.strip_ax)
     
@@ -862,9 +855,7 @@ class EventsMixin:
                 if a is ax:
                     m = meta.get(k, {})
                     return m.get("role") == "time" and int(m.get("col", 0)) == 0
-            return False
-        # legacy: all user axes are time
-        return ax in self.user_axes.values()
+        return False
 
     def _clear_two_click_state(self, *, keep_selection: bool = False) -> None:
         """Stop preview + clear anchor; optionally keep the current preview selection."""

@@ -18,20 +18,37 @@ def make_df():
     return df
 
 def plot_fn(axs, df, t0, t1):
-    axs["panel1"].plot(df.index, df["log10n"])
-    axs["panel1"].set_ylabel("log10 n")
-    axs["panel2"].plot(df.index, df["BX"], label="B_x")
-    axs["panel2"].plot(df.index, df["BY"], label="B_y")
-    axs["panel2"].plot(df.index, df["BZ"], label="B_z")
-    axs["panel2"].set_ylabel("B [nT]")
-    axs["panel2"].legend(loc="upper right")
+    # Axes keys match layout_spec["areas"][*]["key"]
+    ax_top = axs["top"]
+    ax_bottom = axs["bottom"]
+
+    ax_top.plot(df.index, df["log10n"])
+    ax_top.set_ylabel("log10 n")
+
+    ax_bottom.plot(df.index, df["BX"], label="B_x")
+    ax_bottom.plot(df.index, df["BY"], label="B_y")
+    ax_bottom.plot(df.index, df["BZ"], label="B_z")
+    ax_bottom.set_ylabel("B [nT]")
+    ax_bottom.legend(loc="upper right")
 
 if __name__ == "__main__":
     df = make_df()
+
+    # Grid-only layout: at least one role='time' axis in column 0.
+    layout_spec = {
+        "nrows": 2,
+        "ncols": 1,
+        #"height_ratios": [3.0, 3.0],  # optional
+        "areas": [
+            {"key": "top",    "row": 0, "col": 0, "role": "time"},
+            {"key": "bottom", "row": 1, "col": 0, "role": "time"},
+        ],
+    }
+
     app = TimeIntervalLabeler(
         df=df,
         plot_fn=plot_fn,
-        n_panels=2,  # legacy simple mode
+        layout_spec=layout_spec,       # <= grid-only (no n_panels)
         window=pd.Timedelta("30min"),
         step=pd.Timedelta("15min"),
     )

@@ -66,7 +66,6 @@ class TimeIntervalLabeler(
         self,
         df: pd.DataFrame,
         plot_fn: Callable,
-        n_panels: Optional[int] = None,
         classes: Optional[List[str]] = None,
         class_colors: Optional[Dict[str, str]] = None,
         window: pd.Timedelta = pd.Timedelta("30min"),
@@ -75,7 +74,7 @@ class TimeIntervalLabeler(
         end: Optional[pd.Timestamp] = None,
         autosave_path: Optional[str] = None,
         *,
-        layout_spec: Optional[Dict[str, Any]] = None,   # NEW: optional grid layout
+        layout_spec: Optional[Dict[str, Any]] = None,
     ) -> None:
         # --- Validate inputs ---
         if not isinstance(df.index, pd.DatetimeIndex):
@@ -138,8 +137,7 @@ class TimeIntervalLabeler(
         self.strip_ax: Optional[plt.Axes] = None
 
         # Layout & axes metadata
-        self.n_panels = n_panels                     # legacy simple mode
-        self.layout_spec: Optional[Dict[str, Any]] = layout_spec  # NEW: grid mode
+        self.layout_spec: Optional[Dict[str, Any]] = layout_spec
         self.axes_meta: Dict[str, Dict[str, Any]] = {}            # key -> {role, row, col, ...}
         self._time_axis_keys: Set[str] = set()                     # which keys are "time"
         self._primary_time_key: Optional[str] = None               # first time axis in col 0

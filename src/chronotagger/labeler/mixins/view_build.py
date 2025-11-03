@@ -143,10 +143,8 @@ class ViewBuildMixin:
         """
         Build the Matplotlib figure and axes.
     
-        Two modes:
-          - Legacy simple mode (no layout_spec): 1-column, N-rows time panels + strip.
-          - Grid mode (layout_spec provided): user-defined grid; column 0 must be role='time'.
-            The labels strip is added as an extra bottom row in column 0 only.
+        Grid mode only: user-defined grid; column 0 must be role='time'.
+        The labels strip is added as an extra bottom row in column 0 only.
         """
         import matplotlib.pyplot as plt
         from matplotlib.widgets import RectangleSelector
@@ -169,6 +167,9 @@ class ViewBuildMixin:
             self.rect_selectors["primary"] = rs
     
         # ========== GRID MODE ==========
+        if not isinstance(self.layout_spec, dict):
+            raise ValueError("grid-only mode requires layout_spec")
+        
         if isinstance(self.layout_spec, dict):
             spec = self.layout_spec
             nrows: int = int(spec.get("nrows", 1))
@@ -313,78 +314,6 @@ class ViewBuildMixin:
                 self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
     
             return
-    
-        # ========== LEGACY SIMPLE MODE (unchanged behavior) ==========
-        n = self._resolve_n_panels()
-    
-        self.fig = plt.Figure(figsize=(14, 8), constrained_layout=True)
-        gs = self.fig.add_gridspec(n + 1, 1, height_ratios=[3] * n + [1], hspace=0.25)
-    
-        self.user_axes = {}
-        for i in range(n):
-            ax = self.fig.add_subplot(gs[i, 0])
-            key = f"panel{i+1}"
-            self.user_axes[key] = ax
-            if i > 0:
-                ax.sharex(self.user_axes["panel1"])
-    
-        self.strip_ax = self.fig.add_subplot(gs[n, 0], sharex=self.user_axes["panel1"])
-        self.strip_ax.set_ylabel("Labels", fontsize=9)
-        self.strip_ax.set_ylim(0, 1)
-        self.strip_ax.set_yticks([])
-    
-        for ax in list(self.user_axes.values()) + [self.strip_ax]:
-            self._apply_time_axis_format(ax)
-            
-        self._hook_time_xlim()
-    
-        self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
-        self.canvas.draw()
-        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
-        toolbar.update()
-        self.root.after(0, self.canvas.draw_idle)
-    
-        if getattr(self, "_scroll_cid", None) is None:
-            self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
-    
-        # Primary = panel1
-        self._time_axis_keys = set(self.user_axes.keys())
-        self._primary_time_key = "panel1"
-    
-        self.rect_selectors["primary"] = RectangleSelector(
-            self.user_axes["panel1"],
-            onselect=self._on_rectangle_select,
-            useblit=True,
-            button=[1],
-            minspanx=5,
-            minspany=5,
-            spancoords="pixels",
-            interactive=False,
-            props=dict(facecolor="yellow", edgecolor="orange", alpha=0.3,
-                       linestyle="--", linewidth=2),
-        )
-    
-        # Two-click selection wiring (coexists with drag-rectangle)
-        if self._time_click_cid is None:
-            self._time_click_cid = self.canvas.mpl_connect(
-                "button_press_event", self._on_time_click
-            )
-        if self._time_motion_cid is None:
-            self._time_motion_cid = self.canvas.mpl_connect(
-                "motion_notify_event", self._on_time_motion
-            )
-        if hasattr(self, "_init_time_overlays"):
-            self._init_time_overlays()
-    
-        if self.pick_cid is None:
-            self.pick_cid = self.canvas.mpl_connect("pick_event", self._on_strip_click)
-        if self._press_cid is None:
-            self._press_cid = self.canvas.mpl_connect("button_press_event", self._on_strip_press)
-        if self._motion_cid is None:
-            self._motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_strip_motion)
-        if self._release_cid is None:
-            self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
 
 
 
@@ -560,74 +489,3 @@ class ViewBuildMixin:
             share_key = area.get("sharex_with", self.primary_time_key or key)
             if share_key and share_key in created and share_key != key:
                 created[key].sharex(created[share_key])
-        
-    def _resolve_n_panels(self) -> int:
-        """
-        Determine how many data panels to build.
-    
-        Priority:
-          1) Explicit self.n_panels if provided (>=1)
-          2) plot_fn.n_panels attribute if present (>=1)
-          3) Probe the plot function on a throwaway figure
-          4) Fallback to 2
-        """
-        # 1) Explicit param
-        if isinstance(self.n_panels, int) and self.n_panels >= 1:
-            return self.n_panels
-    
-        # 2) Function attribute
-        advertised = getattr(self.plot_fn, "n_panels", None)
-        if isinstance(advertised, int) and advertised >= 1:
-            return advertised
-    
-        # 3) Probe
-        probed = self._probe_plot_fn_for_panels()
-        if probed >= 1:
-            return probed
-    
-        # 4) Sensible default
-        return 2
-    
-    
-    def _probe_plot_fn_for_panels(self, max_panels: int = 6) -> int:
-        """
-        Call the user's plot_fn with a temporary off-screen Figure containing
-        up to `max_panels` Axes, then count which Axes received any artists.
-    
-        Returns a number in [1, max_panels] or 0 on failure.
-        """
-        try:
-            from matplotlib.figure import Figure
-            import pandas as pd
-        except Exception:
-            return 0
-    
-        # Build a tiny time slice that's guaranteed to exist
-        t0 = self.df.index[0]
-        # take ~30 minutes or to data_end
-        t1 = min(t0 + pd.Timedelta("30min"), self.df.index[-1])
-        sub = self.df.loc[t0:t1]
-    
-        # Throwaway figure; no Tk/pyplot involved
-        fig = Figure()
-        axs = {f"panel{i+1}": fig.add_subplot(max_panels, 1, i + 1) for i in range(max_panels)}
-    
-        try:
-            self.plot_fn(axs, sub, t0, t1)
-        except Exception:
-            # User plot may error on probe—don't hard fail the app
-            return 0
-        finally:
-            # Close figure to free memory (no canvas was created)
-            try:
-                fig.clf()
-            except Exception:
-                pass
-    
-        # Count Axes that look "used"
-        used = 0
-        for ax in axs.values():
-            if ax.lines or ax.patches or ax.collections or ax.images:
-                used += 1
-    
-        return max(1, min(max_panels, used)) if used else 0

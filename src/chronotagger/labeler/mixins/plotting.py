@@ -85,12 +85,10 @@ class PlottingMixin:
                     ha="center", va="center"
                 )
     
-        # Partition axes into time vs non-time
-        if getattr(self, "_time_axis_keys", None):
-            time_axes = {k: self.user_axes[k] for k in self._time_axis_keys if k in self.user_axes}
-        else:
-            # Legacy simple mode: all are time
-            time_axes = dict(self.user_axes)
+        # Partition axes into time vs non-time (grid-only requires explicit keys)
+        if not getattr(self, "_time_axis_keys", None):
+            raise RuntimeError("No time axes registered; check your layout_spec.")
+        time_axes = {k: self.user_axes[k] for k in self._time_axis_keys if k in self.user_axes}
     
         # Align limits + date formatting for time axes (single pass)
         with self._squelch_xlim_events():

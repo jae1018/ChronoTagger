@@ -52,11 +52,8 @@ class ZoomMixin:
           - Shift + Wheel = pan (self.pan_sensitivity * window per notch).
         Operates only on time axes (and the strip); ignores XY panes.
         """
-        # Build the set of valid axes (time axes + strip)
-        if getattr(self, "_time_axis_keys", None):
-            valid_axes = [self.user_axes[k] for k in self._time_axis_keys if k in self.user_axes]
-        else:
-            valid_axes = list(self.user_axes.values())
+        # Build the set of valid axes (time axes + strip) — grid-only
+        valid_axes = [self.user_axes[k] for k in (self._time_axis_keys or []) if k in self.user_axes]
         if self.strip_ax is not None:
             valid_axes.append(self.strip_ax)
     
