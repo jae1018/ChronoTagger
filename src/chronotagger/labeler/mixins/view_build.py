@@ -149,24 +149,6 @@ class ViewBuildMixin:
         The labels strip is added as an extra bottom row in column 0 only.
         """
         import matplotlib.pyplot as plt
-        from matplotlib.widgets import RectangleSelector
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-    
-        # ---- Helper: create RectangleSelector on a given axis
-        def _attach_rect_selector(ax: plt.Axes) -> None:
-            rs = RectangleSelector(
-                ax,
-                onselect=self._on_rectangle_select,
-                useblit=True,
-                button=[1],
-                minspanx=5,
-                minspany=5,
-                spancoords="pixels",
-                interactive=False,
-                props=dict(facecolor="yellow", edgecolor="orange", alpha=0.3,
-                           linestyle="--", linewidth=2),
-            )
-            self.rect_selectors["primary"] = rs
     
         # ========== GRID MODE ==========
         if not isinstance(self.layout_spec, dict):
@@ -277,29 +259,29 @@ class ViewBuildMixin:
             # Keep toolbar zoom/pan in sync with t0/t1 and the rest of the panels
             self._hook_time_xlim()
     
-            # Embed in Tk
+            # Embed in Tk            
             self.canvas = FigureCanvasTkAgg(self.fig, master=parent)
             self.canvas.draw()
             self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
             toolbar = NavigationToolbar2Tk(self.canvas, parent)  # noqa: F841
             toolbar.update()
+            
+            # ── Blitting: cache per-axes backgrounds and keep them fresh ────────────────
+            from ..utils.fastdraw import BlitHelper
+            self._blit = BlitHelper(self.fig, self.canvas)
+            _axes_for_blit = [self.user_axes[k] for k in (self._time_axis_keys or []) if k in self.user_axes]
+            if self.strip_ax is not None:
+                _axes_for_blit.append(self.strip_ax)
+            self._blit.add_axes(_axes_for_blit)
+            self.canvas.mpl_connect("draw_event", self._blit.recache)
+            # ───────────────────────────────────────────────────────────────────────────
+            
             self.root.after(0, self.canvas.draw_idle)
+
     
             # Wheel zoom/pan
             if getattr(self, "_scroll_cid", None) is None:
                 self._scroll_cid = self.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
-    
-            # Rectangle selector on the primary time axis (if any)
-            if self._primary_time_key is not None:
-                rs = RectangleSelector(
-                    self.user_axes[self._primary_time_key],
-                    onselect=self._on_rectangle_select,
-                    useblit=True, button=[1], minspanx=5, minspany=5,
-                    spancoords="pixels", interactive=False,
-                    props=dict(facecolor="yellow", edgecolor="orange", alpha=0.3,
-                               linestyle="--", linewidth=2),
-                )
-                self.rect_selectors["primary"] = rs
     
             # Two-click selection wiring (coexists with drag-rectangle)
             if self._time_click_cid is None:
@@ -312,6 +294,26 @@ class ViewBuildMixin:
                 )
             if hasattr(self, "_init_time_overlays"):
                 self._init_time_overlays()
+            
+            # Rectangle selector on the primary time axis (if any)
+            if self._primary_time_key is not None:
+                rs = RectangleSelector(
+                    self.user_axes[self._primary_time_key],
+                    onselect=self._on_rectangle_select,
+                    useblit=True,                   # keep it fast; selector will now paint last
+                    button=[1],
+                    minspanx=5, minspany=5,
+                    spancoords="pixels",
+                    interactive=False,
+                    props=dict(
+                        facecolor="none",           # fill comes from your overlay; keep selector as outline
+                        edgecolor="0.2",
+                        linestyle="--",
+                        linewidth=1.5,
+                        alpha=1.0,
+                    ),
+                )
+                self.rect_selectors["primary"] = rs
     
             # Strip interactions
             if self.pick_cid is None:

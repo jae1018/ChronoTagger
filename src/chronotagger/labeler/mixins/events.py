@@ -430,35 +430,53 @@ class EventsMixin:
     
     
     def _update_time_overlays(self, x0: float, x1: float) -> None:
-        """Show/align the preview band on every time-series panel (and strip)."""
+        """
+        Move/resize the animated preview band on each time-lane axes and blit only those.
+        x0/x1 are Matplotlib date floats.
+        """
         if not getattr(self, "_time_overlays", None):
             return
         left = min(x0, x1)
         width = max(abs(x1 - x0), 0.0)
+        artists = []
         for r in self._time_overlays.values():
             r.set_xy((left, 0))
             r.set_width(width)
             if not r.get_visible():
                 r.set_visible(True)
-        self._two_click_last_x = x1
-        if getattr(self, "canvas", None) is not None:
-            self.canvas.draw_idle()
+            artists.append(r)
+    
+        blit = getattr(self, "_blit", None)
+        if blit is not None:
+            blit.draw(artists)
+        else:
+            # graceful fallback
+            if getattr(self, "canvas", None) is not None:
+                self.canvas.draw_idle()
     
     
     def _hide_time_overlays(self) -> None:
         if not getattr(self, "_time_overlays", None):
             return
+        changed = []
         for r in self._time_overlays.values():
             if r.get_visible():
                 r.set_visible(False)
-        if getattr(self, "canvas", None) is not None:
-            self.canvas.draw_idle()
+                changed.append(r)
+        if not changed:
+            return
+        blit = getattr(self, "_blit", None)
+        if blit is not None:
+            blit.draw(changed)
+        else:
+            if getattr(self, "canvas", None) is not None:
+                self.canvas.draw_idle()
     
     
     def _init_time_overlays(self) -> None:
         """
-        Create/refresh a translucent band on every time-lane panel (col 0, role='time')
-        plus the strip, for two-click preview. Full-height in axes coords.
+        Create/refresh translucent preview bands on every time-lane panel (col 0, role='time')
+        plus the strip. Mark them animated so we can blit them cheaply.
         """
         import matplotlib.patches as mpatches
         from matplotlib.transforms import blended_transform_factory
@@ -489,124 +507,111 @@ class EventsMixin:
                 zorder=ax.get_zorder() + 10,
                 visible=False,
             )
+            r.set_animated(True)  # <- critical for blitting
             ax.add_patch(r)
             self._time_overlays[ax] = r
     
+        # also prep a (reusable) pool of strip preview rectangles for multi-span previews
+        self._strip_preview_pool = []  # created lazily when needed
     
-    def _on_time_click(self, event):
+    
+    def _on_time_click(self, event) -> None:
         """
-        Two-click behavior, canvas-wide:
-          • Left-click #1: arm at t0 (from cursor x mapped into primary time axis),
-            show slim preview band on ALL time-lane panels + seed strip preview.
-          • Left-click #2: finalize [t0, t1] and route through _on_rectangle_select.
-          • Right-click anywhere: cancel.
+        Two-click selection with blitted preview (canvas-wide).
+          • Left-click #1 arms at t0 and shows slim band across time-lane panels + strip.
+          • Left-click #2 finalizes [t0, t1] and keeps the preview visible (no full redraw).
+          • Right-click cancels.
         """
+        import pandas as pd, matplotlib.dates as mdates
+    
         btn = getattr(event, "button", None)
     
-        # Right-click cancels anywhere
+        # Right-click cancels
         if btn == 3:
             self._two_click_active = False
             self._two_click_t0 = None
             self._two_click_last_x = None
             self._hide_time_overlays()
             self.current_selection = None
-            self._update_strip()
-            if getattr(self, "canvas", None) is not None:
-                self.canvas.draw_idle()
+            # also clear strip previews
+            self._draw_strip_preview_spans([])
             return
     
-        # Only respond to left-click
         if btn != 1:
             return
     
-        # Map click location to primary time-axis x, no matter where we clicked
         x_any = self._x_from_anywhere(event)
         if x_any is None:
             return
     
-        # Clamp to current primary view to avoid odd values just outside the axes box
+        # Clamp to primary axis view if present
         primary_ax = self.user_axes.get(self._primary_time_key, None)
         if primary_ax is not None:
             lo, hi = sorted([primary_ax.viewLim.x0, primary_ax.viewLim.x1])
             x_any = min(max(float(x_any), lo), hi)
     
-        # FIRST CLICK: arm selection
+        # First click: arm
         if not getattr(self, "_two_click_active", False):
             self._two_click_active = True
             self._two_click_t0 = float(x_any)
     
-            # Show a ~2px sliver immediately so the user sees it “took”
+            # Show a visible sliver
             eps = self._px_to_data_dx(primary_ax or event.inaxes, 2) if (primary_ax or event.inaxes) is not None else 1e-10
             self._update_time_overlays(self._two_click_t0, self._two_click_t0 + eps)
     
-            # Seed strip preview at a zero-width interval
-            import pandas as pd, matplotlib.dates as mdates
-            t0 = pd.Timestamp(mdates.num2date(self._two_click_t0).replace(tzinfo=None))
+            t0 = pd.Timestamp(mdates.num2date(self._two_click_t0)).tz_localize(None)
             self.current_selection = (t0, t0)
-            self._update_strip()
-            if getattr(self, "canvas", None) is not None:
-                self.canvas.draw_idle()
+            # draw strip sliver
+            self._draw_strip_preview_spans([(self._two_click_t0, self._two_click_t0 + eps)])
             return
     
-        # SECOND CLICK: finalize
+        # Second click: finalize
         t0 = float(getattr(self, "_two_click_t0", x_any))
         t1 = float(x_any)
-
-        # Disarm first so a double-dispatch doesn't immediately re-arm
+    
         self._two_click_active = False
         self._two_click_t0 = None
         self._two_click_last_x = None
-        self._hide_time_overlays()
-
-        # Convert to timestamps, snap to NEAREST (not strictly inside), clip to window
-        import pandas as pd, matplotlib.dates as mdates
-
+        # keep preview visible at final span (user can press Enter to add)
+        self._update_time_overlays(t0, t1)
+    
         lo_f, hi_f = sorted([t0, t1])
-        t0_ts = pd.Timestamp(mdates.num2date(lo_f)).tz_localize(None)
-        t1_ts = pd.Timestamp(mdates.num2date(hi_f)).tz_localize(None)
-
-        # Optional "Snap to samples" -> NEAREST sample on both ends
+        s_ts = pd.Timestamp(mdates.num2date(lo_f)).tz_localize(None)
+        e_ts = pd.Timestamp(mdates.num2date(hi_f)).tz_localize(None)
+    
+        # Snap to nearest if requested
         try:
             if self.snap_var.get():
-                i0 = self.df.index.get_indexer([t0_ts], method="nearest")[0]
-                i1 = self.df.index.get_indexer([t1_ts], method="nearest")[0]
-                if i0 >= 0:
-                    t0_ts = pd.Timestamp(self.df.index[i0]).tz_localize(None)
-                if i1 >= 0:
-                    t1_ts = pd.Timestamp(self.df.index[i1]).tz_localize(None)
+                i0 = self.df.index.get_indexer([s_ts], method="nearest")[0]
+                i1 = self.df.index.get_indexer([e_ts], method="nearest")[0]
+                if i0 >= 0: s_ts = pd.Timestamp(self.df.index[i0]).tz_localize(None)
+                if i1 >= 0: e_ts = pd.Timestamp(self.df.index[i1]).tz_localize(None)
         except Exception:
             pass
-
-        # Clip to current visible window, but don't "shrink inside"
+    
+        # Clamp to visible window
         try:
-            if getattr(self, "t0", None) is not None and getattr(self, "t1", None) is not None:
-                t0_ts = max(t0_ts, self.t0)
-                t1_ts = min(t1_ts, self.t1)
+            s_ts = max(s_ts, self.t0); e_ts = min(e_ts, self.t1)
         except Exception:
             pass
+    
+        self.current_selection = (s_ts, e_ts)
+    
+        x0 = mdates.date2num(s_ts); x1 = mdates.date2num(e_ts)
+        self._draw_strip_preview_spans([(x0, x1)])
 
-        # Store preview selection and show band on panels + strip
-        self.current_selection = (t0_ts, t1_ts)
-
-        x0 = mdates.date2num(t0_ts)
-        x1 = mdates.date2num(t1_ts)
-        self._update_time_overlays(x0, x1)
-        self._update_strip()
-
-        if getattr(self, "canvas", None) is not None:
-            self.canvas.draw_idle()
-        return
     
     
     def _on_time_motion(self, event):
         """
         While first-click is active, keep the multi-panel overlay AND the strip preview
-        in sync with the cursor. Works anywhere on the canvas (not just time axes).
+        in sync with the cursor using blitting (no full redraws).
         """
         if not getattr(self, "_two_click_active", False):
             return
     
-        # Map mouse x to primary time-axis x, wherever the cursor is
+        import pandas as pd, matplotlib.dates as mdates
+    
         x_any = self._x_from_anywhere(event)
         if x_any is None:
             return
@@ -617,50 +622,105 @@ class EventsMixin:
             lo, hi = sorted([primary_ax.viewLim.x0, primary_ax.viewLim.x1])
             x_any = min(max(float(x_any), lo), hi)
     
-        import pandas as pd, matplotlib.dates as mdates
-    
-        # Convert both ends to timestamps
         lo_f, hi_f = sorted([float(self._two_click_t0), float(x_any)])
         s_ts = pd.Timestamp(mdates.num2date(lo_f)).tz_localize(None)
         e_ts = pd.Timestamp(mdates.num2date(hi_f)).tz_localize(None)
     
-        # Optional: snap both ends to the NEAREST index sample (not strictly inside)
         try:
             if self.snap_var.get():
                 i0 = self.df.index.get_indexer([s_ts], method="nearest")[0]
                 i1 = self.df.index.get_indexer([e_ts], method="nearest")[0]
-                if i0 >= 0:
-                    s_ts = pd.Timestamp(self.df.index[i0]).tz_localize(None)
-                if i1 >= 0:
-                    e_ts = pd.Timestamp(self.df.index[i1]).tz_localize(None)
+                if i0 >= 0: s_ts = pd.Timestamp(self.df.index[i0]).tz_localize(None)
+                if i1 >= 0: e_ts = pd.Timestamp(self.df.index[i1]).tz_localize(None)
         except Exception:
             pass
     
-        # Clamp to current visible window [t0, t1]
         try:
-            if getattr(self, "t0", None) is not None and getattr(self, "t1", None) is not None:
-                s_ts = max(s_ts, self.t0)
-                e_ts = min(e_ts, self.t1)
+            s_ts = max(s_ts, self.t0)
+            e_ts = min(e_ts, self.t1)
         except Exception:
             pass
     
-        # Update overlays using the snapped/clamped bounds
-        x0 = mdates.date2num(s_ts)
-        x1 = mdates.date2num(e_ts)
+        # keep the preview state; no full redraws here
+        self.current_selection = (s_ts, e_ts)
+        x0 = mdates.date2num(s_ts); x1 = mdates.date2num(e_ts)
+    
+        # Ensure a visible sliver when endpoints coincide
         if x1 <= x0:
-            # keep a visible sliver if the mouse is on top of the first click
             eps = self._px_to_data_dx(primary_ax or event.inaxes, 2) if (primary_ax or event.inaxes) is not None else 1e-10
             x1 = x0 + eps
-            e_ts = pd.Timestamp(mdates.num2date(x1)).tz_localize(None)
     
         self._update_time_overlays(x0, x1)
+        self._draw_strip_preview_spans([(x0, x1)])
+
+
+
+    def _ensure_strip_preview_pool(self, needed: int) -> list:
+        """
+        Ensure there are at least `needed` animated preview rectangles on the strip.
+        Returns the pool.
+        """
+        import matplotlib.patches as mpatches
+        from matplotlib.transforms import blended_transform_factory
     
-        # Keep the strip preview in lockstep
-        self.current_selection = (s_ts, e_ts)
-        self._update_strip()
+        if getattr(self, "strip_ax", None) is None:
+            return []
+        if not hasattr(self, "_strip_preview_pool"):
+            self._strip_preview_pool = []
     
-        if getattr(self, "canvas", None) is not None:
-            self.canvas.draw_idle()
+        ax = self.strip_ax
+        trans = blended_transform_factory(ax.transData, ax.transAxes)
+    
+        while len(self._strip_preview_pool) < needed:
+            r = mpatches.Rectangle(
+                (0, 0), 0, 0.9,
+                transform=trans,
+                facecolor="yellow",
+                edgecolor="orange",
+                linewidth=2,
+                alpha=0.30,
+                linestyle="--",
+                visible=False,
+            )
+            r.set_animated(True)
+            ax.add_patch(r)
+            self._strip_preview_pool.append(r)
+    
+        # hide extras for now (cheap to flip visible later)
+        for i, r in enumerate(self._strip_preview_pool):
+            r.set_visible(i < needed and r.get_visible())
+    
+        return self._strip_preview_pool
+    
+    def _draw_strip_preview_spans(self, spans_float: list[tuple[float, float]]) -> None:
+        """
+        Update the (animated) strip preview rectangles to depict one or more spans.
+        spans_float uses Matplotlib date floats [(x0,x1), ...].
+        """
+        pool = self._ensure_strip_preview_pool(len(spans_float))
+        artists = []
+        for i, (x0, x1) in enumerate(spans_float):
+            r = pool[i]
+            left = min(x0, x1); width = max(abs(x1 - x0), 0.0)
+            r.set_xy((left, 0.05))
+            r.set_width(width)
+            if not r.get_visible():
+                r.set_visible(True)
+            artists.append(r)
+    
+        # hide any unused previews
+        for j in range(len(spans_float), len(pool)):
+            if pool[j].get_visible():
+                pool[j].set_visible(False)
+                artists.append(pool[j])
+    
+        blit = getattr(self, "_blit", None)
+        if blit is not None and artists:
+            blit.draw(artists)
+        else:
+            if getattr(self, "canvas", None) is not None:
+                self.canvas.draw_idle()
+
 
     
     
@@ -715,11 +775,13 @@ class EventsMixin:
             # Common cross-platform names: "sb_h_double_arrow" (resize), "fleur" (move)
             widget.configure(cursor=name)
     
-    def _preview_selection(self, start: pd.Timestamp, end: pd.Timestamp) -> None:
-        """Show live preview across panels using current_selection."""
+    def _preview_selection(self, start, end) -> None:
+        """Show live preview across panels using current_selection (blitted)."""
+        import matplotlib.dates as mdates
         self.current_selection = (start, end)
-        self._update_strip()
-        self.canvas.draw_idle()  # type: ignore[union-attr]
+        x0 = mdates.date2num(start); x1 = mdates.date2num(end)
+        self._update_time_overlays(x0, x1)
+        self._draw_strip_preview_spans([(x0, x1)])
     
     def _apply_snap_clamp(self, start: pd.Timestamp, end: pd.Timestamp) -> Tuple[pd.Timestamp, pd.Timestamp]:
         """Apply snapping (if enabled), clamp to data, and enforce min duration."""
