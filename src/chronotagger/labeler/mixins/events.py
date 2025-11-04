@@ -147,14 +147,36 @@ class EventsMixin:
     
         # === BOX-SELECT path (points-in-rect over time lane axes) ===
         import matplotlib.dates as mdates
-    
-        # which axes count as "time lane"? (grid-only)
-        time_axes = []
-        for k in (self._time_axis_keys or []):
-            a = self.user_axes.get(k)
-            if a is not None and self._is_time_lane_axis(a):
-                time_axes.append(a)
-    
+        
+        # CRITICAL: Only check data from the axis where the box was drawn
+        # to avoid y-coordinate mismatches across different panels
+        drag_ax = getattr(eclick, 'inaxes', None)
+        
+        # Validate that the drag occurred on a valid time-lane axis
+        if drag_ax is None:
+            # No axis → abort
+            self.current_spans.clear()
+            self.current_selection = None
+            self._commit_spans = []
+            self._update_strip()
+            self.canvas.draw_idle()
+            return
+        
+        if drag_ax is self.strip_ax or not self._is_time_lane_axis(drag_ax):
+            # Box drawn on strip or non-time axis → treat as time-only selection
+            # (fall through to full-height path above, or handle as you see fit)
+            # For now, just abort box-select behavior:
+            self.current_spans.clear()
+            self.current_selection = None
+            self._commit_spans = []
+            self.status_var.set("Box selection only works on time-series panels")
+            self._update_strip()
+            self.canvas.draw_idle()
+            return
+        
+        # Only check THIS axis
+        time_axes = [drag_ax]
+        
         xlo, xhi = float(x_lo), float(x_hi)
         ylo, yhi = float(y_lo), float(y_hi)
     
