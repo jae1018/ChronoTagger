@@ -145,14 +145,14 @@ class EventsMixin:
             self.canvas.draw_idle()  # type: ignore[union-attr]
             return
     
-        # === BOX-SELECT path (points-in-rect over time lane axes) ===
+        # === BOX-SELECT path (points-in-rect over time lane axes OR not-time axes) ===
         import matplotlib.dates as mdates
         
         # CRITICAL: Only check data from the axis where the box was drawn
         # to avoid y-coordinate mismatches across different panels
         drag_ax = getattr(eclick, 'inaxes', None)
         
-        # Validate that the drag occurred on a valid time-lane axis
+        # Validate that the drag occurred on a user axis
         if drag_ax is None:
             # No axis → abort
             self.current_spans.clear()
@@ -162,14 +162,78 @@ class EventsMixin:
             self.canvas.draw_idle()
             return
         
-        if drag_ax is self.strip_ax or not self._is_time_lane_axis(drag_ax):
-            # Box drawn on strip or non-time axis → treat as time-only selection
-            # (fall through to full-height path above, or handle as you see fit)
-            # For now, just abort box-select behavior:
+        if drag_ax is self.strip_ax:
+            # Box drawn on strip → abort
             self.current_spans.clear()
             self.current_selection = None
             self._commit_spans = []
-            self.status_var.set("Box selection only works on time-series panels")
+            self.status_var.set("Box selection not supported on labels strip")
+            self._update_strip()
+            self.canvas.draw_idle()
+            return
+        
+        # Determine which axis key and role
+        meta_key = None
+        for k, a in self.user_axes.items():
+            if a is drag_ax:
+                meta_key = k
+                break
+        
+        if meta_key is None:
+            # Not a known user axis, abort
+            self.current_spans.clear()
+            self.current_selection = None
+            self._commit_spans = []
+            self._update_strip()
+            self.canvas.draw_idle()
+            return
+        
+        # Get axis role from metadata
+        role = self.axes_meta.get(meta_key, {}).get("role", "time").lower()
+        
+        xlo, xhi = float(x_lo), float(x_hi)
+        ylo, yhi = float(y_lo), float(y_hi)
+        
+        # Branch on axis role
+        if role == "not-time":
+            # === NOT-TIME AXIS path (position plots, phase space, etc.) ===
+            spans_commit = self._box_select_on_not_time_axis(drag_ax, xlo, xhi, ylo, yhi)
+            
+            if not spans_commit:
+                self.current_spans.clear()
+                self.current_selection = None
+                self._commit_spans = []
+                self.status_var.set("No points in selection")
+                self._update_strip()
+                self.canvas.draw_idle()
+                return
+            
+            # Convert to preview format (spans_commit are already half-open)
+            spans_preview = [(s, e) for s, e in spans_commit]
+            
+            # Optional snap (preview only)
+            if self.snap_var.get():
+                snapped_prev = []
+                for s, e in spans_preview:
+                    ss, ee = self._snap_to_samples(s, e)
+                    snapped_prev.append((ss, ee))
+                spans_preview = snapped_prev
+            
+            self.current_selection = None
+            self.current_spans = spans_preview
+            self._commit_spans = spans_commit
+            self.status_var.set(f"Selected {len(spans_preview)} block(s) from position axis")
+            self._update_strip()
+            self.canvas.draw_idle()
+            return
+        
+        # === TIME AXIS path (original logic) ===
+        # Validate it's actually a time-lane axis
+        if not self._is_time_lane_axis(drag_ax):
+            self.current_spans.clear()
+            self.current_selection = None
+            self._commit_spans = []
+            self.status_var.set("Box selection only works on time or not-time axes")
             self._update_strip()
             self.canvas.draw_idle()
             return
@@ -1024,6 +1088,104 @@ class EventsMixin:
                     return m.get("role") == "time" and int(m.get("col", 0)) == 0
         return False
 
+    def _find_contiguous_runs(self, indices: list[int]) -> list[tuple[int, int]]:
+        """
+        Given sorted indices, return [(start, end), ...] for contiguous runs.
+        Both start and end are inclusive.
+        """
+        if not indices:
+            return []
+        
+        runs = []
+        run_start = indices[0]
+        prev = indices[0]
+        
+        for i in indices[1:]:
+            if i == prev + 1:
+                prev = i
+            else:
+                runs.append((run_start, prev))
+                run_start = prev = i
+        
+        runs.append((run_start, prev))
+        return runs
+    
+    def _box_select_on_not_time_axis(self, ax, xlo: float, xhi: float, 
+                                      ylo: float, yhi: float) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Given a box on a "not-time" axis (e.g., position plot X-Y), find which points fall inside,
+        map them to timestamps via their order in the windowed dataframe, and return time intervals.
+        
+        Returns:
+            List of (start, end) timestamp tuples for half-open intervals [start, end)
+        """
+        import numpy as np
+        
+        # Get the windowed index (cached from last plot)
+        windowed_idx = getattr(self, "_last_windowed_index", None)
+        if windowed_idx is None or len(windowed_idx) == 0:
+            return []
+        
+        # Collect indices of points inside the box
+        picked_indices = []  # positions in windowed_idx
+        
+        # Check Line2D objects
+        for artist in ax.lines:
+            if not hasattr(artist, "get_xdata"):
+                continue
+            try:
+                xs = np.asarray(artist.get_xdata(orig=False), dtype=float)
+                ys = np.asarray(artist.get_ydata(orig=False), dtype=float)
+                if xs.size != ys.size or xs.size == 0:
+                    continue
+                mask = (xs >= xlo) & (xs <= xhi) & (ys >= ylo) & (ys <= yhi)
+                # The TRUE indices in mask correspond to indices in windowed_idx
+                picked_indices.extend(np.where(mask)[0].tolist())
+            except Exception:
+                continue
+        
+        # Check Scatter collections (PathCollections)
+        for artist in ax.collections:
+            if not hasattr(artist, "get_offsets"):
+                continue
+            try:
+                offsets = np.asarray(artist.get_offsets())
+                if offsets.size == 0:
+                    continue
+                xs = offsets[:, 0]
+                ys = offsets[:, 1]
+                mask = (xs >= xlo) & (xs <= xhi) & (ys >= ylo) & (ys <= yhi)
+                picked_indices.extend(np.where(mask)[0].tolist())
+            except Exception:
+                continue
+        
+        if not picked_indices:
+            return []
+        
+        # Deduplicate and sort
+        picked_indices = sorted(set(picked_indices))
+        
+        # Convert windowed indices to timestamps
+        picked_timestamps = [pd.Timestamp(windowed_idx[i]) for i in picked_indices 
+                            if 0 <= i < len(windowed_idx)]
+        
+        # Map to index positions in the FULL dataframe (not windowed)
+        idx_full = self.df.index
+        pos_in_full = []
+        for ts in picked_timestamps:
+            j = idx_full.get_indexer([ts], method="nearest")[0]
+            if 0 <= j < len(idx_full):
+                pos_in_full.append(j)
+        
+        if not pos_in_full:
+            return []
+        
+        # Find contiguous runs
+        runs = self._find_contiguous_runs(pos_in_full)
+        
+        # Convert to half-open intervals
+        return self._runs_to_half_open_intervals(idx_full, runs)
+    
     def _clear_two_click_state(self, *, keep_selection: bool = False) -> None:
         """Stop preview + clear anchor; optionally keep the current preview selection."""
         if getattr(self, "_twoclick_motion_cid", None) is not None and self.canvas is not None:

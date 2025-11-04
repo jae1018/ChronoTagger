@@ -92,6 +92,10 @@ class PlottingMixin:
         # --- User plot function ---
         try:
             self.plot_fn(self.user_axes, sub_df, self.t0, self.t1)
+            
+            # Cache windowed index for position-space box selections
+            # (allows mapping point order -> timestamps for role="not-time" axes)
+            self._last_windowed_index = sub_df.index.copy()
         except Exception as e:
             for ax in self.user_axes.values():
                 ax.text(

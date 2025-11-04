@@ -137,6 +137,11 @@ class TimeIntervalLabeler(
         self.strip_ax: Optional[plt.Axes] = None
 
         # Layout & axes metadata
+        # layout_spec supports "role" field for each axis area:
+        #   - "time": Time-series data with time on x-axis (box-select uses time coords)
+        #   - "not-time": Non-time plots like position/phase space (box-select maps point order to time)
+        # Box selection on "time" axes extracts timestamps directly from x-coordinates.
+        # Box selection on "not-time" axes uses point order to map back to timestamps.
         self.layout_spec: Optional[Dict[str, Any]] = layout_spec
         self.axes_meta: Dict[str, Dict[str, Any]] = {}            # key -> {role, row, col, ...}
         self._time_axis_keys: Set[str] = set()                     # which keys are "time"

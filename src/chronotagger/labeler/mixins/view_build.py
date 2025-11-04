@@ -295,9 +295,10 @@ class ViewBuildMixin:
             if hasattr(self, "_init_time_overlays"):
                 self._init_time_overlays()
             
-            # Rectangle selectors on **every** time axis (coexists with two-click mode)
+            # Rectangle selectors on **ALL** user axes (time and not-time)
+            # This allows box selection on both time-series and position plots
             self.rect_selectors = {}
-            for k in sorted(self._time_axis_keys):
+            for k in sorted(self.user_axes.keys()):
                 ax = self.user_axes[k]
                 rs = RectangleSelector(
                     ax,
