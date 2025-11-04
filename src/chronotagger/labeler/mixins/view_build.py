@@ -39,14 +39,16 @@ class ViewBuildMixin:
         main = ttk.Frame(self.root)
         main.pack(fill=tk.BOTH, expand=True)
 
-        plot_frame = ttk.Frame(main)
-        plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._build_plot(plot_frame)
-
+        # need to create sidebar BEFORE creating full plot, otherwise it
+        # doesn't show up
         sidebar = ttk.Frame(main, width=320)
         sidebar.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
         sidebar.pack_propagate(False)
         self._build_sidebar(sidebar)
+        
+        plot_frame = ttk.Frame(main)
+        plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._build_plot(plot_frame)
 
         self.root.bind("<Key>", self._on_key_press)
         # F1 opens Help
