@@ -539,6 +539,15 @@ class EventsMixin:
     
         if btn != 1:
             return
+        
+        # ---- ignore if this mouse cycle was a drag, or not on a time/strip axis
+        if getattr(self, "_drag_active", False):
+            return
+        if event.inaxes is None:
+            return
+        _allowed_axes = {self.strip_ax} | {self.user_axes[k] for k in self._time_axis_keys}
+        if event.inaxes not in _allowed_axes:
+            return
     
         x_any = self._x_from_anywhere(event)
         if x_any is None:
@@ -608,6 +617,10 @@ class EventsMixin:
         in sync with the cursor using blitting (no full redraws).
         """
         if not getattr(self, "_two_click_active", False):
+            return
+        
+        # ---- while RectangleSelector drag is in progress, do not run 2-click preview
+        if getattr(self, "_drag_active", False):
             return
     
         import pandas as pd, matplotlib.dates as mdates

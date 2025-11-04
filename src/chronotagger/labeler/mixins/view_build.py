@@ -286,7 +286,7 @@ class ViewBuildMixin:
             # Two-click selection wiring (coexists with drag-rectangle)
             if self._time_click_cid is None:
                 self._time_click_cid = self.canvas.mpl_connect(
-                    "button_press_event", self._on_time_click
+                    "button_release_event", self._on_time_click
                 )
             if self._time_motion_cid is None:
                 self._time_motion_cid = self.canvas.mpl_connect(
@@ -295,25 +295,27 @@ class ViewBuildMixin:
             if hasattr(self, "_init_time_overlays"):
                 self._init_time_overlays()
             
-            # Rectangle selector on the primary time axis (if any)
-            if self._primary_time_key is not None:
+            # Rectangle selectors on **every** time axis (coexists with two-click mode)
+            self.rect_selectors = {}
+            for k in sorted(self._time_axis_keys):
+                ax = self.user_axes[k]
                 rs = RectangleSelector(
-                    self.user_axes[self._primary_time_key],
+                    ax,
                     onselect=self._on_rectangle_select,
-                    useblit=True,                   # keep it fast; selector will now paint last
+                    useblit=True,
                     button=[1],
                     minspanx=5, minspany=5,
                     spancoords="pixels",
                     interactive=False,
                     props=dict(
-                        facecolor="none",           # fill comes from your overlay; keep selector as outline
-                        edgecolor="0.2",
+                        facecolor="yellow",
+                        edgecolor="orange",
+                        alpha=0.3,
                         linestyle="--",
-                        linewidth=1.5,
-                        alpha=1.0,
+                        linewidth=2,
                     ),
                 )
-                self.rect_selectors["primary"] = rs
+                self.rect_selectors[k] = rs
     
             # Strip interactions
             if self.pick_cid is None:
@@ -324,9 +326,30 @@ class ViewBuildMixin:
                 self._motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_strip_motion)
             if self._release_cid is None:
                 self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
+                
+            # --- Drag gate: discriminate drag vs click so click1-click2 doesn't steal events
+            if getattr(self, "_gate_press_cid", None) is None:
+                self._gate_press_cid = self.canvas.mpl_connect("button_press_event", self._gate_press)
+            if getattr(self, "_gate_release_cid", None) is None:
+                self._gate_release_cid = self.canvas.mpl_connect("button_release_event", self._gate_release)
     
             return
 
+    def _is_time_axes(self, ax) -> bool:
+        return any(ax is self.user_axes[k] for k in self._time_axis_keys)
+    
+    def _gate_press(self, event):
+        # Remember where a potential drag started (time panels only; LMB)
+        self._drag_active = False
+        if event.button == 1 and event.inaxes is not None and self._is_time_axes(event.inaxes):
+            self._press_event = event
+        else:
+            self._press_event = None
+    
+    def _gate_release(self, event):
+        # Drag/click cycle ended
+        self._drag_active = False
+        self._press_event = None
 
 
     def _build_sidebar(self, parent: ttk.Frame) -> None:
