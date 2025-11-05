@@ -197,6 +197,12 @@ class TimeIntervalLabeler(
         
         # label-rule policy
         self._overlap_policy: str = "skip"   # v1 default for rule-based adds
+        
+        # === Axis zoom state (for Y-zoom and cross-plot X/Y zoom) ===
+        self._auto_xlims: Dict[plt.Axes, Tuple[float, float]] = {}  # Auto X limits for cross-plots
+        self._auto_ylims: Dict[plt.Axes, Tuple[float, float]] = {}  # Auto Y limits for all plots
+        self._manual_zooms: Dict[plt.Axes, Set[str]] = {}           # Track manual zoom: {ax: {'x', 'y'}}
+        self._time_range_dirty: bool = False                        # Flag: time range changed
 
     # -------- Public entrypoint --------
 

@@ -134,6 +134,9 @@ class ViewBuildMixin:
         
         # NEW: always-visible export button
         ttk.Button(act, text="Export Labels…", command=self._export_labels_dialog).pack(side=tk.LEFT, padx=8)
+        
+        # NEW: Reset Y-Scale button
+        ttk.Button(act, text="Reset Y-Scale", command=self._reset_all_yscales).pack(side=tk.LEFT, padx=2)
     
         # --- Help button to show controls ---
         help_box = ttk.Frame(parent)

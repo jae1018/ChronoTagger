@@ -42,53 +42,207 @@ class ZoomMixin:
             t1 = self.data_end
             t0 = t1 - win
         return t0, t1
+    
+    # ---------- axis zoom methods ----------
+    
+    def _zoom_y_axis(self, event) -> None:
+        """
+        Zoom Y-axis of the plot under cursor.
+        
+        Zooms around the axis center (not cursor position) for consistent behavior.
+        This ensures zooming out then in cancels perfectly.
+        Fast redraw using canvas.draw_idle() without full replot.
+        """
+        ax = event.inaxes
+        if ax is None:
+            return
+        
+        direction = 1 if getattr(event, 'button', None) == 'up' else -1
+        
+        # Get current ylim
+        ymin, ymax = ax.get_ylim()
+        y_range = ymax - ymin
+        
+        # Always zoom around axis center (not cursor) for consistent behavior
+        center_y = (ymin + ymax) / 2
+        
+        # Calculate new limits
+        zoom_factor = (1 - self.zoom_sensitivity) if direction > 0 else (1 + self.zoom_sensitivity)
+        new_range = y_range * zoom_factor
+        
+        half = new_range / 2
+        new_ymin = center_y - half
+        new_ymax = center_y + half
+        
+        # Apply
+        ax.set_ylim(new_ymin, new_ymax)
+        
+        # Track manual zoom
+        if ax not in self._manual_zooms:
+            self._manual_zooms[ax] = set()
+        self._manual_zooms[ax].add('y')
+        
+        # Fast redraw (no replot)
+        self.canvas.draw_idle()
+    
+    def _zoom_x_axis(self, event) -> None:
+        """
+        Zoom X-axis of cross-plot under cursor.
+        
+        Only works on cross-plots (role='not-time').
+        Zooms around the axis center (not cursor position) for consistent behavior.
+        """
+        ax = event.inaxes
+        if ax is None or not self._is_cross_plot_axis(ax):
+            return
+        
+        direction = 1 if getattr(event, 'button', None) == 'up' else -1
+        
+        # Get current xlim
+        xmin, xmax = ax.get_xlim()
+        x_range = xmax - xmin
+        
+        # Always zoom around axis center (not cursor) for consistent behavior
+        center_x = (xmin + xmax) / 2
+        
+        # Calculate new limits
+        zoom_factor = (1 - self.zoom_sensitivity) if direction > 0 else (1 + self.zoom_sensitivity)
+        new_range = x_range * zoom_factor
+        
+        half = new_range / 2
+        new_xmin = center_x - half
+        new_xmax = center_x + half
+        
+        # Apply
+        ax.set_xlim(new_xmin, new_xmax)
+        
+        # Track manual zoom
+        if ax not in self._manual_zooms:
+            self._manual_zooms[ax] = set()
+        self._manual_zooms[ax].add('x')
+        
+        # Fast redraw (no replot)
+        self.canvas.draw_idle()
+    
+    def _zoom_time_range(self, event) -> None:
+        """
+        Zoom time range, centered on current window.
+        
+        Called when scrolling over non-plot areas (strip, empty canvas).
+        Triggers full replot and resets axis zoom to auto.
+        """
+        direction = 1 if getattr(event, 'button', None) == 'up' else -1
+        
+        # Center on current window (not cursor)
+        center = self.t0 + (self.t1 - self.t0) / 2
+        
+        win = self.t1 - self.t0
+        scale = (1.0 - self.zoom_sensitivity) if direction > 0 else (1.0 + self.zoom_sensitivity)
+        new_win = win * scale
+        
+        # Clamp to min/max window
+        new_win = max(self.min_window, min(new_win, self.max_window))
+        
+        half = new_win / 2
+        new_t0 = center - half
+        new_t1 = center + half
+        
+        # Clamp to data bounds
+        new_t0, new_t1 = self._clamp_to_bounds(new_t0, new_t1)
+        
+        self.t0, self.t1 = new_t0, new_t1
+        self._time_range_dirty = True
+        self._sync_entries_and_plot()
+    
+    def _pan_time_range(self, event) -> None:
+        """
+        Pan time range left/right by a fraction of the window.
+        
+        Preserves existing Shift + Wheel behavior.
+        """
+        direction = 1 if getattr(event, 'button', None) == 'up' else -1
+        
+        # Pan by a fraction of the current window
+        win = self.t1 - self.t0
+        dx = direction * self.pan_sensitivity * win
+        new_t0 = self.t0 - dx
+        new_t1 = self.t1 - dx
+        new_t0, new_t1 = self._clamp_to_bounds(new_t0, new_t1)
+        
+        self.t0, self.t1 = new_t0, new_t1
+        self._time_range_dirty = True
+        self._sync_entries_and_plot()
+    
+    def _is_cross_plot_axis(self, ax) -> bool:
+        """
+        Check if axis is a cross-plot (role='not-time').
+        
+        Returns:
+            True if axis has role='not-time', False otherwise
+        """
+        for key, axis in self.user_axes.items():
+            if axis is ax:
+                role = self.axes_meta.get(key, {}).get('role', 'time').lower()
+                return role == 'not-time'
+        return False
+    
+    def _reset_all_yscales(self) -> None:
+        """
+        Reset all Y-axis scales to auto limits.
+        
+        Called by "Reset Y-Scale" button.
+        Also resets X-axis for cross-plots.
+        """
+        # Reset to auto limits
+        for ax, (ymin, ymax) in self._auto_ylims.items():
+            ax.set_ylim(ymin, ymax)
+        
+        for ax, (xmin, xmax) in self._auto_xlims.items():
+            ax.set_xlim(xmin, xmax)
+        
+        # Clear manual zoom tracking
+        self._manual_zooms.clear()
+        
+        # Redraw
+        self.canvas.draw_idle()
+        
+        # Update status
+        if hasattr(self, 'status_var') and self.status_var is not None:
+            self.status_var.set("Y-scales reset to auto")
 
     # ---------- wheel handler ----------
 
     def _on_scroll_zoom(self, event) -> None:
         """
-        Matplotlib 'scroll_event' handler.
-          - Wheel = zoom around cursor (self.zoom_sensitivity per notch).
-          - Shift + Wheel = pan (self.pan_sensitivity * window per notch).
-        Operates only on time axes (and the strip); ignores XY panes.
+        Matplotlib 'scroll_event' handler with split behavior:
+        
+        - Over a data plot (no modifiers) → Zoom Y-axis (or X for cross-plots with Alt)
+        - Not over a plot (no modifiers) → Zoom time range (centered)
+        - Shift + Wheel → Pan time range left/right (existing behavior)
+        - Ctrl/Alt + Wheel on cross-plot → Zoom X-axis
+        
+        The cursor location determines which zoom mode activates.
         """
-        # Build the set of valid axes (time axes + strip) — grid-only
-        valid_axes = [self.user_axes[k] for k in (self._time_axis_keys or []) if k in self.user_axes]
-        if self.strip_ax is not None:
-            valid_axes.append(self.strip_ax)
-    
-        if event.inaxes not in valid_axes:
+        # Check for modifier keys
+        key = getattr(event, 'key', None) or ''
+        has_shift = 'shift' in key
+        has_ctrl = 'control' in key or 'ctrl' in key
+        has_alt = 'alt' in key
+        
+        # Shift + Wheel = Pan (preserve existing behavior)
+        if has_shift:
+            self._pan_time_range(event)
             return
-    
-        # Direction (+1 zoom in / pan left, -1 zoom out / pan right)
-        direction = 1 if getattr(event, "button", None) == "up" else -1
-        is_pan = isinstance(getattr(event, "key", None), str) and ("shift" in event.key)
-    
-        if is_pan:
-            # Pan by a fraction of the current window
-            win = self.t1 - self.t0
-            dx = direction * self.pan_sensitivity * win
-            new_t0 = self.t0 - dx
-            new_t1 = self.t1 - dx
-            new_t0, new_t1 = self._clamp_to_bounds(new_t0, new_t1)
+        
+        # Determine where the cursor is
+        if event.inaxes in self.user_axes.values():
+            # Over a DATA PLOT
+            # Ctrl/Alt on cross-plot → X-axis zoom
+            if (has_ctrl or has_alt) and self._is_cross_plot_axis(event.inaxes):
+                self._zoom_x_axis(event)
+            else:
+                # Default: Y-axis zoom (works on all plots)
+                self._zoom_y_axis(event)
         else:
-            # Zoom around the cursor (fall back to window center)
-            import matplotlib.dates as mdates
-            center = self._ts_from_mpl_x(getattr(event, "xdata", None))
-            win = self.t1 - self.t0
-    
-            # one notch scales window by (1 ± zoom_sensitivity)
-            scale = (1.0 - self.zoom_sensitivity) if direction > 0 else (1.0 + self.zoom_sensitivity)
-            new_win = win * scale
-            if new_win < self.min_window:
-                new_win = self.min_window
-            if new_win > self.max_window:
-                new_win = self.max_window
-    
-            half = new_win / 2
-            new_t0 = center - half
-            new_t1 = center + half
-            new_t0, new_t1 = self._clamp_to_bounds(new_t0, new_t1)
-    
-        self.t0, self.t1 = new_t0, new_t1
-        self._sync_entries_and_plot()
+            # Not over a plot (strip, empty canvas, etc.) → Time zoom
+            self._zoom_time_range(event)

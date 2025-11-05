@@ -102,6 +102,14 @@ class PlottingMixin:
                     0.5, 0.5, f"Plot error:\n{e}", transform=ax.transAxes,
                     ha="center", va="center"
                 )
+        
+        # Capture auto limits after plot_fn() completes
+        self._capture_auto_limits()
+        
+        # If time range changed, reset all manual zooms
+        if self._time_range_dirty:
+            self._reset_limits_to_auto()
+            self._time_range_dirty = False
     
         # Partition axes into time vs non-time (grid-only requires explicit keys)
         if not getattr(self, "_time_axis_keys", None):
@@ -159,6 +167,44 @@ class PlottingMixin:
                 pass
     
         self.canvas.draw()
+        
+    def _capture_auto_limits(self) -> None:
+        """
+        Capture current axis limits as 'auto' state after plot_fn() renders.
+        
+        For time-series plots (role='time'):
+            - X limits are managed by time window (not captured)
+            - Y limits are captured for zoom reset
+        
+        For cross-plots (role='not-time'):
+            - Both X and Y limits are captured for zoom reset
+        """
+        self._auto_xlims.clear()
+        self._auto_ylims.clear()
+        
+        for key, ax in self.user_axes.items():
+            role = self.axes_meta.get(key, {}).get('role', 'time').lower()
+            
+            # Always capture Y limits (all plots support Y-zoom)
+            self._auto_ylims[ax] = ax.get_ylim()
+            
+            # Capture X limits only for cross-plots (not-time)
+            if role == 'not-time':
+                self._auto_xlims[ax] = ax.get_xlim()
+    
+    def _reset_limits_to_auto(self) -> None:
+        """
+        Reset all manually-zoomed axes back to auto limits.
+        Called when time range changes via navigation or time zoom.
+        """
+        for ax, (ymin, ymax) in self._auto_ylims.items():
+            ax.set_ylim(ymin, ymax)
+        
+        for ax, (xmin, xmax) in self._auto_xlims.items():
+            ax.set_xlim(xmin, xmax)
+        
+        # Clear manual zoom tracking
+        self._manual_zooms.clear()
         
     def _apply_time_xlabel_policy(self) -> None:
         """

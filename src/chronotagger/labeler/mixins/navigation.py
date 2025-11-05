@@ -27,6 +27,7 @@ class NavigationMixin:
         self.window = self.t1 - self.t0
         self.t0 = max(self.data_start, self.t0 - self.step)
         self.t1 = min(self.t0 + self.window, self.data_end)
+        self._time_range_dirty = True  # Reset axis zooms
         self._sync_entries_and_plot()
 
     def _next_window(self) -> None:
@@ -40,6 +41,7 @@ class NavigationMixin:
         if self.t1 > self.data_end:
             self.t1 = self.data_end
             self.t0 = max(self.t1 - self.window, self.data_start)
+        self._time_range_dirty = True  # Reset axis zooms
         self._sync_entries_and_plot()
 
     def _sync_entries_and_plot(self) -> None:
