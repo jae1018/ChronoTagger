@@ -50,6 +50,10 @@ class IntervalsMixin:
             self._commit_spans.clear()
             self.current_spans.clear()
             self.current_selection = None
+        
+        # Clear point highlights
+        if hasattr(self, '_clear_selected_point_highlights'):
+            self._clear_selected_point_highlights()
     
             if count > 0:
                 self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
@@ -85,6 +89,10 @@ class IntervalsMixin:
     
             self.current_spans.clear()
             self.current_selection = None
+            
+            # Clear point highlights
+            if hasattr(self, '_clear_selected_point_highlights'):
+                self._clear_selected_point_highlights()
     
             if count > 0:
                 self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
@@ -104,6 +112,11 @@ class IntervalsMixin:
         s, e = self.current_selection
         self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
         self.current_selection = None
+        
+        # Clear point highlights
+        if hasattr(self, '_clear_selected_point_highlights'):
+            self._clear_selected_point_highlights()
+        
         self.status_var.set(f"Added {label} interval")  # type: ignore[union-attr]
         self._update_plot()
         self._maybe_autosave()

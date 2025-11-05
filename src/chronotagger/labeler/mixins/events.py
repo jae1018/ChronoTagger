@@ -142,6 +142,10 @@ class EventsMixin:
                 f"Selected: {self.current_selection[0].strftime('%H:%M:%S')} → {self.current_selection[1].strftime('%H:%M:%S')}"
             )
             self._update_strip()
+            
+            # Show highlight overlays on selected points
+            self._show_selected_point_highlights()
+            
             self.canvas.draw_idle()  # type: ignore[union-attr]
             return
     
@@ -224,6 +228,10 @@ class EventsMixin:
             self._commit_spans = spans_commit
             self.status_var.set(f"Selected {len(spans_preview)} block(s) from position axis")
             self._update_strip()
+            
+            # Show highlight overlays on selected points
+            self._show_selected_point_highlights()
+            
             self.canvas.draw_idle()
             return
         
@@ -295,6 +303,11 @@ class EventsMixin:
             self.current_spans.clear()
             self.current_selection = None
             self._commit_spans = []
+            
+            # Clear point highlights
+            if hasattr(self, '_clear_selected_point_highlights'):
+                self._clear_selected_point_highlights()
+            
             self.status_var.set("No points in selection")  # type: ignore[union-attr]
             self._update_strip()
             self.canvas.draw_idle()  # type: ignore[union-attr]
@@ -312,6 +325,11 @@ class EventsMixin:
             self.current_spans.clear()
             self.current_selection = None
             self._commit_spans = []
+            
+            # Clear point highlights
+            if hasattr(self, '_clear_selected_point_highlights'):
+                self._clear_selected_point_highlights()
+            
             self.status_var.set("No points in selection")  # type: ignore[union-attr]
             self._update_strip()
             self.canvas.draw_idle()  # type: ignore[union-attr]
@@ -362,6 +380,10 @@ class EventsMixin:
             f"Selected {len(spans_preview)} contiguous block(s) from {len(pos)} point(s)"
         )
         self._update_strip()
+        
+        # Show highlight overlays on selected points
+        self._show_selected_point_highlights()
+        
         self.canvas.draw_idle()
 
 
@@ -414,6 +436,11 @@ class EventsMixin:
         if key == "Escape":
             if getattr(self, "_pick_anchor_ts", None) is not None or self.current_selection is not None:
                 self._clear_two_click_state()
+                
+                # Clear point highlights
+                if hasattr(self, '_clear_selected_point_highlights'):
+                    self._clear_selected_point_highlights()
+                
                 if self.status_var is not None:
                     self.status_var.set("Selection canceled")
                 return
@@ -1372,5 +1399,223 @@ class EventsMixin:
             if ax is axes:
                 return key
         return None
+    
+    # ========== Selected Points Highlighting ==========
+    
+    def _extract_data_at_indices(self, ax, indices: list) -> Tuple[list, list]:
+        """
+        Extract (x, y) data from axes at specified indices.
+        
+        Works for both time-series and position plots by using index-based
+        lookup rather than timestamp-based. Handles Line2D and scatter artists.
+        
+        Args:
+            ax: matplotlib Axes object
+            indices: List of integer indices into the data arrays
+        
+        Returns:
+            Tuple of (x_values, y_values) lists
+        """
+        import numpy as np
+        
+        x_vals = []
+        y_vals = []
+        
+        try:
+            # Extract from Line2D objects
+            for line in ax.lines:
+                try:
+                    xs = np.asarray(line.get_xdata(orig=False))
+                    ys = np.asarray(line.get_ydata(orig=False))
+                    
+                    if len(xs) == 0 or len(ys) == 0:
+                        continue
+                    
+                    # Extract data at requested indices
+                    for idx in indices:
+                        if 0 <= idx < len(xs) and 0 <= idx < len(ys):
+                            x_vals.append(float(xs[idx]))
+                            y_vals.append(float(ys[idx]))
+                except Exception:
+                    continue
+            
+            # Extract from scatter collections (PathCollection)
+            for coll in ax.collections:
+                if not hasattr(coll, 'get_offsets'):
+                    continue
+                    
+                try:
+                    offsets = np.asarray(coll.get_offsets())
+                    if offsets.size == 0:
+                        continue
+                    
+                    # Extract data at requested indices
+                    for idx in indices:
+                        if 0 <= idx < len(offsets):
+                            x_vals.append(float(offsets[idx, 0]))
+                            y_vals.append(float(offsets[idx, 1]))
+                except Exception:
+                    continue
+        
+        except Exception:
+            # Silently fail for unexpected artist types
+            pass
+        
+        return x_vals, y_vals
+    
+    def _show_selected_point_highlights(self) -> None:
+        """
+        Highlight selected points across all axes with overlay markers.
+        
+        Creates red scatter markers on top of selected data points to show
+        exactly which points are included in the current preview selection.
+        Works on both time-series and position/cross plots.
+        
+        Called automatically when preview selection changes.
+        """
+        # Clear any existing highlights first
+        self._clear_selected_point_highlights()
+        
+        # Get selected timestamps from current preview
+        selected_timestamps = self._get_preview_timestamps()
+        
+        if not selected_timestamps:
+            return
+        
+        # Convert timestamps to indices in the windowed dataframe
+        selected_indices = self._timestamps_to_indices(selected_timestamps)
+        
+        if not selected_indices:
+            return
+        
+        # Downsample if too many points (for performance)
+        if len(selected_indices) > 2000:
+            # Show every Nth point to keep ~1000 markers per axes
+            step = len(selected_indices) // 1000
+            selected_indices = selected_indices[::step]
+        
+        # Create highlights on all user axes (time and position plots)
+        for key, ax in self.user_axes.items():
+            x_vals, y_vals = self._extract_data_at_indices(ax, selected_indices)
+            
+            if len(x_vals) == 0:
+                continue  # No data extracted, skip this axes
+            
+            try:
+                # Create scatter overlay
+                scatter = ax.scatter(
+                    x_vals, y_vals,
+                    c='red',           # Red color for selected points
+                    s=20,              # Marker size
+                    alpha=0.6,         # Semi-transparent
+                    marker='o',        # Circle markers
+                    zorder=100,        # Draw on top
+                    edgecolors='darkred',
+                    linewidths=0.5
+                )
+                
+                # Track this highlight for later removal
+                if not hasattr(self, '_preview_highlights'):
+                    self._preview_highlights = []
+                self._preview_highlights.append(scatter)
+                
+            except Exception:
+                # Silently fail if scatter creation fails
+                continue
+        
+        # Redraw canvas to show highlights
+        if hasattr(self, 'canvas') and self.canvas is not None:
+            self.canvas.draw_idle()
+    
+    def _clear_selected_point_highlights(self) -> None:
+        """
+        Remove all selected point highlight overlays from axes.
+        
+        Called when preview is cleared or new selection is made.
+        """
+        if not hasattr(self, '_preview_highlights'):
+            self._preview_highlights = []
+            return
+        
+        # Remove each highlight artist from its axes
+        for artist in self._preview_highlights:
+            try:
+                artist.remove()
+            except Exception:
+                pass  # Already removed or axes destroyed
+        
+        self._preview_highlights.clear()
+    
+    def _get_preview_timestamps(self) -> list:
+        """
+        Get list of timestamps from current preview selection.
+        
+        Returns:
+            List of pd.Timestamp objects representing selected times
+        """
+        import pandas as pd
+        
+        timestamps = []
+        
+        # Check for multi-span preview (box selection)
+        if hasattr(self, 'current_spans') and self.current_spans:
+            for start_ts, end_ts in self.current_spans:
+                # Extract all timestamps in this span
+                try:
+                    mask = (self.df.index >= start_ts) & (self.df.index <= end_ts)
+                    span_timestamps = self.df.index[mask].tolist()
+                    timestamps.extend(span_timestamps)
+                except Exception:
+                    pass
+        
+        # Check for single-span preview (two-click or full-height selection)
+        elif hasattr(self, 'current_selection') and self.current_selection:
+            start_ts, end_ts = self.current_selection
+            try:
+                mask = (self.df.index >= start_ts) & (self.df.index <= end_ts)
+                timestamps = self.df.index[mask].tolist()
+            except Exception:
+                pass
+        
+        return timestamps
+    
+    def _timestamps_to_indices(self, timestamps: list) -> list:
+        """
+        Convert timestamps to indices in the windowed dataframe.
+        
+        This allows us to extract data from position plots where the
+        axes don't use time, but we can use array indices.
+        
+        Args:
+            timestamps: List of pd.Timestamp objects
+        
+        Returns:
+            List of integer indices
+        """
+        # Get the windowed index (cached from last plot)
+        windowed_idx = getattr(self, '_last_windowed_index', None)
+        
+        if windowed_idx is None or len(windowed_idx) == 0:
+            return []
+        
+        indices = []
+        
+        for ts in timestamps:
+            try:
+                # Find position of this timestamp in windowed index
+                idx = windowed_idx.get_loc(ts)
+                
+                # Handle duplicate timestamps (returns slice)
+                if isinstance(idx, slice):
+                    idx = idx.start
+                
+                if idx is not None and 0 <= idx < len(windowed_idx):
+                    indices.append(int(idx))
+            
+            except Exception:
+                # Timestamp not in windowed index, skip
+                continue
+        
+        return indices
 
     
