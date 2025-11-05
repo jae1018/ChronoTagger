@@ -467,8 +467,8 @@ class ViewBuildMixin:
         actions.pack(fill=tk.X, pady=5)
         ttk.Button(actions, text="Relabel Selected", command=self._relabel_interval).pack(fill=tk.X, pady=2)
         ttk.Button(actions, text="Delete Selected", command=self._delete_interval).pack(fill=tk.X, pady=2)
-        ttk.Button(actions, text="Assign Remainder → UNKNOWN",
-                   command=self._assign_remainder).pack(fill=tk.X, pady=2)
+        ttk.Button(actions, text="Label Unassigned...",
+                   command=self._open_label_unassigned_dialog).pack(fill=tk.X, pady=2)
         ttk.Separator(actions, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
         ttk.Button(actions, text="Clear All Intervals",
                    command=self._clear_all_intervals).pack(fill=tk.X, pady=2)
