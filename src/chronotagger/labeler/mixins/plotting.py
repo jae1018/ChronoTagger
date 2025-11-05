@@ -165,6 +165,21 @@ class PlottingMixin:
                     self._update_time_overlays(self._two_click_t0, last)
             except Exception:
                 pass
+        
+        # --- Restore point highlights if there's an active selection preview ---
+        # This ensures highlights persist across zoom/pan/time range changes
+        if hasattr(self, '_show_selected_point_highlights'):
+            # Check if there's an active selection that needs highlighting
+            has_selection = (
+                (hasattr(self, 'current_selection') and self.current_selection is not None) or
+                (hasattr(self, 'current_spans') and self.current_spans)
+            )
+            
+            if has_selection:
+                try:
+                    self._show_selected_point_highlights(redraw=False)
+                except Exception:
+                    pass  # Silently fail if highlighting fails
     
         self.canvas.draw()
         

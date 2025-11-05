@@ -1463,13 +1463,18 @@ class EventsMixin:
         
         return x_vals, y_vals
     
-    def _show_selected_point_highlights(self) -> None:
+    def _show_selected_point_highlights(self, redraw: bool = True) -> None:
         """
         Highlight selected points across all axes with overlay markers.
         
         Creates red scatter markers on top of selected data points to show
         exactly which points are included in the current preview selection.
         Works on both time-series and position/cross plots.
+        
+        Args:
+            redraw: If True, trigger canvas redraw after adding highlights.
+                    Set to False when calling from _update_plot() to avoid
+                    redundant redraws (since _update_plot already draws).
         
         Called automatically when preview selection changes.
         """
@@ -1523,8 +1528,8 @@ class EventsMixin:
                 # Silently fail if scatter creation fails
                 continue
         
-        # Redraw canvas to show highlights
-        if hasattr(self, 'canvas') and self.canvas is not None:
+        # Redraw canvas to show highlights (unless caller will handle it)
+        if redraw and hasattr(self, 'canvas') and self.canvas is not None:
             self.canvas.draw_idle()
     
     def _clear_selected_point_highlights(self) -> None:
