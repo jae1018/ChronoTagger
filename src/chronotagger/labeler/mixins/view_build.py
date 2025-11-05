@@ -503,13 +503,49 @@ class ViewBuildMixin:
         # Files
         files = ttk.LabelFrame(parent, text="File Operations", padding=5)
         files.pack(fill=tk.X, pady=5)
-        ttk.Button(files, text="Save Session", command=self._save_session).pack(fill=tk.X, pady=2)
-        ttk.Button(files, text="Load Session", command=self._load_session).pack(fill=tk.X, pady=2)
-        ttk.Button(files, text="Export Intervals", command=self._export_intervals).pack(fill=tk.X, pady=2)
-        ttk.Button(files, text="Export Per-Sample", command=self._export_per_sample).pack(fill=tk.X, pady=2)
         
-        # ML-friendly per-sample export (CSV + sidecar)
-        ttk.Button(files, text="Export Labels…", command=self._export_labels_dialog).pack(fill=tk.X, pady=2)
+        # Create a grid frame for 3x2 button layout (3 rows, 2 columns)
+        file_button_grid = ttk.Frame(files)
+        file_button_grid.pack(fill=tk.X, expand=True)
+        
+        # Configure grid columns to have equal weight (2 columns)
+        file_button_grid.columnconfigure(0, weight=1)
+        file_button_grid.columnconfigure(1, weight=1)
+        
+        # Row 0: Save Session | Load Session
+        ttk.Button(
+            file_button_grid, 
+            text="Save Session", 
+            command=self._save_session
+        ).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        
+        ttk.Button(
+            file_button_grid, 
+            text="Load Session", 
+            command=self._load_session
+        ).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
+        
+        # Row 1: Export Intervals | Export Per-Sample
+        ttk.Button(
+            file_button_grid, 
+            text="Export Intervals", 
+            command=self._export_intervals
+        ).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
+        
+        ttk.Button(
+            file_button_grid, 
+            text="Export Per-Sample", 
+            command=self._export_per_sample
+        ).grid(row=1, column=1, sticky="ew", padx=2, pady=2)
+        
+        # Row 2: Export Labels… | (empty)
+        ttk.Button(
+            file_button_grid, 
+            text="Export Labels…", 
+            command=self._export_labels_dialog
+        ).grid(row=2, column=0, sticky="ew", padx=2, pady=2)
+        
+        # Column 1, Row 2 is intentionally left empty
 
         # Options
         opts = ttk.LabelFrame(parent, text="Options", padding=5)
