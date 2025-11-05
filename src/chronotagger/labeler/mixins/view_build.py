@@ -108,37 +108,74 @@ class ViewBuildMixin:
         ttk.Button(row2, text="x2", width=4, command=self._double_step).pack(side=tk.LEFT, padx=4)
         ttk.Button(row2, text="/2", width=4, command=self._halve_step).pack(side=tk.LEFT, padx=2)
     
-        # ── Current label ─────────────────────────────────────────────────────────
-        cls_frame = ttk.LabelFrame(parent, text="Current Label", padding=5)
-        cls_frame.pack(side=tk.LEFT, padx=8)
+        # ── Label Actions (2x5 grid) ──────────────────────────────────────────────
+        label_actions = ttk.LabelFrame(parent, text="Label Actions", padding=5)
+        label_actions.pack(side=tk.LEFT, padx=8)
+        
+        # Create grid frame for 2x5 button layout
+        grid_frame = ttk.Frame(label_actions)
+        grid_frame.pack()
+        
+        # Configure grid columns to have equal weight
+        for i in range(5):
+            grid_frame.columnconfigure(i, weight=1)
+        
+        # Row 1: [Re-label, Add, Undo, Manage..., Fill Gaps...]
+        ttk.Button(
+            grid_frame, text="Re-label", command=self._relabel_interval
+        ).grid(row=0, column=0, sticky="ew", padx=1, pady=1)
+        
+        ttk.Button(
+            grid_frame, text="Add", command=self._add_interval
+        ).grid(row=0, column=1, sticky="ew", padx=1, pady=1)
+        
+        ttk.Button(
+            grid_frame, text="Undo", command=self._undo
+        ).grid(row=0, column=2, sticky="ew", padx=1, pady=1)
+        
+        ttk.Button(
+            grid_frame, text="Manage...", command=self._open_label_manager
+        ).grid(row=0, column=3, sticky="ew", padx=1, pady=1)
+        
+        ttk.Button(
+            grid_frame, text="Fill Gaps...", command=self._open_label_unassigned_dialog
+        ).grid(row=0, column=4, sticky="ew", padx=1, pady=1)
+        
+        # Row 2: [Dropdown list, Delete, Redo, By-Rule..., Clear...]
         self.current_class_var = tk.StringVar(value=self.classes[0])
         self.class_combo = ttk.Combobox(
-            cls_frame,
+            grid_frame,
             textvariable=self.current_class_var,
             values=self.classes,
             state="readonly",
-            width=18,
+            width=12,
         )
-        self.class_combo.pack(side=tk.LEFT, padx=2)
+        self.class_combo.grid(row=1, column=0, sticky="ew", padx=1, pady=1)
         
-        # Manage labels button
-        ttk.Button(cls_frame, text="Manage Labels…", command=self._open_label_manager)\
-            .pack(side=tk.LEFT, padx=(6, 0))
-    
-        # ── Quick actions ─────────────────────────────────────────────────────────
-        act = ttk.Frame(parent)
-        act.pack(side=tk.LEFT, padx=10)
-        ttk.Button(act, text="Add Label", command=self._add_interval).pack(side=tk.LEFT, padx=2)
-        ttk.Button(act, text="Label by Rule...", command=self._open_label_by_rule_dialog).pack(side=tk.LEFT, padx=6)
-        ttk.Button(act, text="Delete", command=self._delete_interval).pack(side=tk.LEFT, padx=2)
-        ttk.Button(act, text="Undo", command=self._undo).pack(side=tk.LEFT, padx=2)
-        ttk.Button(act, text="Redo", command=self._redo).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            grid_frame, text="Delete", command=self._delete_interval
+        ).grid(row=1, column=1, sticky="ew", padx=1, pady=1)
         
-        # NEW: always-visible export button
-        ttk.Button(act, text="Export Labels…", command=self._export_labels_dialog).pack(side=tk.LEFT, padx=8)
+        ttk.Button(
+            grid_frame, text="Redo", command=self._redo
+        ).grid(row=1, column=2, sticky="ew", padx=1, pady=1)
         
-        # NEW: Reset Scale button (resets Y-axes and X-axes on cross-plots)
-        ttk.Button(act, text="Reset Scale", command=self._reset_all_yscales).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            grid_frame, text="By-Rule...", command=self._open_label_by_rule_dialog
+        ).grid(row=1, column=3, sticky="ew", padx=1, pady=1)
+        
+        ttk.Button(
+            grid_frame, text="Clear...", command=self._open_clear_intervals_dialog
+        ).grid(row=1, column=4, sticky="ew", padx=1, pady=1)
+        
+        # Add some spacing after the grid
+        ttk.Frame(label_actions, width=10).pack(side=tk.LEFT)
+        
+        # Export Labels and Reset Scale buttons (moved from old quick actions)
+        extra_actions = ttk.Frame(parent)
+        extra_actions.pack(side=tk.LEFT, padx=5)
+        ttk.Button(extra_actions, text="Export Labels…", command=self._export_labels_dialog).pack(side=tk.LEFT, padx=2)
+        ttk.Button(extra_actions, text="Reset Scale", command=self._reset_all_yscales).pack(side=tk.LEFT, padx=2)
     
         # --- Help button to show controls ---
         help_box = ttk.Frame(parent)
@@ -461,44 +498,6 @@ class ViewBuildMixin:
         stats.pack(fill=tk.X, pady=5)
         self.stats_text = tk.Text(stats, height=8, width=30, state="disabled")
         self.stats_text.pack(fill=tk.BOTH, expand=True)
-
-        # Actions
-        actions = ttk.LabelFrame(parent, text="Actions", padding=5)
-        actions.pack(fill=tk.X, pady=5)
-        
-        # Create a grid frame for 2x2 button layout
-        button_grid = ttk.Frame(actions)
-        button_grid.pack(fill=tk.X, expand=True)
-        
-        # Configure grid columns to have equal weight
-        button_grid.columnconfigure(0, weight=1)
-        button_grid.columnconfigure(1, weight=1)
-        
-        # Row 1: Relabel Selected | Delete Selected
-        ttk.Button(
-            button_grid, 
-            text="Relabel Selected", 
-            command=self._relabel_interval
-        ).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
-        
-        ttk.Button(
-            button_grid, 
-            text="Delete Selected", 
-            command=self._delete_interval
-        ).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
-        
-        # Row 2: Label Unassigned... | Clear Intervals...
-        ttk.Button(
-            button_grid, 
-            text="Label Unassigned...", 
-            command=self._open_label_unassigned_dialog
-        ).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
-        
-        ttk.Button(
-            button_grid, 
-            text="Clear Intervals...", 
-            command=self._open_clear_intervals_dialog
-        ).grid(row=1, column=1, sticky="ew", padx=2, pady=2)
 
         # Files
         files = ttk.LabelFrame(parent, text="File Operations", padding=5)
