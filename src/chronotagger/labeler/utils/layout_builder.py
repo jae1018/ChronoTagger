@@ -2,11 +2,11 @@
 Visual Layout Builder for ChronoTagger
 
 A Tkinter-based GUI that allows users to interactively design their plot layout
-by clicking on a grid. This eliminates the need to manually write layout_spec 
+by dragging on a grid. This eliminates the need to manually write layout_spec 
 dictionaries.
 
 Key Features:
-- Visual grid builder with click-to-add panels
+- Visual grid builder with drag-to-span panels
 - Variable assignment (which columns to plot)
 - Role selection (time vs not-time plots)
 - Generates both layout_spec and plot_config
@@ -54,6 +54,17 @@ class PanelConfig:
     y_column: Optional[str] = None
     x_column: Optional[str] = None
     y_column_2: Optional[str] = None
+    
+    def overlaps(self, other: 'PanelConfig') -> bool:
+        """Check if this panel overlaps with another panel."""
+        # Get the set of cells occupied by each panel
+        self_rows = set(range(self.row, self.row + self.rowspan))
+        self_cols = set(range(self.col, self.col + self.colspan))
+        other_rows = set(range(other.row, other.row + other.rowspan))
+        other_cols = set(range(other.col, other.col + other.colspan))
+        
+        # Panels overlap if they share any cells
+        return bool(self_rows & other_rows and self_cols & other_cols)
 
 
 class LayoutBuilderDialog(tk.Toplevel):
@@ -62,7 +73,7 @@ class LayoutBuilderDialog(tk.Toplevel):
     
     This dialog presents a visual grid where users can:
     1. Set grid dimensions (rows × columns)
-    2. Click cells to add panels
+    2. Drag on cells to create spanning panels
     3. Assign DataFrame columns to each panel
     4. Set panel roles (time-series vs cross-plot)
     5. Delete panels as needed
@@ -119,6 +130,11 @@ class LayoutBuilderDialog(tk.Toplevel):
         self.selected_panel: Optional[PanelConfig] = None
         self.next_panel_id = 1
         
+        # Drag state for spanning panels
+        self.drag_start_cell: Optional[Tuple[int, int]] = None
+        self.drag_current_cell: Optional[Tuple[int, int]] = None
+        self.drag_preview_id: Optional[int] = None
+        
         # Build UI
         self._build_ui()
         
@@ -163,7 +179,7 @@ class LayoutBuilderDialog(tk.Toplevel):
         # Instructions
         instructions = ttk.Label(
             left,
-            text="📌 Click on a grid cell to add a panel",
+            text="📌 Click and drag on grid cells to create panels (drag to span)",
             font=('', 9, 'italic'),
             foreground='#666'
         )
@@ -180,8 +196,10 @@ class LayoutBuilderDialog(tk.Toplevel):
         )
         self.canvas.pack(fill=tk.BOTH, expand=True)
         
-        # Bind mouse events
-        self.canvas.bind('<Button-1>', self._on_canvas_click)
+        # Bind mouse events for drag-to-span
+        self.canvas.bind('<Button-1>', self._on_mouse_down)
+        self.canvas.bind('<B1-Motion>', self._on_mouse_drag)
+        self.canvas.bind('<ButtonRelease-1>', self._on_mouse_up)
         
         # === RIGHT PANEL: Panel configuration ===
         right = ttk.Frame(main, width=320)
@@ -201,7 +219,7 @@ class LayoutBuilderDialog(tk.Toplevel):
         add_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(add_frame, text="1. Select role and variable").pack(anchor='w', pady=(0, 5))
-        ttk.Label(add_frame, text="2. Click a grid cell to add").pack(anchor='w', pady=(0, 10))
+        ttk.Label(add_frame, text="2. Drag on grid to create panel").pack(anchor='w', pady=(0, 10))
         
         # Role selection
         ttk.Label(add_frame, text="Role:", font=('', 9, 'bold')).pack(anchor='w', pady=(5, 2))
@@ -329,11 +347,11 @@ class LayoutBuilderDialog(tk.Toplevel):
             self._draw_panel(panel)
     
     def _draw_panel(self, panel: PanelConfig):
-        """Draw a panel on the canvas."""
+        """Draw a panel on the canvas, handling rowspan and colspan."""
         x0 = self.GRID_PADDING + panel.col * self.CELL_SIZE
         y0 = self.GRID_PADDING + panel.row * self.CELL_SIZE
-        x1 = x0 + self.CELL_SIZE
-        y1 = y0 + self.CELL_SIZE
+        x1 = x0 + panel.colspan * self.CELL_SIZE
+        y1 = y0 + panel.rowspan * self.CELL_SIZE
         
         # Color based on role
         if panel.role == "time":
@@ -362,6 +380,10 @@ class LayoutBuilderDialog(tk.Toplevel):
         
         label_text += f"\n({panel.role})"
         
+        # Add span info if not 1x1
+        if panel.rowspan > 1 or panel.colspan > 1:
+            label_text += f"\n[{panel.rowspan}×{panel.colspan}]"
+        
         self.canvas.create_text(
             cx, cy,
             text=label_text,
@@ -389,23 +411,82 @@ class LayoutBuilderDialog(tk.Toplevel):
         
         return (row, col)
     
-    def _on_canvas_click(self, event):
-        """Handle click on canvas - add panel."""
+    def _on_mouse_down(self, event):
+        """Handle mouse button press - start drag."""
         cell = self._pixel_to_cell(event.x, event.y)
         if cell is None:
             return
         
-        row, col = cell
+        # Start drag from this cell
+        self.drag_start_cell = cell
+        self.drag_current_cell = cell
+    
+    def _on_mouse_drag(self, event):
+        """Handle mouse drag - show preview rectangle."""
+        if self.drag_start_cell is None:
+            return
         
-        # Check if cell already occupied
-        for panel in self.panels:
-            if panel.row == row and panel.col == col:
-                messagebox.showinfo(
-                    "Cell Occupied",
-                    f"Cell [{row},{col}] already contains {panel.key}",
-                    parent=self
-                )
-                return
+        current_cell = self._pixel_to_cell(event.x, event.y)
+        if current_cell is None or current_cell == self.drag_current_cell:
+            return
+        
+        self.drag_current_cell = current_cell
+        
+        # Remove old preview
+        if self.drag_preview_id is not None:
+            self.canvas.delete(self.drag_preview_id)
+        
+        # Calculate preview bounds
+        start_row, start_col = self.drag_start_cell
+        curr_row, curr_col = current_cell
+        
+        row_min = min(start_row, curr_row)
+        row_max = max(start_row, curr_row)
+        col_min = min(start_col, curr_col)
+        col_max = max(start_col, curr_col)
+        
+        # Draw preview rectangle
+        x0 = self.GRID_PADDING + col_min * self.CELL_SIZE
+        y0 = self.GRID_PADDING + row_min * self.CELL_SIZE
+        x1 = self.GRID_PADDING + (col_max + 1) * self.CELL_SIZE
+        y1 = self.GRID_PADDING + (row_max + 1) * self.CELL_SIZE
+        
+        self.drag_preview_id = self.canvas.create_rectangle(
+            x0, y0, x1, y1,
+            fill=self.COLOR_HOVER,
+            outline='#ff6600',
+            width=3,
+            stipple='gray50',
+            tags='drag_preview'
+        )
+    
+    def _on_mouse_up(self, event):
+        """Handle mouse release - create panel."""
+        if self.drag_start_cell is None:
+            return
+        
+        # Remove preview
+        if self.drag_preview_id is not None:
+            self.canvas.delete(self.drag_preview_id)
+            self.drag_preview_id = None
+        
+        # Get final cell
+        end_cell = self._pixel_to_cell(event.x, event.y)
+        if end_cell is None:
+            end_cell = self.drag_current_cell or self.drag_start_cell
+        
+        # Calculate panel bounds
+        start_row, start_col = self.drag_start_cell
+        end_row, end_col = end_cell
+        
+        row = min(start_row, end_row)
+        col = min(start_col, end_col)
+        rowspan = abs(end_row - start_row) + 1
+        colspan = abs(end_col - start_col) + 1
+        
+        # Reset drag state
+        self.drag_start_cell = None
+        self.drag_current_cell = None
         
         # Get current role and variables
         role = self.role_var.get()
@@ -446,12 +527,25 @@ class LayoutBuilderDialog(tk.Toplevel):
             key=f"panel_{self.next_panel_id}",
             row=row,
             col=col,
+            rowspan=rowspan,
+            colspan=colspan,
             role=role,
             y_column=y_col,
             x_column=x_col,
             y_column_2=y2_col
         )
         
+        # Check for overlaps with existing panels
+        for existing in self.panels:
+            if new_panel.overlaps(existing):
+                messagebox.showwarning(
+                    "Overlap Detected",
+                    f"New panel overlaps with {existing.key}",
+                    parent=self
+                )
+                return
+        
+        # Add panel
         self.panels.append(new_panel)
         self.next_panel_id += 1
         
@@ -463,7 +557,8 @@ class LayoutBuilderDialog(tk.Toplevel):
         """Update the panel listbox."""
         self.panel_listbox.delete(0, tk.END)
         for panel in self.panels:
-            display = f"{panel.key} [{panel.row},{panel.col}] ({panel.role})"
+            span_info = f"{panel.rowspan}×{panel.colspan}" if (panel.rowspan > 1 or panel.colspan > 1) else "1×1"
+            display = f"{panel.key} [{panel.row},{panel.col}] {span_info} ({panel.role})"
             self.panel_listbox.insert(tk.END, display)
     
     def _on_panel_select(self, event):
