@@ -631,7 +631,8 @@ class EventsMixin:
             return
         if event.inaxes is None:
             return
-        _allowed_axes = {self.strip_ax} | {self.user_axes[k] for k in self._time_axis_keys}
+        # Only allow two-click selection on time-series axes (NOT on strip)
+        _allowed_axes = {self.user_axes[k] for k in self._time_axis_keys}
         if event.inaxes not in _allowed_axes:
             return
     
