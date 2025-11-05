@@ -79,6 +79,7 @@ class IOExportMixin:
             "data_start": self.data_start.isoformat(),
             "data_end": self.data_end.isoformat(),
             "intervals": [iv.to_dict() for iv in self.intervals],
+            "layout_spec": self.layout_spec,  # Save layout configuration
         }
         with open(target, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -97,6 +98,26 @@ class IOExportMixin:
 
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+
+        # Check if session has layout_spec (backward compatibility)
+        saved_layout = data.get("layout_spec", None)
+        
+        if saved_layout is not None and self.layout_spec is not None:
+            # Validate against current layout
+            if not self._layouts_compatible(saved_layout, self.layout_spec):
+                # Show warning dialog
+                result = messagebox.askyesno(
+                    "Layout Mismatch",
+                    "This session was saved with a different layout configuration.\n\n"
+                    f"Saved:   {self._describe_layout(saved_layout)}\n"
+                    f"Current: {self._describe_layout(self.layout_spec)}\n\n"
+                    "Loading this session may cause display issues.\n"
+                    "Continue anyway?",
+                    icon='warning'
+                )
+                if not result:
+                    self.status_var.set("Load cancelled - layout mismatch")  # type: ignore[union-attr]
+                    return  # User cancelled
 
         self.classes = list(data["classes"])
         self.class_colors = dict(data["class_colors"])
@@ -361,3 +382,43 @@ class IOExportMixin:
             elif resp:
                 self._save_session()
         self.root.destroy()  # type: ignore[union-attr]
+    
+    def _layouts_compatible(self, layout1: dict, layout2: dict) -> bool:
+        """
+        Check if two layout_specs are compatible.
+        
+        Args:
+            layout1: First layout specification
+            layout2: Second layout specification
+            
+        Returns:
+            True if layouts are structurally compatible, False otherwise
+        """
+        if layout1 is None or layout2 is None:
+            return True  # Can't validate, allow load
+        
+        # Compare key structural elements
+        nrows_match = layout1.get("nrows") == layout2.get("nrows")
+        ncols_match = layout1.get("ncols") == layout2.get("ncols")
+        areas_match = len(layout1.get("areas", [])) == len(layout2.get("areas", []))
+        
+        return nrows_match and ncols_match and areas_match
+    
+    def _describe_layout(self, layout: dict) -> str:
+        """
+        Create human-readable layout description.
+        
+        Args:
+            layout: Layout specification dictionary
+            
+        Returns:
+            String describing the layout (e.g., "3 rows × 2 columns (4 panels)")
+        """
+        if layout is None:
+            return "Unknown layout"
+        
+        nrows = layout.get("nrows", "?")
+        ncols = layout.get("ncols", "?")
+        n_panels = len(layout.get("areas", []))
+        
+        return f"{nrows} rows × {ncols} columns ({n_panels} panels)"
