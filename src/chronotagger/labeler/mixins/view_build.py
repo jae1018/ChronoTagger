@@ -330,6 +330,9 @@ class ViewBuildMixin:
                     ),
                 )
                 self.rect_selectors[k] = rs
+            
+            # Wire up edge-clamping for rectangle selectors
+            self._setup_rectangle_edge_clamping()
     
             # Strip interactions
             if self.pick_cid is None:
@@ -571,6 +574,113 @@ class ViewBuildMixin:
             share_key = area.get("sharex_with", self.primary_time_key or key)
             if share_key and share_key in created and share_key != key:
                 created[key].sharex(created[share_key])
+    
+    # ========== Rectangle Selector Edge Clamping Setup ==========
+    
+    def _setup_rectangle_edge_clamping(self) -> None:
+        """
+        Wire up edge-clamping behavior for all rectangle selectors.
+        
+        This connects press/motion/release callbacks to enable the rectangle
+        to extend to axes edges when the mouse leaves the axes during a drag.
+        Called once during plot setup after all rectangle selectors are created.
+        """
+        # Connect press/release callbacks to track drag state
+        # These work across all axes since we store which axes was pressed
+        for key, rs in self.rect_selectors.items():
+            # Use the selector's internal callback mechanism
+            # Store original callbacks if they exist
+            original_press = getattr(rs, '_on_press_callback', None)
+            original_release = getattr(rs, '_on_release_callback', None)
+            
+            # Wrap to call both our tracking and any existing callbacks
+            def make_press_wrapper(orig_cb):
+                def wrapper(event):
+                    self._on_rect_selector_press(event)
+                    if orig_cb is not None:
+                        orig_cb(event)
+                return wrapper
+            
+            def make_release_wrapper(orig_cb):
+                def wrapper(event):
+                    self._on_rect_selector_release(event)
+                    if orig_cb is not None:
+                        orig_cb(event)
+                return wrapper
+            
+            # Note: RectangleSelector doesn't expose press/release callbacks directly,
+            # so we connect to the figure-level events and track state manually
+        
+        # Connect figure-level motion handler for edge clamping
+        # This runs on ALL motion events, but only acts during active drags
+        if not hasattr(self, '_rect_clamp_motion_cid') or self._rect_clamp_motion_cid is None:
+            self._rect_clamp_motion_cid = self.canvas.mpl_connect(
+                'motion_notify_event', 
+                self._on_rect_selector_motion
+            )
+        
+        # Connect figure-level press/release for state tracking
+        if not hasattr(self, '_rect_clamp_press_cid') or self._rect_clamp_press_cid is None:
+            self._rect_clamp_press_cid = self.canvas.mpl_connect(
+                'button_press_event',
+                self._on_rect_selector_press
+            )
+        
+        if not hasattr(self, '_rect_clamp_release_cid') or self._rect_clamp_release_cid is None:
+            self._rect_clamp_release_cid = self.canvas.mpl_connect(
+                'button_release_event',
+                self._on_rect_selector_release
+            )
+        
+        # CRITICAL: Add tkinter-level motion binding
+        # This captures motion EVERYWHERE on canvas (including figure background)
+        # matplotlib events only fire when mouse is over axes, missing the gray areas
+        tk_widget = self.canvas.get_tk_widget()
+        tk_widget.bind('<Motion>', self._on_tk_canvas_motion, add='+')
+    
+    def _on_tk_canvas_motion(self, tk_event) -> None:
+        """
+        Handle tkinter motion events (fires everywhere on canvas).
+        
+        This handler captures mouse motion over the entire canvas, including
+        the figure background (gray areas between plots) where matplotlib's
+        motion_notify_event doesn't fire. Essential for smooth edge-clamping
+        when dragging rectangles outside axes bounds.
+        
+        Args:
+            tk_event: tkinter motion event
+        """
+        # Only process during active rectangle drag
+        if not hasattr(self, '_rect_drag_axes') or self._rect_drag_axes is None:
+            return
+        
+        try:
+            # Convert tkinter coordinates to matplotlib figure coordinates
+            # Tkinter: origin at top-left, y increases downward
+            # Matplotlib: origin at bottom-left, y increases upward
+            
+            fig_x = tk_event.x  # X is the same
+            fig_y = self.fig.bbox.height - tk_event.y  # Flip Y axis
+            
+            # Create a pseudo matplotlib event
+            # We only need x, y (figure coords) and inaxes (None since we're outside)
+            class PseudoMplEvent:
+                """Minimal event object compatible with matplotlib event API."""
+                def __init__(self, x, y, inaxes=None):
+                    self.x = x
+                    self.y = y
+                    self.inaxes = inaxes
+            
+            pseudo_event = PseudoMplEvent(fig_x, fig_y, inaxes=None)
+            
+            # Call our existing matplotlib motion handler
+            # It will handle the edge-clamping logic
+            self._on_rect_selector_motion(pseudo_event)
+            
+        except Exception:
+            # Silently fail - better to have no update than crash
+            # This can happen if figure geometry is not yet initialized
+            pass
     
     # ========== Sidebar Scrolling Helper Methods ==========
     

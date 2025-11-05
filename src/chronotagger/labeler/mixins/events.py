@@ -1210,4 +1210,167 @@ class EventsMixin:
         self._two_click_last_x = None
         self._hide_time_overlays()
 
+    # ========== Rectangle Selection Edge Clamping ==========
+    
+    def _on_rect_selector_press(self, eclick) -> None:
+        """
+        Track when rectangle selector drag starts.
+        
+        Called automatically when user starts dragging a selection box.
+        Records which axes the drag started in so we can clamp to that
+        axes if the mouse leaves it during the drag.
+        
+        Args:
+            eclick: matplotlib mouse event (button press)
+        """
+        if eclick.button != 1:  # Only track left mouse button
+            return
+        
+        # Store the axes where drag started
+        self._rect_drag_axes = getattr(eclick, 'inaxes', None)
+        
+        # Store the starting point (for detecting actual drag vs click)
+        if self._rect_drag_axes is not None:
+            self._rect_drag_start = (eclick.xdata, eclick.ydata)
+        else:
+            self._rect_drag_start = None
+    
+    def _on_rect_selector_motion(self, event) -> None:
+        """
+        Handle mouse motion during rectangle selection.
+        
+        When the mouse leaves the axes during an active drag, this method
+        clamps the rectangle corner to the axes edges so users can easily
+        select all the way to corners without pixel-perfect precision.
+        
+        Args:
+            event: matplotlib mouse motion event
+        """
+        # Only act if we have an active drag
+        drag_axes = getattr(self, '_rect_drag_axes', None)
+        if drag_axes is None:
+            return
+        
+        # Check if this axes has a rectangle selector
+        rect_selector = self.rect_selectors.get(self._find_axes_key(drag_axes))
+        if rect_selector is None or not rect_selector.active:
+            return
+        
+        # If mouse is still inside the original axes, do nothing
+        # (let RectangleSelector handle it normally)
+        if event.inaxes == drag_axes:
+            return
+        
+        # Mouse left the axes during drag - clamp to edges
+        self._clamp_rectangle_to_axes(event, drag_axes, rect_selector)
+    
+    def _clamp_rectangle_to_axes(self, event, axes, rect_selector) -> None:
+        """
+        Clamp rectangle selection to axes bounds when mouse leaves axes.
+        
+        Transforms the mouse position (in figure coordinates) to data
+        coordinates, clamps to axes limits, and manually updates the
+        rectangle selector extents using fast blitting.
+        
+        Args:
+            event: matplotlib mouse event
+            axes: The axes where the drag started
+            rect_selector: The RectangleSelector for this axes
+        """
+        try:
+            # Transform figure coordinates to axes data coordinates
+            inv = axes.transData.inverted()
+            x_data, y_data = inv.transform((event.x, event.y))
+            
+            # Get axes limits (the boundaries we clamp to)
+            xmin, xmax = axes.get_xlim()
+            ymin, ymax = axes.get_ylim()
+            
+            # Clamp to axes bounds
+            x_clamped = max(xmin, min(xmax, x_data))
+            y_clamped = max(ymin, min(ymax, y_data))
+            
+            # Get the starting corner from the selector
+            # (the corner that's anchored when user drags)
+            if not hasattr(rect_selector, '_eventpress') or rect_selector._eventpress is None:
+                return
+            
+            x_start = rect_selector._eventpress.xdata
+            y_start = rect_selector._eventpress.ydata
+            
+            if x_start is None or y_start is None:
+                return
+            
+            # Calculate rectangle extents
+            left = min(x_start, x_clamped)
+            right = max(x_start, x_clamped)
+            bottom = min(y_start, y_clamped)
+            top = max(y_start, y_clamped)
+            
+            # Fast blitting approach: update rectangle patch directly
+            # This is much faster than canvas.draw_idle() which redraws everything
+            try:
+                # Access the rectangle patch (RectangleSelector internal)
+                rect_patch = rect_selector._selection_artist
+                
+                if rect_patch is None:
+                    return
+                
+                # Update patch geometry directly
+                width = right - left
+                height = top - bottom
+                rect_patch.set_bounds(left, bottom, width, height)
+                
+                # Make sure it's visible
+                if not rect_patch.get_visible():
+                    rect_patch.set_visible(True)
+                
+                # Use BlitHelper for fast redraw (same technique as two-click selection)
+                if hasattr(self, '_blit') and self._blit is not None:
+                    self._blit.draw([rect_patch])
+                else:
+                    # Fallback to axes-specific blit (still faster than full redraw)
+                    axes.draw_artist(rect_patch)
+                    self.canvas.blit(axes.bbox)
+                    
+            except AttributeError:
+                # If we can't access internals, fall back to setting extents
+                # (slower but still works)
+                extents = [left, right, bottom, top]
+                rect_selector.extents = extents
+                self.canvas.draw_idle()
+            
+        except Exception:
+            # Silently fail - better to have normal behavior than crash
+            # This can happen if coordinate transforms are invalid
+            pass
+    
+    def _on_rect_selector_release(self, erelease) -> None:
+        """
+        Clean up rectangle selection tracking on mouse release.
+        
+        Called automatically when user releases the mouse button.
+        
+        Args:
+            erelease: matplotlib mouse event (button release)
+        """
+        # Clear tracking state
+        self._rect_drag_axes = None
+        self._rect_drag_start = None
+    
+    def _find_axes_key(self, axes) -> Optional[str]:
+        """
+        Find the key for a given axes object in user_axes dict.
+        
+        Args:
+            axes: matplotlib Axes object
+        
+        Returns:
+            The key string if found, None otherwise
+        """
+        for key, ax in self.user_axes.items():
+            if ax is axes:
+                return key
+        return None
+
     
