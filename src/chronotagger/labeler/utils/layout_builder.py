@@ -9,6 +9,7 @@ Key Features:
 - Visual grid builder with drag-to-span panels
 - Variable assignment (which columns to plot)
 - Role selection (time vs not-time plots)
+- Panel editing capability
 - Generates both layout_spec and plot_config
 
 Usage:
@@ -73,10 +74,11 @@ class LayoutBuilderDialog(tk.Toplevel):
     
     This dialog presents a visual grid where users can:
     1. Set grid dimensions (rows × columns)
-    2. Drag on cells to create spanning panels
+    2. Drag on cells to create spanning panels OR click to select existing panels
     3. Assign DataFrame columns to each panel
     4. Set panel roles (time-series vs cross-plot)
-    5. Delete panels as needed
+    5. Edit existing panels
+    6. Delete panels as needed
     
     The dialog returns both layout_spec (for TimeIntervalLabeler) and
     plot_config (for automatic plot function generation).
@@ -89,6 +91,7 @@ class LayoutBuilderDialog(tk.Toplevel):
     COLOR_TIME = "#cce5ff"  # Light blue
     COLOR_NOT_TIME = "#d4edda"  # Light green
     COLOR_HOVER = "#fff3cd"  # Light yellow
+    COLOR_SELECTED_OUTLINE = "#ff6600"  # Orange for selected panel
     
     def __init__(self, parent: tk.Tk, df: pd.DataFrame):
         """
@@ -179,7 +182,7 @@ class LayoutBuilderDialog(tk.Toplevel):
         # Instructions
         instructions = ttk.Label(
             left,
-            text="📌 Click and drag on grid cells to create panels (drag to span)",
+            text="📌 Click panel to select • Drag empty cells to create new panel",
             font=('', 9, 'italic'),
             foreground='#666'
         )
@@ -214,12 +217,12 @@ class LayoutBuilderDialog(tk.Toplevel):
         self.panel_listbox.pack(fill=tk.BOTH, expand=True)
         self.panel_listbox.bind('<<ListboxSelect>>', self._on_panel_select)
         
-        # Add panel controls
-        add_frame = ttk.LabelFrame(right, text="Add Panel", padding=10)
+        # Add/Edit panel controls (DUAL PURPOSE)
+        add_frame = ttk.LabelFrame(right, text="Add/Edit Panel", padding=10)
         add_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(add_frame, text="1. Select role and variable").pack(anchor='w', pady=(0, 5))
-        ttk.Label(add_frame, text="2. Drag on grid to create panel").pack(anchor='w', pady=(0, 10))
+        ttk.Label(add_frame, text="2. Drag to add OR click Update to edit").pack(anchor='w', pady=(0, 10))
         
         # Role selection
         ttk.Label(add_frame, text="Role:", font=('', 9, 'bold')).pack(anchor='w', pady=(5, 2))
@@ -250,7 +253,9 @@ class LayoutBuilderDialog(tk.Toplevel):
         edit_frame = ttk.LabelFrame(right, text="Edit Selected Panel", padding=10)
         edit_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Button(edit_frame, text="Delete Panel", command=self._delete_selected_panel).pack(fill=tk.X)
+        ttk.Button(edit_frame, text="Update Panel", command=self._update_selected_panel).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(edit_frame, text="Delete Panel", command=self._delete_selected_panel).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(edit_frame, text="Clear Selection", command=self._clear_selection).pack(fill=tk.X)
         
         # Bottom buttons
         bottom_frame = ttk.Frame(right)
@@ -359,12 +364,20 @@ class LayoutBuilderDialog(tk.Toplevel):
         else:
             fill_color = self.COLOR_NOT_TIME
         
+        # Highlight selected panel with different outline
+        outline_color = '#333'
+        outline_width = 2
+        
+        if panel == self.selected_panel:
+            outline_color = self.COLOR_SELECTED_OUTLINE
+            outline_width = 4
+        
         # Draw rectangle
         self.canvas.create_rectangle(
             x0, y0, x1, y1,
             fill=fill_color,
-            outline='#333',
-            width=2,
+            outline=outline_color,
+            width=outline_width,
             tags=f'panel_{panel.key}'
         )
         
@@ -412,12 +425,41 @@ class LayoutBuilderDialog(tk.Toplevel):
         return (row, col)
     
     def _on_mouse_down(self, event):
-        """Handle mouse button press - start drag."""
+        """Handle mouse button press - select existing panel or start drag."""
         cell = self._pixel_to_cell(event.x, event.y)
         if cell is None:
             return
         
-        # Start drag from this cell
+        row, col = cell
+        
+        # Check if clicking on an existing panel - if yes, select it
+        for panel in self.panels:
+            if (row >= panel.row and row < panel.row + panel.rowspan and
+                col >= panel.col and col < panel.col + panel.colspan):
+                # Clicked on existing panel - select it
+                self.selected_panel = panel
+                # Update listbox selection
+                try:
+                    idx = self.panels.index(panel)
+                    self.panel_listbox.selection_clear(0, tk.END)
+                    self.panel_listbox.selection_set(idx)
+                    self.panel_listbox.see(idx)
+                except:
+                    pass
+                # Load settings
+                self.role_var.set(panel.role)
+                self._rebuild_vars_ui()
+                if panel.role == "time" and hasattr(self, 'y_var') and panel.y_column:
+                    self.y_var.set(panel.y_column)
+                elif panel.role == "not-time":
+                    if hasattr(self, 'x_var') and panel.x_column:
+                        self.x_var.set(panel.x_column)
+                    if hasattr(self, 'y2_var') and panel.y_column_2:
+                        self.y2_var.set(panel.y_column_2)
+                self._redraw_grid()
+                return
+        
+        # Not clicking on existing panel - start drag to create new one
         self.drag_start_cell = cell
         self.drag_current_cell = cell
     
@@ -549,6 +591,10 @@ class LayoutBuilderDialog(tk.Toplevel):
         self.panels.append(new_panel)
         self.next_panel_id += 1
         
+        # Clear selection since we just added a new panel
+        self.selected_panel = None
+        self.panel_listbox.selection_clear(0, tk.END)
+        
         # Redraw and update list
         self._redraw_grid()
         self._update_panel_list()
@@ -562,13 +608,107 @@ class LayoutBuilderDialog(tk.Toplevel):
             self.panel_listbox.insert(tk.END, display)
     
     def _on_panel_select(self, event):
-        """Handle panel selection from listbox."""
+        """Handle panel selection from listbox - load settings for editing."""
         selection = self.panel_listbox.curselection()
         if not selection:
+            # No selection - do nothing, don't clear
             return
         
         idx = selection[0]
+        if idx >= len(self.panels):
+            # Invalid index
+            return
+        
         self.selected_panel = self.panels[idx]
+        
+        # Load panel settings into controls for editing
+        self.role_var.set(self.selected_panel.role)
+        self._rebuild_vars_ui()  # Rebuild UI for the selected role
+        
+        # Populate variable dropdowns
+        if self.selected_panel.role == "time":
+            if hasattr(self, 'y_var') and self.selected_panel.y_column:
+                self.y_var.set(self.selected_panel.y_column)
+        else:  # not-time
+            if hasattr(self, 'x_var') and self.selected_panel.x_column:
+                self.x_var.set(self.selected_panel.x_column)
+            if hasattr(self, 'y2_var') and self.selected_panel.y_column_2:
+                self.y2_var.set(self.selected_panel.y_column_2)
+        
+        # Redraw to highlight selected panel
+        self._redraw_grid()
+    
+    def _clear_selection(self):
+        """Clear panel selection and reset controls to 'add' mode."""
+        self.selected_panel = None
+        self.panel_listbox.selection_clear(0, tk.END)
+        
+        # Reset controls to defaults
+        self.role_var.set("time")
+        self._rebuild_vars_ui()
+        
+        # Clear variable selections
+        if hasattr(self, 'y_var'):
+            self.y_var.set('')
+        if hasattr(self, 'x_var'):
+            self.x_var.set('')
+        if hasattr(self, 'y2_var'):
+            self.y2_var.set('')
+        
+        # Redraw without highlight
+        self._redraw_grid()
+    
+    def _update_selected_panel(self):
+        """Update the selected panel with current control values."""
+        if self.selected_panel is None:
+            messagebox.showinfo("No Selection", "Please select a panel to edit.", parent=self)
+            return
+        
+        # Get current role and variables
+        role = self.role_var.get()
+        
+        # Validate variables are selected
+        if role == "time":
+            if not hasattr(self, 'y_var') or not self.y_var.get():
+                messagebox.showwarning(
+                    "No Variable Selected",
+                    "Please select a Y-axis variable.",
+                    parent=self
+                )
+                return
+            y_col = self.y_var.get()
+            x_col = None
+            y2_col = None
+        else:  # not-time
+            if not hasattr(self, 'x_var') or not hasattr(self, 'y2_var'):
+                messagebox.showwarning(
+                    "No Variables Selected",
+                    "Please select both X and Y variables.",
+                    parent=self
+                )
+                return
+            if not self.x_var.get() or not self.y2_var.get():
+                messagebox.showwarning(
+                    "No Variables Selected",
+                    "Please select both X and Y variables.",
+                    parent=self
+                )
+                return
+            x_col = self.x_var.get()
+            y_col = None
+            y2_col = self.y2_var.get()
+        
+        # Update panel
+        self.selected_panel.role = role
+        self.selected_panel.y_column = y_col
+        self.selected_panel.x_column = x_col
+        self.selected_panel.y_column_2 = y2_col
+        
+        # Redraw and update list
+        self._redraw_grid()
+        self._update_panel_list()
+        
+        messagebox.showinfo("Updated", f"{self.selected_panel.key} updated successfully.", parent=self)
     
     def _delete_selected_panel(self):
         """Delete the selected panel."""
