@@ -465,13 +465,40 @@ class ViewBuildMixin:
         # Actions
         actions = ttk.LabelFrame(parent, text="Actions", padding=5)
         actions.pack(fill=tk.X, pady=5)
-        ttk.Button(actions, text="Relabel Selected", command=self._relabel_interval).pack(fill=tk.X, pady=2)
-        ttk.Button(actions, text="Delete Selected", command=self._delete_interval).pack(fill=tk.X, pady=2)
-        ttk.Button(actions, text="Label Unassigned...",
-                   command=self._open_label_unassigned_dialog).pack(fill=tk.X, pady=2)
-        ttk.Separator(actions, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
-        ttk.Button(actions, text="Clear Intervals...",
-                   command=self._open_clear_intervals_dialog).pack(fill=tk.X, pady=2)
+        
+        # Create a grid frame for 2x2 button layout
+        button_grid = ttk.Frame(actions)
+        button_grid.pack(fill=tk.X, expand=True)
+        
+        # Configure grid columns to have equal weight
+        button_grid.columnconfigure(0, weight=1)
+        button_grid.columnconfigure(1, weight=1)
+        
+        # Row 1: Relabel Selected | Delete Selected
+        ttk.Button(
+            button_grid, 
+            text="Relabel Selected", 
+            command=self._relabel_interval
+        ).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        
+        ttk.Button(
+            button_grid, 
+            text="Delete Selected", 
+            command=self._delete_interval
+        ).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
+        
+        # Row 2: Label Unassigned... | Clear Intervals...
+        ttk.Button(
+            button_grid, 
+            text="Label Unassigned...", 
+            command=self._open_label_unassigned_dialog
+        ).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
+        
+        ttk.Button(
+            button_grid, 
+            text="Clear Intervals...", 
+            command=self._open_clear_intervals_dialog
+        ).grid(row=1, column=1, sticky="ew", padx=2, pady=2)
 
         # Files
         files = ttk.LabelFrame(parent, text="File Operations", padding=5)
