@@ -28,6 +28,9 @@ from typing import Optional, Tuple, Dict, List, Any
 import tkinter as tk
 from tkinter import ttk, messagebox
 import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
 @dataclass
@@ -137,6 +140,9 @@ class LayoutBuilderDialog(tk.Toplevel):
         self.drag_start_cell: Optional[Tuple[int, int]] = None
         self.drag_current_cell: Optional[Tuple[int, int]] = None
         self.drag_preview_id: Optional[int] = None
+        
+        # Preview window reference (only one at a time)
+        self.preview_window: Optional[tk.Toplevel] = None
         
         # Build UI
         self._build_ui()
@@ -260,6 +266,9 @@ class LayoutBuilderDialog(tk.Toplevel):
         bottom_frame = ttk.Frame(right)
         bottom_frame.pack(fill=tk.X, side=tk.BOTTOM)
         
+        ttk.Button(bottom_frame, text="Preview", command=self._show_preview, width=12).pack(
+            side=tk.LEFT, padx=2
+        )
         ttk.Button(bottom_frame, text="Done", command=self._on_done, width=12).pack(
             side=tk.RIGHT, padx=2
         )
@@ -745,6 +754,101 @@ class LayoutBuilderDialog(tk.Toplevel):
         
         self._redraw_grid()
         self._update_panel_list()
+    
+    def _show_preview(self):
+        """Show matplotlib preview of the current layout."""
+        # Validate that panels exist
+        if not self.panels:
+            messagebox.showinfo(
+                "No Panels",
+                "Please create at least one panel before previewing.",
+                parent=self
+            )
+            return
+        
+        # Close existing preview window if open
+        if self.preview_window is not None and self.preview_window.winfo_exists():
+            self.preview_window.destroy()
+        
+        # Create new preview window
+        self.preview_window = tk.Toplevel(self)
+        self.preview_window.title("Layout Preview")
+        self.preview_window.geometry("800x600")
+        
+        # Generate layout spec from current panels
+        layout_spec = self._generate_layout_spec()
+        
+        # Create matplotlib figure with GridSpec
+        fig = plt.figure(figsize=(10, 8))
+        gs = GridSpec(
+            nrows=layout_spec['nrows'],
+            ncols=layout_spec['ncols'],
+            hspace=layout_spec.get('hspace', 0.15),
+            wspace=layout_spec.get('wspace', 0.12),
+            figure=fig
+        )
+        
+        # Create a subplot for each panel
+        for panel in self.panels:
+            # Use GridSpec slice notation for spanning panels
+            ax = fig.add_subplot(gs[
+                panel.row:panel.row + panel.rowspan,
+                panel.col:panel.col + panel.colspan
+            ])
+            
+            # Set background color based on role (match grid colors)
+            if panel.role == "time":
+                bg_color = self.COLOR_TIME
+            else:
+                bg_color = self.COLOR_NOT_TIME
+            ax.set_facecolor(bg_color)
+            
+            # Remove ticks for cleaner look
+            ax.set_xticks([])
+            ax.set_yticks([])
+            
+            # Build info text to display in panel
+            info_lines = [panel.key]
+            
+            # Add variable information
+            if panel.role == "time":
+                info_lines.append(f"Y: {panel.y_column}")
+            else:  # not-time
+                info_lines.append(f"X: {panel.x_column}")
+                info_lines.append(f"Y: {panel.y_column_2}")
+            
+            # Add role
+            info_lines.append(f"({panel.role})")
+            
+            # Add span info if not 1x1
+            if panel.rowspan > 1 or panel.colspan > 1:
+                info_lines.append(f"[{panel.rowspan}×{panel.colspan}]")
+            
+            # Display text in center of panel
+            info_text = "\n".join(info_lines)
+            ax.text(
+                0.5, 0.5, info_text,
+                ha='center', va='center',
+                fontsize=10,
+                transform=ax.transAxes,
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
+            )
+        
+        # Embed matplotlib figure in Tkinter window
+        canvas = FigureCanvasTkAgg(fig, master=self.preview_window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Add close button at bottom
+        button_frame = ttk.Frame(self.preview_window)
+        button_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Button(
+            button_frame,
+            text="Close",
+            command=self.preview_window.destroy,
+            width=12
+        ).pack()
     
     def _generate_layout_spec(self) -> Dict:
         """Generate layout_spec dictionary from current panels."""
