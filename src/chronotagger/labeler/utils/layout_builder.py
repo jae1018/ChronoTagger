@@ -39,12 +39,13 @@ class PanelConfig:
     Configuration for a single panel in the layout.
     
     Attributes:
-        key: Unique identifier (e.g., "panel_1")
+        key: Unique identifier (e.g., "panel_1" or "labels")
         row: Row position in grid (0-indexed)
         col: Column position in grid (0-indexed)
         rowspan: Number of rows this panel spans (default: 1)
         colspan: Number of columns this panel spans (default: 1)
-        role: "time" or "not-time"
+        role: "time", "not-time", or "labels"
+        locked: If True, panel cannot be edited or deleted (for Labels strip)
         y_column: Column name for y-axis (time plots) or None
         x_column: Column name for x-axis (not-time plots) or None
         y_column_2: Column name for y-axis (not-time plots) or None
@@ -55,6 +56,7 @@ class PanelConfig:
     rowspan: int = 1
     colspan: int = 1
     role: str = "time"
+    locked: bool = False
     y_column: Optional[str] = None
     x_column: Optional[str] = None
     y_column_2: Optional[str] = None
@@ -93,6 +95,7 @@ class LayoutBuilderDialog(tk.Toplevel):
     COLOR_EMPTY = "#f0f0f0"
     COLOR_TIME = "#cce5ff"  # Light blue
     COLOR_NOT_TIME = "#d4edda"  # Light green
+    COLOR_LABELS = "#e0e0e0"  # Light gray for locked Labels strip
     COLOR_HOVER = "#fff3cd"  # Light yellow
     COLOR_SELECTED_OUTLINE = "#ff6600"  # Orange for selected panel
     
@@ -147,6 +150,9 @@ class LayoutBuilderDialog(tk.Toplevel):
         # Build UI
         self._build_ui()
         
+        # Auto-create Labels panel (must be after UI build)
+        self._create_labels_panel()
+        
         # Bind window close
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
     
@@ -168,10 +174,10 @@ class LayoutBuilderDialog(tk.Toplevel):
         ttk.Label(controls, text="Rows:").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Spinbox(
             controls,
-            from_=1, to=10,
+            from_=2, to=10,  # Minimum 2 rows (1 for user, 1 for Labels)
             textvariable=self.nrows_var,
             width=5,
-            command=self._redraw_grid
+            command=self._on_grid_size_changed
         ).pack(side=tk.LEFT, padx=(0, 15))
         
         ttk.Label(controls, text="Columns:").pack(side=tk.LEFT, padx=(0, 5))
@@ -180,7 +186,7 @@ class LayoutBuilderDialog(tk.Toplevel):
             from_=1, to=5,
             textvariable=self.ncols_var,
             width=5,
-            command=self._redraw_grid
+            command=self._on_grid_size_changed
         ).pack(side=tk.LEFT, padx=(0, 15))
         
         ttk.Button(controls, text="Clear All", command=self._clear_all_panels).pack(side=tk.RIGHT)
@@ -188,9 +194,10 @@ class LayoutBuilderDialog(tk.Toplevel):
         # Instructions
         instructions = ttk.Label(
             left,
-            text="📌 Click panel to select • Drag empty cells to create new panel",
+            text="📌 Click panel to select • Drag empty cells to create new panel\nBottom row (Labels) is auto-managed",
             font=('', 9, 'italic'),
-            foreground='#666'
+            foreground='#666',
+            justify=tk.LEFT
         )
         instructions.pack(fill=tk.X, pady=(0, 5))
         
@@ -328,6 +335,42 @@ class LayoutBuilderDialog(tk.Toplevel):
         """Handle role radio button change."""
         self._rebuild_vars_ui()
     
+    def _create_labels_panel(self):
+        """Create the auto-managed Labels strip panel."""
+        # Labels panel always occupies the bottom row
+        labels_panel = PanelConfig(
+            key="labels",
+            row=self.nrows_var.get() - 1,  # Bottom row (0-indexed)
+            col=0,
+            rowspan=1,
+            colspan=1,  # Start with 1 column (will be updated later)
+            role="labels",
+            locked=True
+        )
+        self.panels.append(labels_panel)
+        self._redraw_grid()
+    
+    def _on_grid_size_changed(self):
+        """Handle grid size changes - update Labels panel position."""
+        self._update_labels_panel()
+        self._redraw_grid()
+    
+    def _update_labels_panel(self):
+        """Update Labels panel position to match current grid size."""
+        # Find Labels panel
+        labels = next((p for p in self.panels if p.role == "labels"), None)
+        if labels is None:
+            return
+        
+        # Update position to bottom row
+        labels.row = self.nrows_var.get() - 1
+        
+        # For now, keep colspan as-is (will be updated when we calculate time plot span)
+        # Ensure it doesn't exceed grid width
+        max_colspan = self.ncols_var.get()
+        if labels.col + labels.colspan > max_colspan:
+            labels.colspan = max_colspan - labels.col
+    
     def _redraw_grid(self):
         """Redraw the entire grid and all panels."""
         self.canvas.delete('all')
@@ -367,21 +410,23 @@ class LayoutBuilderDialog(tk.Toplevel):
         y1 = y0 + panel.rowspan * self.CELL_SIZE
         
         # Color based on role
-        if panel.role == "time":
+        if panel.role == "labels":
+            fill_color = self.COLOR_LABELS
+        elif panel.role == "time":
             fill_color = self.COLOR_TIME
         else:
             fill_color = self.COLOR_NOT_TIME
         
-        # Highlight selected panel with different outline
+        # Highlight selected panel with different outline (but not for locked panels)
         outline_color = '#333'
         outline_width = 2
         
-        if panel == self.selected_panel:
+        if panel == self.selected_panel and not panel.locked:
             outline_color = self.COLOR_SELECTED_OUTLINE
             outline_width = 4
         
         # Draw rectangle
-        self.canvas.create_rectangle(
+        rect_id = self.canvas.create_rectangle(
             x0, y0, x1, y1,
             fill=fill_color,
             outline=outline_color,
@@ -389,26 +434,35 @@ class LayoutBuilderDialog(tk.Toplevel):
             tags=f'panel_{panel.key}'
         )
         
+        # Add stipple pattern for locked Labels panel
+        if panel.locked:
+            self.canvas.itemconfig(rect_id, stipple='gray50')
+        
         # Draw label
         cx = (x0 + x1) / 2
         cy = (y0 + y1) / 2
         
-        label_text = panel.key
-        if panel.role == "time" and panel.y_column:
-            label_text += f"\n{panel.y_column}"
-        elif panel.role == "not-time" and panel.x_column and panel.y_column_2:
-            label_text += f"\n{panel.x_column}\nvs\n{panel.y_column_2}"
-        
-        label_text += f"\n({panel.role})"
-        
-        # Add span info if not 1x1
-        if panel.rowspan > 1 or panel.colspan > 1:
-            label_text += f"\n[{panel.rowspan}×{panel.colspan}]"
+        # Different label text for Labels panel
+        if panel.role == "labels":
+            label_text = "⏱️ Labels Strip\n(Auto-managed)"
+        else:
+            label_text = panel.key
+            if panel.role == "time" and panel.y_column:
+                label_text += f"\n{panel.y_column}"
+            elif panel.role == "not-time" and panel.x_column and panel.y_column_2:
+                label_text += f"\n{panel.x_column}\nvs\n{panel.y_column_2}"
+            
+            label_text += f"\n({panel.role})"
+            
+            # Add span info if not 1x1
+            if panel.rowspan > 1 or panel.colspan > 1:
+                label_text += f"\n[{panel.rowspan}×{panel.colspan}]"
         
         self.canvas.create_text(
             cx, cy,
             text=label_text,
-            font=('', 8),
+            font=('', 8 if not panel.locked else 9),
+            fill='#666' if panel.locked else '#000',
             tags=f'panel_{panel.key}_label'
         )
     
@@ -440,15 +494,26 @@ class LayoutBuilderDialog(tk.Toplevel):
         
         row, col = cell
         
-        # Check if clicking on an existing panel - if yes, select it
+        # Check if clicking on an existing panel - if yes, select it (unless locked)
         for panel in self.panels:
             if (row >= panel.row and row < panel.row + panel.rowspan and
                 col >= panel.col and col < panel.col + panel.colspan):
-                # Clicked on existing panel - select it
+                # Clicked on existing panel
+                if panel.locked:
+                    # Can't select locked panels (Labels)
+                    messagebox.showinfo(
+                        "Auto-Managed Panel",
+                        "The Labels strip is auto-managed and cannot be edited.\n"
+                        "It will align with your time-series plots.",
+                        parent=self
+                    )
+                    return
+                
+                # Select non-locked panel
                 self.selected_panel = panel
                 # Update listbox selection
                 try:
-                    idx = self.panels.index(panel)
+                    idx = [p for p in self.panels if not p.locked].index(panel)
                     self.panel_listbox.selection_clear(0, tk.END)
                     self.panel_listbox.selection_set(idx)
                     self.panel_listbox.see(idx)
@@ -588,11 +653,20 @@ class LayoutBuilderDialog(tk.Toplevel):
         # Check for overlaps with existing panels
         for existing in self.panels:
             if new_panel.overlaps(existing):
-                messagebox.showwarning(
-                    "Overlap Detected",
-                    f"New panel overlaps with {existing.key}",
-                    parent=self
-                )
+                # Special message if overlapping with Labels
+                if existing.role == "labels":
+                    messagebox.showwarning(
+                        "Cannot Overlap Labels",
+                        f"Cannot place panel in the Labels row (bottom row).\n"
+                        f"The Labels strip is auto-managed.",
+                        parent=self
+                    )
+                else:
+                    messagebox.showwarning(
+                        "Overlap Detected",
+                        f"New panel overlaps with {existing.key}",
+                        parent=self
+                    )
                 return
         
         # Add panel
@@ -608,19 +682,24 @@ class LayoutBuilderDialog(tk.Toplevel):
         self._update_panel_list()
     
     def _update_panel_list(self):
-        """Update the panel listbox."""
+        """Update the panel listbox (excludes locked Labels panel)."""
         self.panel_listbox.delete(0, tk.END)
+        # Only show non-locked panels (user-created panels)
         for panel in self.panels:
+            if panel.locked:
+                continue  # Skip Labels panel
             span_info = f"{panel.rowspan}×{panel.colspan}" if (panel.rowspan > 1 or panel.colspan > 1) else "1×1"
             display = f"{panel.key} [{panel.row},{panel.col}] {span_info} ({panel.role})"
             self.panel_listbox.insert(tk.END, display)
     
     def _renumber_panels(self):
-        """Renumber all panels sequentially from 1 to N."""
-        for i, panel in enumerate(self.panels, start=1):
+        """Renumber all user panels sequentially from 1 to N (skips Labels)."""
+        # Only renumber non-locked panels
+        user_panels = [p for p in self.panels if not p.locked]
+        for i, panel in enumerate(user_panels, start=1):
             panel.key = f"panel_{i}"
         # Set next_panel_id to N+1
-        self.next_panel_id = len(self.panels) + 1
+        self.next_panel_id = len(user_panels) + 1
     
     def _on_panel_select(self, event):
         """Handle panel selection from listbox - load settings for editing."""
@@ -630,11 +709,13 @@ class LayoutBuilderDialog(tk.Toplevel):
             return
         
         idx = selection[0]
-        if idx >= len(self.panels):
+        # Get user panels only (excluding locked)
+        user_panels = [p for p in self.panels if not p.locked]
+        if idx >= len(user_panels):
             # Invalid index
             return
         
-        self.selected_panel = self.panels[idx]
+        self.selected_panel = user_panels[idx]
         
         # Load panel settings into controls for editing
         self.role_var.set(self.selected_panel.role)
@@ -713,7 +794,19 @@ class LayoutBuilderDialog(tk.Toplevel):
                 messagebox.showinfo("No Selection", "Please select a panel first.", parent=self)
                 return
             idx = selection[0]
-            self.selected_panel = self.panels[idx]
+            user_panels = [p for p in self.panels if not p.locked]
+            if idx >= len(user_panels):
+                return
+            self.selected_panel = user_panels[idx]
+        
+        # Check if trying to delete locked panel
+        if self.selected_panel.locked:
+            messagebox.showinfo(
+                "Cannot Delete",
+                "The Labels strip cannot be deleted.\nIt is auto-managed.",
+                parent=self
+            )
+            return
         
         # Confirm
         if not messagebox.askyesno(
@@ -735,8 +828,10 @@ class LayoutBuilderDialog(tk.Toplevel):
         self._update_panel_list()
     
     def _clear_all_panels(self):
-        """Clear all panels."""
-        if not self.panels:
+        """Clear all user panels (keeps Labels panel)."""
+        # Count only user panels
+        user_panels = [p for p in self.panels if not p.locked]
+        if not user_panels:
             return
         
         if not messagebox.askyesno(
@@ -746,10 +841,11 @@ class LayoutBuilderDialog(tk.Toplevel):
         ):
             return
         
-        self.panels.clear()
+        # Keep only locked panels (Labels)
+        self.panels = [p for p in self.panels if p.locked]
         self.selected_panel = None
         
-        # Renumber (will set next_panel_id = 1 since panels is empty)
+        # Renumber (will reset next_panel_id to 1)
         self._renumber_panels()
         
         self._redraw_grid()
@@ -797,7 +893,9 @@ class LayoutBuilderDialog(tk.Toplevel):
             ])
             
             # Set background color based on role (match grid colors)
-            if panel.role == "time":
+            if panel.role == "labels":
+                bg_color = self.COLOR_LABELS
+            elif panel.role == "time":
                 bg_color = self.COLOR_TIME
             else:
                 bg_color = self.COLOR_NOT_TIME
@@ -808,21 +906,25 @@ class LayoutBuilderDialog(tk.Toplevel):
             ax.set_yticks([])
             
             # Build info text to display in panel
-            info_lines = [panel.key]
-            
-            # Add variable information
-            if panel.role == "time":
-                info_lines.append(f"Y: {panel.y_column}")
-            else:  # not-time
-                info_lines.append(f"X: {panel.x_column}")
-                info_lines.append(f"Y: {panel.y_column_2}")
-            
-            # Add role
-            info_lines.append(f"({panel.role})")
-            
-            # Add span info if not 1x1
-            if panel.rowspan > 1 or panel.colspan > 1:
-                info_lines.append(f"[{panel.rowspan}×{panel.colspan}]")
+            if panel.role == "labels":
+                # Special rendering for Labels panel
+                info_lines = ["⏱️ Labels Strip", "(Auto-managed)"]
+            else:
+                info_lines = [panel.key]
+                
+                # Add variable information
+                if panel.role == "time":
+                    info_lines.append(f"Y: {panel.y_column}")
+                else:  # not-time
+                    info_lines.append(f"X: {panel.x_column}")
+                    info_lines.append(f"Y: {panel.y_column_2}")
+                
+                # Add role
+                info_lines.append(f"({panel.role})")
+                
+                # Add span info if not 1x1
+                if panel.rowspan > 1 or panel.colspan > 1:
+                    info_lines.append(f"[{panel.rowspan}×{panel.colspan}]")
             
             # Display text in center of panel
             info_text = "\n".join(info_lines)
@@ -896,12 +998,18 @@ class LayoutBuilderDialog(tk.Toplevel):
     
     def _validate_layout(self) -> bool:
         """Validate layout before accepting."""
-        if not self.panels:
-            messagebox.showwarning("No Panels", "Please create at least one panel.", parent=self)
+        # Check that user has created at least one data panel
+        user_panels = [p for p in self.panels if not p.locked]
+        if not user_panels:
+            messagebox.showwarning(
+                "No Data Panels",
+                "Please create at least one time-series or cross-plot panel.",
+                parent=self
+            )
             return False
         
-        # Check all panels have variables assigned
-        for panel in self.panels:
+        # Check all user panels have variables assigned
+        for panel in user_panels:
             if panel.role == "time" and not panel.y_column:
                 messagebox.showwarning(
                     "Incomplete Panel",

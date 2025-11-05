@@ -147,8 +147,8 @@ class ViewBuildMixin:
         """
         Build the Matplotlib figure and axes.
     
-        Grid mode only: user-defined grid; column 0 must be role='time'.
-        The labels strip is added as an extra bottom row in column 0 only.
+        Grid mode only: user-defined grid with Labels panel included in layout_spec.
+        The Labels strip position is read from layout_spec (role='labels').
         """
         import matplotlib.pyplot as plt
     
@@ -158,7 +158,7 @@ class ViewBuildMixin:
         
         if isinstance(self.layout_spec, dict):
             spec = self.layout_spec
-            nrows: int = int(spec.get("nrows", 1))
+            nrows: int = int(spec.get("nrows", 1))  # No +1 - Labels is already included
             ncols: int = int(spec.get("ncols", 1))
             areas = list(spec.get("areas", []))
             width_ratios = spec.get("width_ratios", None)
@@ -169,14 +169,15 @@ class ViewBuildMixin:
             if not areas:
                 raise ValueError("layout_spec.areas must be a non-empty list.")
     
-            # validate: at least one time axis in col 0
-            if not any(int(a.get("col", 0)) == 0 and str(a.get("role", "time")).lower() == "time" for a in areas):
-                raise ValueError("layout_spec must place at least one role='time' axis in column 0.")
-    
-            # Try to REUSE an empty row in col 0 for the strip; else append a thin row
-            reuse_row = self._find_reusable_strip_row(nrows, areas)
-            append_row = reuse_row is None
-            total_rows = nrows + (1 if append_row else 0)
+            # Validate: at least one time axis exists
+            if not any(str(a.get("role", "time")).lower() == "time" for a in areas):
+                raise ValueError("layout_spec must have at least one role='time' axis.")
+            
+            # Find Labels panel
+            labels_area = self._find_labels_area(areas)
+            if labels_area is None:
+                raise ValueError("layout_spec missing Labels panel (role='labels'). "
+                               "Ensure layout was created with Layout Wizard.")
     
             # height ratios
             if height_ratios is None:
@@ -186,24 +187,18 @@ class ViewBuildMixin:
                     raise ValueError("layout_spec.height_ratios must have length == nrows")
                 hrs = list(map(float, height_ratios))
     
-            if append_row:
-                # default to matching other rows; still allow override via layout_spec["strip_height_ratio"]
-                default_ratio = hrs[-1] if hrs else 1.0
-                strip_height_ratio = float(spec.get("strip_height_ratio", default_ratio))
-                hrs.append(strip_height_ratio)
-    
             # Lane gutter behavior unchanged (kept off unless user provides it)
             use_lane_gutter = isinstance(spec.get("time_lane_cbar_gutter", None), dict)
             use_constrained = not use_lane_gutter
     
             self.fig = plt.Figure(figsize=(14, 8), constrained_layout=use_constrained)
             gs = self.fig.add_gridspec(
-                total_rows, ncols,
+                nrows, ncols,  # Use nrows directly - no +1
                 width_ratios=width_ratios, height_ratios=hrs,
                 hspace=hspace, wspace=wspace,
             )
     
-            # Build data axes exactly at user-specified rows/cols (no remap)
+            # Build data axes from user-specified areas (skip Labels - handled separately)
             self.user_axes = {}
             self.axes_meta = {}
             self._time_axis_keys = set()
@@ -211,11 +206,16 @@ class ViewBuildMixin:
     
             for a in areas:
                 key = str(a["key"])
+                role = str(a.get("role", "time")).lower()
+                
+                # Skip Labels panel - will be created separately as strip_ax
+                if role == "labels":
+                    continue
+                
                 row = int(a.get("row", 0))
                 col = int(a.get("col", 0))
                 rowspan = int(a.get("rowspan", 1))
                 colspan = int(a.get("colspan", 1))
-                role = str(a.get("role", "time")).lower()
     
                 if row < 0 or row >= nrows or col < 0 or col >= ncols:
                     raise ValueError(f"Area {key} has out-of-bounds row/col.")
@@ -226,7 +226,7 @@ class ViewBuildMixin:
                                        "rowspan": rowspan, "colspan": colspan}
                 if role == "time":
                     self._time_axis_keys.add(key)
-                    if self._primary_time_key is None and col == 0:
+                    if self._primary_time_key is None:
                         self._primary_time_key = key
     
             # Ensure we have a primary time axis
@@ -240,9 +240,15 @@ class ViewBuildMixin:
                     if k != self._primary_time_key:
                         self.user_axes[k].sharex(primary_ax)
     
-            # Place strip: reuse row in col 0 if available, else append last row
-            strip_row = reuse_row if reuse_row is not None else (total_rows - 1)
-            self.strip_ax = self.fig.add_subplot(gs[strip_row, 0])
+            # Create Labels strip at position specified in layout_spec
+            labels_row = int(labels_area.get("row", nrows - 1))
+            labels_col = int(labels_area.get("col", 0))
+            labels_colspan = int(labels_area.get("colspan", 1))
+            
+            self.strip_ax = self.fig.add_subplot(gs[
+                labels_row,
+                labels_col:labels_col + labels_colspan
+            ])
             self.strip_ax.set_ylabel("Labels", fontsize=9)
             self.strip_ax.set_ylim(0, 1)
             self.strip_ax.set_yticks([])
@@ -341,6 +347,21 @@ class ViewBuildMixin:
     def _is_time_axes(self, ax) -> bool:
         return any(ax is self.user_axes[k] for k in self._time_axis_keys)
     
+    def _find_labels_area(self, areas: list) -> dict | None:
+        """
+        Find and return the Labels panel definition from layout areas.
+        
+        Args:
+            areas: List of area dictionaries from layout_spec
+            
+        Returns:
+            The Labels area dict if found, None otherwise
+        """
+        for area in areas:
+            if str(area.get("role", "")).lower() == "labels":
+                return area
+        return None
+    
     def _gate_press(self, event):
         # Remember where a potential drag started (time panels only; LMB)
         self._drag_active = False
@@ -425,35 +446,6 @@ class ViewBuildMixin:
         ttk.Label(parent, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(
             side=tk.BOTTOM, fill=tk.X
         )
-        
-    def _find_reusable_strip_row(self, nrows: int, areas: list[dict]) -> int | None:
-        """
-        Return a row index r (0..nrows-1) in column 0 that is *unused* in col 0
-        and comes *after* the last time-lane row. If none exists, return None.
-        """
-        occ_col0: set[int] = set()
-        last_time_row = -1
-        for a in areas:
-            col = int(a.get("col", 0))
-            row = int(a.get("row", 0))
-            rs  = int(a.get("rowspan", 1))
-            role = str(a.get("role", "time")).lower()
-            if col == 0:
-                # mark occupied rows in col 0
-                for r in range(row, row + rs):
-                    occ_col0.add(r)
-                if role == "time":
-                    last_time_row = max(last_time_row, row + rs - 1)
-    
-        if last_time_row < 0:
-            return None  # no time lane in col 0 (shouldn't happen)
-    
-        # first unused row in col 0 after the time lane
-        for r in range(last_time_row + 1, nrows):
-            if r not in occ_col0:
-                return r
-        return None
-        
     def _build_axes_from_layout(self, parent: ttk.Frame, layout: dict) -> None:
         """
         Build axes from a declarative layout:
