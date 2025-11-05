@@ -31,6 +31,10 @@ class StatsMixin:
             tree.tag_configure(iv.label, background=self.class_colors.get(iv.label, "#cccccc"))
 
         self._update_statistics()
+        
+        # Update sidebar scroll region (for scrollable right panel)
+        if hasattr(self, '_update_sidebar_scroll_region'):
+            self._update_sidebar_scroll_region()
 
     def _update_statistics(self) -> None:
         txt = self.stats_text  # type: ignore[assignment]

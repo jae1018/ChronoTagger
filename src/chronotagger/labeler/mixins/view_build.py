@@ -382,6 +382,53 @@ class ViewBuildMixin:
 
 
     def _build_sidebar(self, parent: ttk.Frame) -> None:
+        """
+        Build the right sidebar with scrollable content.
+        
+        Uses Canvas + Scrollbar pattern for smooth scrolling when content
+        exceeds available vertical space. All sidebar sections are placed
+        inside a scrollable interior frame.
+        """
+        # Create canvas for scrolling
+        self.sidebar_canvas = tk.Canvas(parent, borderwidth=0, highlightthickness=0)
+        
+        # Create scrollbar
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.sidebar_canvas.yview)
+        
+        # Create interior frame (holds all content)
+        self.sidebar_interior = ttk.Frame(self.sidebar_canvas)
+        
+        # Add interior frame to canvas
+        self.sidebar_canvas_window = self.sidebar_canvas.create_window(
+            (0, 0), window=self.sidebar_interior, anchor="nw"
+        )
+        
+        # Configure canvas scrolling
+        self.sidebar_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack canvas and scrollbar
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.sidebar_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Build all sections INSIDE the interior frame
+        self._build_sidebar_sections(self.sidebar_interior)
+        
+        # Bind events for scroll region updates
+        self.sidebar_interior.bind("<Configure>", self._on_sidebar_configure)
+        
+        # Bind mouse wheel for smooth scrolling
+        self._bind_sidebar_mousewheel()
+    
+    def _build_sidebar_sections(self, parent: ttk.Frame) -> None:
+        """
+        Build all sidebar sections (intervals, stats, actions, etc.).
+        
+        This is separated from _build_sidebar() to keep the scrolling
+        setup clean and modular.
+        
+        Args:
+            parent: The interior frame inside the canvas
+        """
         # Intervals list
         frame = ttk.LabelFrame(parent, text="Labeled Intervals", padding=5)
         frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
@@ -524,3 +571,65 @@ class ViewBuildMixin:
             share_key = area.get("sharex_with", self.primary_time_key or key)
             if share_key and share_key in created and share_key != key:
                 created[key].sharex(created[share_key])
+    
+    # ========== Sidebar Scrolling Helper Methods ==========
+    
+    def _on_sidebar_configure(self, event=None) -> None:
+        """
+        Update scroll region when sidebar interior frame size changes.
+        
+        This is called automatically whenever the interior frame is resized
+        (e.g., when intervals are added/deleted, window is resized, etc.).
+        """
+        self._update_sidebar_scroll_region()
+    
+    def _update_sidebar_scroll_region(self) -> None:
+        """
+        Update the canvas scroll region to match interior frame size.
+        
+        Call this manually if you programmatically change sidebar content
+        and need to update scrolling immediately.
+        """
+        if hasattr(self, 'sidebar_canvas') and hasattr(self, 'sidebar_interior'):
+            # Update scroll region to encompass all interior content
+            self.sidebar_canvas.configure(scrollregion=self.sidebar_canvas.bbox("all"))
+            
+            # Update canvas window width to match canvas width (prevents horizontal scrolling)
+            canvas_width = self.sidebar_canvas.winfo_width()
+            if canvas_width > 1:  # Only update if canvas has been rendered
+                self.sidebar_canvas.itemconfig(self.sidebar_canvas_window, width=canvas_width)
+    
+    def _bind_sidebar_mousewheel(self) -> None:
+        """
+        Bind mouse wheel to scroll the sidebar canvas.
+        
+        Supports Windows, Mac, and Linux scroll events.
+        Only scrolls when mouse is over the sidebar.
+        """
+        def on_mouse_wheel(event):
+            """Handle mouse wheel scroll events."""
+            # Determine scroll direction (cross-platform)
+            if event.num == 5 or event.delta < 0:  # Scroll down
+                self.sidebar_canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:  # Scroll up
+                self.sidebar_canvas.yview_scroll(-1, "units")
+        
+        def on_enter(event):
+            """Enable scrolling when mouse enters sidebar."""
+            # Bind mouse wheel events (cross-platform)
+            self.sidebar_canvas.bind_all("<MouseWheel>", on_mouse_wheel)  # Windows/Mac
+            self.sidebar_canvas.bind_all("<Button-4>", on_mouse_wheel)    # Linux scroll up
+            self.sidebar_canvas.bind_all("<Button-5>", on_mouse_wheel)    # Linux scroll down
+        
+        def on_leave(event):
+            """Disable scrolling when mouse leaves sidebar."""
+            # Unbind mouse wheel events to avoid interfering with plot zooming
+            self.sidebar_canvas.unbind_all("<MouseWheel>")
+            self.sidebar_canvas.unbind_all("<Button-4>")
+            self.sidebar_canvas.unbind_all("<Button-5>")
+        
+        # Bind enter/leave events to canvas and interior frame
+        self.sidebar_canvas.bind("<Enter>", on_enter)
+        self.sidebar_canvas.bind("<Leave>", on_leave)
+        self.sidebar_interior.bind("<Enter>", on_enter)
+        self.sidebar_interior.bind("<Leave>", on_leave)
