@@ -470,8 +470,8 @@ class ViewBuildMixin:
         ttk.Button(actions, text="Label Unassigned...",
                    command=self._open_label_unassigned_dialog).pack(fill=tk.X, pady=2)
         ttk.Separator(actions, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
-        ttk.Button(actions, text="Clear All Intervals",
-                   command=self._clear_all_intervals).pack(fill=tk.X, pady=2)
+        ttk.Button(actions, text="Clear Intervals...",
+                   command=self._open_clear_intervals_dialog).pack(fill=tk.X, pady=2)
 
         # Files
         files = ttk.LabelFrame(parent, text="File Operations", padding=5)

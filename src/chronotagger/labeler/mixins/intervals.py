@@ -266,21 +266,21 @@ class IntervalsMixin:
         # Create modal dialog window
         dialog = tk.Toplevel(self.root)
         dialog.title("Label Unassigned Points")
-        dialog.geometry("400x350")
+        dialog.geometry("420x380")
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.resizable(False, False)
         
         # Main content frame
-        content = ttk.Frame(dialog, padding=15)
+        content = ttk.Frame(dialog, padding=20)
         content.pack(fill=tk.BOTH, expand=True)
         
         # Instruction label
         ttk.Label(
             content,
             text="Select label for unassigned points:",
-            font=("TkDefaultFont", 10, "bold")
-        ).pack(pady=(0, 10))
+            font=("TkDefaultFont", 11, "bold")
+        ).pack(pady=(0, 12))
         
         # Listbox with scrollbar frame
         listbox_frame = ttk.Frame(content)
@@ -295,9 +295,11 @@ class IntervalsMixin:
             listbox_frame,
             yscrollcommand=scrollbar.set,
             font=("TkDefaultFont", 10),
-            height=8,
+            height=10,
             selectmode=tk.SINGLE,
-            activestyle="dotbox"
+            activestyle="dotbox",
+            relief=tk.SOLID,
+            borderwidth=1
         )
         listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=listbox.yview)
@@ -316,29 +318,35 @@ class IntervalsMixin:
         
         # Info frame for time range and gap count
         info_frame = ttk.Frame(content)
-        info_frame.pack(fill=tk.X, pady=(0, 15))
+        info_frame.pack(fill=tk.X, pady=(0, 20))
         
         # Time range display
-        time_range_text = f"Time range: {self.t0.strftime('%Y-%m-%d %H:%M:%S')} → {self.t1.strftime('%Y-%m-%d %H:%M:%S')}"
+        ttk.Label(
+            info_frame,
+            text="Time range:",
+            font=("TkDefaultFont", 9, "bold")
+        ).pack(anchor=tk.W)
+        
+        time_range_text = f"{self.t0.strftime('%Y-%m-%d %H:%M:%S')} → {self.t1.strftime('%Y-%m-%d %H:%M:%S')}"
         ttk.Label(
             info_frame,
             text=time_range_text,
             font=("TkDefaultFont", 9),
-            foreground="#666"
-        ).pack(anchor=tk.W)
+            foreground="#555"
+        ).pack(anchor=tk.W, padx=(10, 0), pady=(2, 8))
         
         # Gap count display
         gap_count_text = f"Will create {len(gaps)} interval(s)"
         ttk.Label(
             info_frame,
             text=gap_count_text,
-            font=("TkDefaultFont", 9, "bold"),
+            font=("TkDefaultFont", 10, "bold"),
             foreground="#0066cc"
-        ).pack(anchor=tk.W, pady=(5, 0))
+        ).pack(anchor=tk.W)
         
         # Button frame
         button_frame = ttk.Frame(content)
-        button_frame.pack()
+        button_frame.pack(pady=(5, 0))
         
         def on_ok():
             """Handle OK button: assign gaps to selected label."""
@@ -362,18 +370,18 @@ class IntervalsMixin:
             button_frame,
             text="OK",
             command=on_ok,
-            width=10
+            width=15
         )
-        ok_button.pack(side=tk.LEFT, padx=5)
+        ok_button.pack(side=tk.LEFT, padx=8)
         
         # Cancel button
         cancel_button = ttk.Button(
             button_frame,
             text="Cancel",
             command=on_cancel,
-            width=10
+            width=15
         )
-        cancel_button.pack(side=tk.LEFT, padx=5)
+        cancel_button.pack(side=tk.LEFT, padx=8)
         
         # Keyboard shortcuts
         dialog.bind("<Return>", lambda e: on_ok())
@@ -384,9 +392,229 @@ class IntervalsMixin:
         
         # Center dialog on parent window
         dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (dialog.winfo_width() // 2)
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
+        
+        # Calculate position relative to root window
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_width = self.root.winfo_width()
+        root_height = self.root.winfo_height()
+        
+        dialog_width = dialog.winfo_reqwidth()
+        dialog_height = dialog.winfo_reqheight()
+        
+        x = root_x + (root_width - dialog_width) // 2
+        y = root_y + (root_height - dialog_height) // 2
+        
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        
+        # Bring dialog to front
+        dialog.lift()
+        dialog.focus_set()
+    
+    def _show_clear_confirmation(
+        self, t0: pd.Timestamp, t1: pd.Timestamp, mode_name: str
+    ) -> None:
+        """
+        Show confirmation dialog with detailed breakdown of affected intervals.
+        
+        Displays warning message with:
+        - Time range being cleared
+        - Count of intervals that will be deleted
+        - Count of intervals that will be truncated
+        - Count of intervals that will be split
+        - Reminder about undo support
+        
+        Args:
+            t0: Start of clear range
+            t1: End of clear range
+            mode_name: Descriptive name of the mode (for display)
+        """
+        import tkinter as tk
+        from tkinter import ttk
+        
+        # Analyze what will be affected
+        analysis = self._analyze_intervals_in_range(t0, t1)
+        
+        # If nothing will be affected, inform user
+        if analysis['total_affected'] == 0:
+            messagebox.showinfo(
+                "No Intervals to Clear",
+                f"The selected range:\n{t0.strftime('%Y-%m-%d %H:%M:%S')} → {t1.strftime('%Y-%m-%d %H:%M:%S')}\n\ncontains no intervals."
+            )
+            return
+        
+        # Create confirmation dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Confirm Clear Intervals")
+        dialog.geometry("400x280")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        # Main content frame
+        content = ttk.Frame(dialog, padding=20)
+        content.pack(fill=tk.BOTH, expand=True)
+        
+        # Warning icon and title
+        title_frame = ttk.Frame(content)
+        title_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        ttk.Label(
+            title_frame,
+            text="⚠️",
+            font=("TkDefaultFont", 24)
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        
+        ttk.Label(
+            title_frame,
+            text="Warning",
+            font=("TkDefaultFont", 14, "bold")
+        ).pack(side=tk.LEFT)
+        
+        # Separator
+        ttk.Separator(content, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 15))
+        
+        # Mode label
+        ttk.Label(
+            content,
+            text=f"Mode: {mode_name}",
+            font=("TkDefaultFont", 9, "bold")
+        ).pack(anchor=tk.W, pady=(0, 5))
+        
+        # Time range display
+        ttk.Label(
+            content,
+            text="Time range:",
+            font=("TkDefaultFont", 9, "bold")
+        ).pack(anchor=tk.W)
+        
+        range_text = f"{t0.strftime('%Y-%m-%d %H:%M:%S')} → {t1.strftime('%Y-%m-%d %H:%M:%S')}"
+        ttk.Label(
+            content,
+            text=range_text,
+            font=("TkDefaultFont", 9)
+        ).pack(anchor=tk.W, padx=(10, 0), pady=(2, 10))
+        
+        # Affected intervals breakdown
+        ttk.Label(
+            content,
+            text=f"This will affect {analysis['total_affected']} interval(s):",
+            font=("TkDefaultFont", 9, "bold")
+        ).pack(anchor=tk.W, pady=(0, 5))
+        
+        # Breakdown details
+        details_frame = ttk.Frame(content)
+        details_frame.pack(fill=tk.X, padx=(10, 0))
+        
+        if analysis['to_delete'] > 0:
+            ttk.Label(
+                details_frame,
+                text=f"• {analysis['to_delete']} will be deleted (fully inside range)",
+                font=("TkDefaultFont", 9)
+            ).pack(anchor=tk.W, pady=2)
+        
+        if analysis['to_truncate'] > 0:
+            ttk.Label(
+                details_frame,
+                text=f"• {analysis['to_truncate']} will be truncated (partially overlap)",
+                font=("TkDefaultFont", 9)
+            ).pack(anchor=tk.W, pady=2)
+        
+        if analysis['to_split'] > 0:
+            ttk.Label(
+                details_frame,
+                text=f"• {analysis['to_split']} will be split (spans entire range)",
+                font=("TkDefaultFont", 9)
+            ).pack(anchor=tk.W, pady=2)
+        
+        # Undo reminder
+        ttk.Label(
+            content,
+            text="This action can be undone using the 'Undo' button in the top bar.",
+            font=("TkDefaultFont", 9, "italic"),
+            foreground="#0066cc"
+        ).pack(anchor=tk.W, pady=(15, 0))
+        
+        # Confirmation question
+        ttk.Label(
+            content,
+            text="Are you sure?",
+            font=("TkDefaultFont", 10, "bold")
+        ).pack(pady=(15, 15))
+        
+        # Button frame
+        button_frame = ttk.Frame(content)
+        button_frame.pack()
+        
+        def on_confirm():
+            """Execute the clear operation."""
+            dialog.destroy()
+            
+            # Perform the clear operation
+            results = self._clear_intervals_in_range(t0, t1)
+            
+            # Build status message
+            parts = []
+            if results['deleted'] > 0:
+                parts.append(f"{results['deleted']} deleted")
+            if results['truncated'] > 0:
+                parts.append(f"{results['truncated']} truncated")
+            if results['split'] > 0:
+                parts.append(f"{results['split']} split")
+            
+            status_msg = "Cleared intervals: " + ", ".join(parts)
+            self.status_var.set(status_msg)  # type: ignore[union-attr]
+            
+            # Update UI
+            self._update_plot()
+            self._maybe_autosave()
+        
+        def on_cancel():
+            """Close dialog without action."""
+            dialog.destroy()
+        
+        # Yes button (styled as warning)
+        yes_button = ttk.Button(
+            button_frame,
+            text="Yes, Clear",
+            command=on_confirm,
+            width=12
+        )
+        yes_button.pack(side=tk.LEFT, padx=5)
+        
+        # Cancel button
+        cancel_button = ttk.Button(
+            button_frame,
+            text="Cancel",
+            command=on_cancel,
+            width=12
+        )
+        cancel_button.pack(side=tk.LEFT, padx=5)
+        
+        # Keyboard shortcuts
+        dialog.bind("<Escape>", lambda e: on_cancel())
+        # Note: Don't bind Enter to avoid accidental confirmation
+        
+        # Center dialog on parent
+        dialog.update_idletasks()
+        
+        # Calculate position relative to root window
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_width = self.root.winfo_width()
+        root_height = self.root.winfo_height()
+        
+        dialog_width = dialog.winfo_reqwidth()
+        dialog_height = dialog.winfo_reqheight()
+        
+        x = root_x + (root_width - dialog_width) // 2
+        y = root_y + (root_height - dialog_height) // 2
+        
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        
+        # Bring dialog to front
+        dialog.lift()
+        dialog.focus_set()
     
     def _assign_gaps_to_label(self, gaps: List[Tuple[pd.Timestamp, pd.Timestamp]], label: str) -> None:
         """
@@ -407,6 +635,356 @@ class IntervalsMixin:
         self.status_var.set(f"Assigned {len(gaps)} interval(s) to {label}")  # type: ignore[union-attr]
         self._update_plot()
         self._maybe_autosave()
+    
+    def _analyze_intervals_in_range(
+        self, t0: pd.Timestamp, t1: pd.Timestamp
+    ) -> dict:
+        """
+        Analyze how intervals will be affected by clearing range [t0, t1].
+        
+        Categorizes intervals by how they overlap with the clear range:
+        - Fully inside: will be deleted
+        - Left overlap: will be truncated (keep left part)
+        - Right overlap: will be truncated (keep right part)
+        - Spanning: will be split (keep left and right parts)
+        - No overlap: will be kept
+        
+        Args:
+            t0: Start of range to clear
+            t1: End of range to clear
+        
+        Returns:
+            Dictionary with:
+            - 'to_delete': count of intervals fully inside range
+            - 'to_truncate': count of intervals partially overlapping
+            - 'to_split': count of intervals spanning entire range
+            - 'total_affected': total count of affected intervals
+        """
+        to_delete = 0
+        to_truncate = 0
+        to_split = 0
+        
+        for iv in self.intervals:
+            # No overlap - skip
+            if iv.end <= t0 or iv.start >= t1:
+                continue
+            
+            # Fully inside range - will be deleted
+            if iv.start >= t0 and iv.end <= t1:
+                to_delete += 1
+                continue
+            
+            # Left overlap - will be truncated
+            if iv.start < t0 and iv.end > t0 and iv.end <= t1:
+                to_truncate += 1
+                continue
+            
+            # Right overlap - will be truncated
+            if iv.start >= t0 and iv.start < t1 and iv.end > t1:
+                to_truncate += 1
+                continue
+            
+            # Spans entire range - will be split
+            if iv.start < t0 and iv.end > t1:
+                to_split += 1
+                continue
+        
+        total_affected = to_delete + to_truncate + to_split
+        
+        return {
+            'to_delete': to_delete,
+            'to_truncate': to_truncate,
+            'to_split': to_split,
+            'total_affected': total_affected
+        }
+    
+    def _clear_intervals_in_range(
+        self, t0: pd.Timestamp, t1: pd.Timestamp
+    ) -> dict:
+        """
+        Clear or truncate intervals in the specified range [t0, t1].
+        
+        Handles five overlap cases:
+        1. No overlap: Keep interval unchanged
+        2. Fully inside: Delete interval
+        3. Left overlap: Truncate to keep left part (before t0)
+        4. Right overlap: Truncate to keep right part (after t1)
+        5. Spanning: Split into left and right parts (before t0 and after t1)
+        
+        All operations use commands for proper undo/redo support.
+        
+        Args:
+            t0: Start of range to clear
+            t1: End of range to clear
+        
+        Returns:
+            Dictionary with counts: {'deleted': N, 'truncated': M, 'split': K}
+        """
+        deleted = 0
+        truncated = 0
+        split = 0
+        
+        # Snapshot intervals (commands will modify the list)
+        intervals_to_process = list(self.intervals)
+        
+        for iv in intervals_to_process:
+            # Case 1: No overlap - skip
+            if iv.end <= t0 or iv.start >= t1:
+                continue
+            
+            # Case 2: Fully inside range - delete
+            if iv.start >= t0 and iv.end <= t1:
+                self._execute_command(DeleteIntervalCommand(self, iv))
+                deleted += 1
+                continue
+            
+            # Case 3: Left overlap - keep left part (truncate at t0)
+            if iv.start < t0 and iv.end > t0 and iv.end <= t1:
+                self._execute_command(ResizeIntervalCommand(self, iv, iv.start, t0))
+                truncated += 1
+                continue
+            
+            # Case 4: Right overlap - keep right part (truncate at t1)
+            if iv.start >= t0 and iv.start < t1 and iv.end > t1:
+                self._execute_command(ResizeIntervalCommand(self, iv, t1, iv.end))
+                truncated += 1
+                continue
+            
+            # Case 5: Spans entire range - split into left + right parts
+            if iv.start < t0 and iv.end > t1:
+                # Delete original interval
+                self._execute_command(DeleteIntervalCommand(self, iv))
+                
+                # Add left part (before clear range)
+                left_interval = Interval(iv.start, t0, iv.label, iv.notes)
+                self._execute_command(AddIntervalCommand(self, left_interval))
+                
+                # Add right part (after clear range)
+                right_interval = Interval(t1, iv.end, iv.label, iv.notes)
+                self._execute_command(AddIntervalCommand(self, right_interval))
+                
+                split += 1
+                continue
+        
+        return {
+            'deleted': deleted,
+            'truncated': truncated,
+            'split': split
+        }
+    
+    def _open_clear_intervals_dialog(self) -> None:
+        """
+        Open dialog to select range for clearing intervals.
+        
+        Presents three options:
+        1. Current time range (default)
+        2. Custom time range (user enters start/end)
+        3. Entire dataset
+        
+        After range selection, shows confirmation dialog with details.
+        """
+        import tkinter as tk
+        from tkinter import ttk
+        
+        # Check if any intervals exist
+        if not self.intervals:
+            messagebox.showinfo("No Intervals", "There are no intervals to clear.")
+            return
+        
+        # Create modal dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Clear Intervals")
+        dialog.geometry("380x250")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        # Main content frame
+        content = ttk.Frame(dialog, padding=15)
+        content.pack(fill=tk.BOTH, expand=True)
+        
+        # Title label
+        ttk.Label(
+            content,
+            text="Select range to clear intervals:",
+            font=("TkDefaultFont", 10, "bold")
+        ).pack(pady=(0, 15))
+        
+        # Radio button variable
+        range_var = tk.StringVar(value="current")
+        
+        # Option 1: Current time range
+        current_frame = ttk.Frame(content)
+        current_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Radiobutton(
+            current_frame,
+            text="Current time range",
+            variable=range_var,
+            value="current"
+        ).pack(anchor=tk.W)
+        
+        current_range_text = f"{self.t0.strftime('%Y-%m-%d %H:%M:%S')} → {self.t1.strftime('%Y-%m-%d %H:%M:%S')}"
+        ttk.Label(
+            current_frame,
+            text=f"    {current_range_text}",
+            font=("TkDefaultFont", 9),
+            foreground="#666"
+        ).pack(anchor=tk.W, padx=(20, 0))
+        
+        # Option 2: Custom time range
+        custom_frame = ttk.Frame(content)
+        custom_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Radiobutton(
+            custom_frame,
+            text="Custom time range",
+            variable=range_var,
+            value="custom"
+        ).pack(anchor=tk.W)
+        
+        # Custom entry fields
+        custom_entry_frame = ttk.Frame(custom_frame)
+        custom_entry_frame.pack(fill=tk.X, padx=(20, 0), pady=(5, 0))
+        
+        ttk.Label(custom_entry_frame, text="From:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        from_entry = ttk.Entry(custom_entry_frame, width=30)
+        from_entry.grid(row=0, column=1, sticky=tk.W, padx=(5, 0), pady=2)
+        from_entry.insert(0, str(self.t0))
+        
+        ttk.Label(custom_entry_frame, text="To:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        to_entry = ttk.Entry(custom_entry_frame, width=30)
+        to_entry.grid(row=1, column=1, sticky=tk.W, padx=(5, 0), pady=2)
+        to_entry.insert(0, str(self.t1))
+        
+        # Initially disable custom entries
+        from_entry.config(state="disabled")
+        to_entry.config(state="disabled")
+        
+        def on_range_change():
+            """Enable/disable custom entries based on selection."""
+            if range_var.get() == "custom":
+                from_entry.config(state="normal")
+                to_entry.config(state="normal")
+            else:
+                from_entry.config(state="disabled")
+                to_entry.config(state="disabled")
+        
+        # Bind radio button changes
+        range_var.trace('w', lambda *args: on_range_change())
+        
+        # Option 3: Entire dataset
+        entire_frame = ttk.Frame(content)
+        entire_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Radiobutton(
+            entire_frame,
+            text="Entire dataset",
+            variable=range_var,
+            value="entire"
+        ).pack(anchor=tk.W)
+        
+        ttk.Label(
+            entire_frame,
+            text="    (clears all intervals in the dataset)",
+            font=("TkDefaultFont", 9),
+            foreground="#666"
+        ).pack(anchor=tk.W, padx=(20, 0))
+        
+        # Button frame
+        button_frame = ttk.Frame(content)
+        button_frame.pack(pady=(20, 0))
+        
+        def on_next():
+            """Validate selection and show confirmation dialog."""
+            mode = range_var.get()
+            
+            if mode == "current":
+                t0, t1 = self.t0, self.t1
+                mode_name = "Current Time Range"
+            
+            elif mode == "custom":
+                try:
+                    t0 = pd.Timestamp(from_entry.get())
+                    t1 = pd.Timestamp(to_entry.get())
+                    
+                    if t1 <= t0:
+                        messagebox.showerror(
+                            "Invalid Range",
+                            "End time must be after start time."
+                        )
+                        return
+                    
+                    mode_name = "Custom Range"
+                
+                except Exception as e:
+                    messagebox.showerror(
+                        "Invalid Timestamps",
+                        f"Please enter valid timestamps.\n\nError: {str(e)}"
+                    )
+                    return
+            
+            elif mode == "entire":
+                if len(self.df.index) > 0:
+                    t0 = self.df.index.min()
+                    t1 = self.df.index.max()
+                else:
+                    t0, t1 = self.t0, self.t1
+                mode_name = "Entire Dataset"
+            
+            else:
+                return
+            
+            # Close this dialog and show confirmation
+            dialog.destroy()
+            self._show_clear_confirmation(t0, t1, mode_name)
+        
+        def on_cancel():
+            """Close dialog without action."""
+            dialog.destroy()
+        
+        # Next button
+        next_button = ttk.Button(
+            button_frame,
+            text="Next",
+            command=on_next,
+            width=10
+        )
+        next_button.pack(side=tk.LEFT, padx=5)
+        
+        # Cancel button
+        cancel_button = ttk.Button(
+            button_frame,
+            text="Cancel",
+            command=on_cancel,
+            width=10
+        )
+        cancel_button.pack(side=tk.LEFT, padx=5)
+        
+        # Keyboard shortcuts
+        dialog.bind("<Return>", lambda e: on_next())
+        dialog.bind("<Escape>", lambda e: on_cancel())
+        
+        # Center dialog on parent
+        dialog.update_idletasks()
+        
+        # Calculate position relative to root window
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_width = self.root.winfo_width()
+        root_height = self.root.winfo_height()
+        
+        dialog_width = dialog.winfo_reqwidth()
+        dialog_height = dialog.winfo_reqheight()
+        
+        x = root_x + (root_width - dialog_width) // 2
+        y = root_y + (root_height - dialog_height) // 2
+        
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        
+        # Bring dialog to front
+        dialog.lift()
+        dialog.focus_set()
         
     def _carve_existing_for_new_span(self, s: pd.Timestamp, e: pd.Timestamp) -> None:
         """
