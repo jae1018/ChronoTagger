@@ -254,8 +254,7 @@ class LayoutBuilderDialog(tk.Toplevel):
         edit_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Button(edit_frame, text="Update Panel", command=self._update_selected_panel).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(edit_frame, text="Delete Panel", command=self._delete_selected_panel).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(edit_frame, text="Clear Selection", command=self._clear_selection).pack(fill=tk.X)
+        ttk.Button(edit_frame, text="Delete Panel", command=self._delete_selected_panel).pack(fill=tk.X)
         
         # Bottom buttons
         bottom_frame = ttk.Frame(right)
@@ -607,6 +606,13 @@ class LayoutBuilderDialog(tk.Toplevel):
             display = f"{panel.key} [{panel.row},{panel.col}] {span_info} ({panel.role})"
             self.panel_listbox.insert(tk.END, display)
     
+    def _renumber_panels(self):
+        """Renumber all panels sequentially from 1 to N."""
+        for i, panel in enumerate(self.panels, start=1):
+            panel.key = f"panel_{i}"
+        # Set next_panel_id to N+1
+        self.next_panel_id = len(self.panels) + 1
+    
     def _on_panel_select(self, event):
         """Handle panel selection from listbox - load settings for editing."""
         selection = self.panel_listbox.curselection()
@@ -636,26 +642,6 @@ class LayoutBuilderDialog(tk.Toplevel):
                 self.y2_var.set(self.selected_panel.y_column_2)
         
         # Redraw to highlight selected panel
-        self._redraw_grid()
-    
-    def _clear_selection(self):
-        """Clear panel selection and reset controls to 'add' mode."""
-        self.selected_panel = None
-        self.panel_listbox.selection_clear(0, tk.END)
-        
-        # Reset controls to defaults
-        self.role_var.set("time")
-        self._rebuild_vars_ui()
-        
-        # Clear variable selections
-        if hasattr(self, 'y_var'):
-            self.y_var.set('')
-        if hasattr(self, 'x_var'):
-            self.x_var.set('')
-        if hasattr(self, 'y2_var'):
-            self.y2_var.set('')
-        
-        # Redraw without highlight
         self._redraw_grid()
     
     def _update_selected_panel(self):
@@ -732,6 +718,9 @@ class LayoutBuilderDialog(tk.Toplevel):
         self.panels.remove(self.selected_panel)
         self.selected_panel = None
         
+        # Renumber all panels sequentially
+        self._renumber_panels()
+        
         # Redraw
         self._redraw_grid()
         self._update_panel_list()
@@ -750,7 +739,9 @@ class LayoutBuilderDialog(tk.Toplevel):
         
         self.panels.clear()
         self.selected_panel = None
-        self.next_panel_id = 1
+        
+        # Renumber (will set next_panel_id = 1 since panels is empty)
+        self._renumber_panels()
         
         self._redraw_grid()
         self._update_panel_list()
