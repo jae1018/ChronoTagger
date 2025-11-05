@@ -58,30 +58,32 @@ class ViewBuildMixin:
         from tkinter import filedialog  # ensure Tk is initialized on Windows
         _ = filedialog
     
-        # ── Time Range (two-row layout, button centered on the right) ──────────────
+        # ── Time Range (two-row layout with ×2/÷2 buttons) ──────────────────────────
         rng = ttk.LabelFrame(parent, text="Time Range", padding=6)
         rng.pack(side=tk.LEFT, padx=5)
     
-        # Make the entry column stretchy so entries can grow
+        # Make the entry column stretchy
         rng.grid_columnconfigure(1, weight=1)
     
-        # Row 0: Start
+        # Row 0: Start + Update Window button
         ttk.Label(rng, text="Start:").grid(row=0, column=0, padx=(2, 6), pady=2, sticky="w")
         self.start_time_entry = ttk.Entry(rng, width=22)
         self.start_time_entry.insert(0, str(self.t0))
         self.start_time_entry.grid(row=0, column=1, padx=(0, 6), pady=2, sticky="ew")
+        ttk.Button(rng, text="Update Window", command=self._update_time_window)\
+            .grid(row=0, column=2, padx=(8, 2), pady=2)
     
-        # Row 1: End
+        # Row 1: End + ×2/÷2 buttons
         ttk.Label(rng, text="End:").grid(row=1, column=0, padx=(2, 6), pady=2, sticky="w")
         self.end_time_entry = ttk.Entry(rng, width=22)
         self.end_time_entry.insert(0, str(self.t1))
         self.end_time_entry.grid(row=1, column=1, padx=(0, 6), pady=2, sticky="ew")
-    
-        # Right column: a tiny container so the button sits vertically centered
-        right_col = ttk.Frame(rng)
-        right_col.grid(row=0, column=2, rowspan=2, padx=(8, 2), sticky="ns")
-        ttk.Button(right_col, text="Update Window", command=self._update_time_window)\
-            .pack(expand=True)  # expand centers it between Start/End
+        
+        # ×2/÷2 buttons in a small frame
+        win_btn_frame = ttk.Frame(rng)
+        win_btn_frame.grid(row=1, column=2, padx=(8, 2), pady=2)
+        ttk.Button(win_btn_frame, text="×2", width=4, command=self._double_time_window).pack(side=tk.LEFT, padx=2)
+        ttk.Button(win_btn_frame, text="÷2", width=4, command=self._halve_time_window).pack(side=tk.LEFT, padx=2)
     
         # ── Navigation (centered) ─────────────────────────────────────────────────
         nav = ttk.LabelFrame(parent, text="Navigation", padding=5)

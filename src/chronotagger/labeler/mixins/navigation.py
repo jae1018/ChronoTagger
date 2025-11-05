@@ -98,3 +98,67 @@ class NavigationMixin:
         base = self._parse_step_entry()
         # Avoid sub-second steps
         self._set_step(base / 2)
+    
+    def _double_time_window(self) -> None:
+        """
+        Double the time window size, centering on current window.
+        If bounds are hit, adjust both ends while preserving the new window size.
+        """
+        current_window = self.t1 - self.t0
+        new_window = current_window * 2
+        
+        # Clamp to max window
+        new_window = min(new_window, self.max_window)
+        
+        # Try to center on current window
+        center = self.t0 + current_window / 2
+        half = new_window / 2
+        
+        new_t0 = center - half
+        new_t1 = center + half
+        
+        # Clamp to data bounds while preserving window size
+        if new_t0 < self.data_start:
+            new_t0 = self.data_start
+            new_t1 = new_t0 + new_window
+        if new_t1 > self.data_end:
+            new_t1 = self.data_end
+            new_t0 = new_t1 - new_window
+        
+        # Apply
+        self.t0, self.t1 = new_t0, new_t1
+        self.window = self.t1 - self.t0
+        self._time_range_dirty = True
+        self._sync_entries_and_plot()
+    
+    def _halve_time_window(self) -> None:
+        """
+        Halve the time window size, centering on current window.
+        If bounds are hit, adjust both ends while preserving the new window size.
+        """
+        current_window = self.t1 - self.t0
+        new_window = current_window / 2
+        
+        # Clamp to min window
+        new_window = max(new_window, self.min_window)
+        
+        # Try to center on current window
+        center = self.t0 + current_window / 2
+        half = new_window / 2
+        
+        new_t0 = center - half
+        new_t1 = center + half
+        
+        # Clamp to data bounds while preserving window size
+        if new_t0 < self.data_start:
+            new_t0 = self.data_start
+            new_t1 = new_t0 + new_window
+        if new_t1 > self.data_end:
+            new_t1 = self.data_end
+            new_t0 = new_t1 - new_window
+        
+        # Apply
+        self.t0, self.t1 = new_t0, new_t1
+        self.window = self.t1 - self.t0
+        self._time_range_dirty = True
+        self._sync_entries_and_plot()
