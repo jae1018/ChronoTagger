@@ -432,17 +432,22 @@ class EventsMixin:
     def _on_key_press(self, event) -> None:
         key = event.keysym
 
-        # ---- Escape cancels two-click preview / current selection ----
+        # ---- Escape cancels ANY active selection/preview ----
         if key == "Escape":
-            if getattr(self, "_pick_anchor_ts", None) is not None or self.current_selection is not None:
-                self._clear_two_click_state()
-                
-                # Clear point highlights
-                if hasattr(self, '_clear_selected_point_highlights'):
-                    self._clear_selected_point_highlights()
-                
+            # Check if we have any active selection or preview
+            has_selection = (
+                getattr(self, "_pick_anchor_ts", None) is not None or 
+                getattr(self, "current_selection", None) is not None or
+                getattr(self, "current_spans", []) or
+                getattr(self, "_commit_spans", []) or
+                getattr(self, "_two_click_active", False)
+            )
+            
+            if has_selection:
+                # Clear all selection states
+                self._cancel_active_selection()
                 if self.status_var is not None:
-                    self.status_var.set("Selection canceled")
+                    self.status_var.set("Selection canceled (Escape)")
                 return
 
         # ---- Focus-aware early exit -------------------------------------------
@@ -639,15 +644,20 @@ class EventsMixin:
     
         btn = getattr(event, "button", None)
     
-        # Right-click cancels
+        # Right-click cancels - use the new comprehensive cancellation system
         if btn == 3:
-            self._two_click_active = False
-            self._two_click_t0 = None
-            self._two_click_last_x = None
-            self._hide_time_overlays()
-            self.current_selection = None
-            # also clear strip previews
-            self._draw_strip_preview_spans([])
+            # Check if we have any active selection (not just two-click)
+            has_selection = (
+                getattr(self, "_pick_anchor_ts", None) is not None or 
+                getattr(self, "current_selection", None) is not None or
+                getattr(self, "current_spans", []) or
+                getattr(self, "_commit_spans", [])
+            )
+            
+            if has_selection:
+                self._cancel_active_selection()
+                if self.status_var is not None:
+                    self.status_var.set("Selection canceled")
             return
     
         if btn != 1:
@@ -1236,6 +1246,63 @@ class EventsMixin:
         self._two_click_t0 = None
         self._two_click_last_x = None
         self._hide_time_overlays()
+
+    def _cancel_active_selection(self) -> None:
+        """
+        Cancel any active selection or preview state.
+        Clears all selection types: two-click, box selection, and previews.
+        """
+        # Clear two-click state
+        self._clear_two_click_state()
+        
+        # Clear all selection states
+        self.current_selection = None
+        if hasattr(self, 'current_spans'):
+            self.current_spans.clear()
+        if hasattr(self, '_commit_spans'):
+            self._commit_spans.clear()
+        
+        # Clear point highlights
+        if hasattr(self, '_clear_selected_point_highlights'):
+            self._clear_selected_point_highlights()
+        
+        # Hide time overlays
+        self._hide_time_overlays()
+        
+        # Clear strip previews
+        self._draw_strip_preview_spans([])
+        
+        # Update strip display
+        self._update_strip()
+        
+        # Refresh display
+        if hasattr(self, 'canvas') and self.canvas is not None:
+            self.canvas.draw_idle()
+    
+    def _on_right_click_cancel(self, event) -> None:
+        """
+        Handle right-click to cancel active selections.
+        Works on any axis (time axes, position axes, strip).
+        """
+        if getattr(event, "button", None) != 3:  # Only handle right-click
+            return
+            
+        # Check if we have any active selection or preview
+        has_selection = (
+            getattr(self, "_pick_anchor_ts", None) is not None or 
+            getattr(self, "current_selection", None) is not None or
+            getattr(self, "current_spans", []) or
+            getattr(self, "_commit_spans", []) or
+            getattr(self, "_two_click_active", False)
+        )
+        
+        if has_selection:
+            # Cancel the active selection
+            self._cancel_active_selection()
+            if self.status_var is not None:
+                self.status_var.set("Selection canceled (right-click)")
+            # Prevent event from propagating to other handlers
+            return
 
     # ========== Rectangle Selection Edge Clamping ==========
     

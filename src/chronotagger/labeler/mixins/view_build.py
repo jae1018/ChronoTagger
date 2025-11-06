@@ -450,6 +450,10 @@ class ViewBuildMixin:
             if self._release_cid is None:
                 self._release_cid = self.canvas.mpl_connect("button_release_event", self._on_strip_release)
                 
+            # Right-click cancellation (works on any axis)
+            if not hasattr(self, '_right_click_cid') or self._right_click_cid is None:
+                self._right_click_cid = self.canvas.mpl_connect("button_press_event", self._on_right_click_cancel)
+                
             # --- Drag gate: discriminate drag vs click so click1-click2 doesn't steal events
             if getattr(self, "_gate_press_cid", None) is None:
                 self._gate_press_cid = self.canvas.mpl_connect("button_press_event", self._gate_press)
