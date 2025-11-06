@@ -53,6 +53,7 @@ class EventsMixin:
         sel = self.intervals_tree.selection()  # type: ignore[union-attr]
         if not sel:
             self.selected_interval = None
+            self._clear_selected_interval_highlights()
             return
         item = sel[0]
         try:
@@ -64,9 +65,11 @@ class EventsMixin:
                     f"Selected: {iv.label} [{iv.start.strftime('%H:%M:%S')} → {iv.end.strftime('%H:%M:%S')}]"
                 )
                 self._update_strip()
+                self._show_selected_interval_highlights()
                 self.canvas.draw()  # type: ignore[union-attr]
         except Exception:
             self.selected_interval = None
+            self._clear_selected_interval_highlights()
             
     def _to_timestamp(self, x):
         import pandas as pd, matplotlib.dates as mdates
@@ -416,6 +419,7 @@ class EventsMixin:
                     f"Selected: {iv.label} [{iv.start.strftime('%H:%M:%S')} → {iv.end.strftime('%H:%M:%S')}]"
                 )
                 self._update_strip()
+                self._show_selected_interval_highlights()
                 self.canvas.draw()  # type: ignore[union-attr]
                 break
 
@@ -1950,5 +1954,93 @@ class EventsMixin:
                     continue
         
         return indices
+
+    # ========== Selected Interval Point Highlighting ==========
+    
+    def _show_selected_interval_highlights(self) -> None:
+        """
+        Highlight points for the currently selected interval with blue markers.
+        
+        Similar to preview highlighting but uses a different color (blue vs red)
+        and works on the selected interval rather than preview selection.
+        """
+        # Clear any existing interval highlights
+        self._clear_selected_interval_highlights()
+        
+        # Check if we have a selected interval
+        if not hasattr(self, 'selected_interval') or self.selected_interval is None:
+            return
+        
+        interval = self.selected_interval
+        
+        # Get timestamps for this interval
+        try:
+            mask = (self.df.index >= interval.start) & (self.df.index <= interval.end)
+            selected_timestamps = self.df.index[mask].tolist()
+        except Exception:
+            return
+        
+        if not selected_timestamps:
+            return
+        
+        # Convert timestamps to indices in the windowed dataframe
+        selected_indices = self._timestamps_to_indices(selected_timestamps)
+        
+        if not selected_indices:
+            return
+        
+        # Downsample if too many points (for performance)
+        if len(selected_indices) > 2000:
+            # Show every Nth point to keep ~1000 markers per axes
+            step = len(selected_indices) // 1000
+            selected_indices = selected_indices[::step]
+        
+        # Create highlights on all user axes (time and position plots)
+        for key, ax in self.user_axes.items():
+            x_vals, y_vals = self._extract_data_at_indices(ax, selected_indices)
+            
+            if len(x_vals) == 0:
+                continue  # No data extracted, skip this axes
+            
+            try:
+                # Create scatter overlay with blue color to distinguish from preview (red)
+                scatter = ax.scatter(
+                    x_vals, y_vals,
+                    c='blue',          # Blue color for selected interval points
+                    s=15,              # Slightly smaller than preview markers
+                    alpha=0.5,         # Semi-transparent
+                    marker='s',        # Square markers to distinguish from preview circles
+                    zorder=99,         # Draw below preview highlights
+                    edgecolors='darkblue',
+                    linewidths=0.3
+                )
+                
+                # Track this highlight for later removal
+                if not hasattr(self, '_interval_highlights'):
+                    self._interval_highlights = []
+                self._interval_highlights.append(scatter)
+                
+            except Exception:
+                # Silently fail if scatter creation fails
+                continue
+    
+    def _clear_selected_interval_highlights(self) -> None:
+        """
+        Remove all selected interval highlight overlays from axes.
+        
+        Called when interval selection changes or is cleared.
+        """
+        if not hasattr(self, '_interval_highlights'):
+            self._interval_highlights = []
+            return
+        
+        # Remove each highlight artist from its axes
+        for artist in self._interval_highlights:
+            try:
+                artist.remove()
+            except Exception:
+                pass  # Already removed or axes destroyed
+        
+        self._interval_highlights.clear()
 
     

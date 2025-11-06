@@ -176,6 +176,9 @@ class IntervalsMixin:
         cmd = DeleteIntervalCommand(self, self.selected_interval)
         self._execute_command(cmd)
         self.selected_interval = None
+        # Clear interval highlights when interval is deleted
+        if hasattr(self, '_clear_selected_interval_highlights'):
+            self._clear_selected_interval_highlights()
         self.status_var.set("Deleted interval")  # type: ignore[union-attr]
         self._update_plot()
         self._maybe_autosave()
@@ -1093,6 +1096,14 @@ class IntervalsMixin:
         cmd = self.undo_stack.pop()
         cmd.undo()
         self.redo_stack.append(cmd)
+        
+        # Check if the currently selected interval still exists after undo
+        if hasattr(self, 'selected_interval') and self.selected_interval is not None:
+            if self.selected_interval not in self.intervals:
+                self.selected_interval = None
+                if hasattr(self, '_clear_selected_interval_highlights'):
+                    self._clear_selected_interval_highlights()
+        
         self.status_var.set("Undo")  # type: ignore[union-attr]
         self._update_plot()
         self._maybe_autosave()
@@ -1104,6 +1115,14 @@ class IntervalsMixin:
         cmd = self.redo_stack.pop()
         cmd.execute()
         self.undo_stack.append(cmd)
+        
+        # Check if the currently selected interval still exists after redo
+        if hasattr(self, 'selected_interval') and self.selected_interval is not None:
+            if self.selected_interval not in self.intervals:
+                self.selected_interval = None
+                if hasattr(self, '_clear_selected_interval_highlights'):
+                    self._clear_selected_interval_highlights()
+        
         self.status_var.set("Redo")  # type: ignore[union-attr]
         self._update_plot()
         self._maybe_autosave()
@@ -1206,6 +1225,9 @@ class IntervalsMixin:
         if messagebox.askyesno("Clear All", f"Delete all {len(self.intervals)} intervals?"):
             self.intervals.clear()
             self.selected_interval = None
+            # Clear interval highlights when all intervals are cleared
+            if hasattr(self, '_clear_selected_interval_highlights'):
+                self._clear_selected_interval_highlights()
             self.undo_stack.clear()
             self.redo_stack.clear()
             self.modified = True

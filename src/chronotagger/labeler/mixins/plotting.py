@@ -180,6 +180,14 @@ class PlottingMixin:
                     self._show_selected_point_highlights(redraw=False)
                 except Exception:
                     pass  # Silently fail if highlighting fails
+        
+        # --- Restore selected interval highlights if there's a selected interval ---
+        if hasattr(self, '_show_selected_interval_highlights'):
+            if hasattr(self, 'selected_interval') and self.selected_interval is not None:
+                try:
+                    self._show_selected_interval_highlights()
+                except Exception:
+                    pass  # Silently fail if highlighting fails
     
         self.canvas.draw()
         
