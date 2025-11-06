@@ -59,7 +59,7 @@ class ViewBuildMixin:
         _ = filedialog
     
         # ── Time Range (two-row layout with ×2/÷2 buttons) ──────────────────────────
-        rng = ttk.LabelFrame(parent, text="Time Range", padding=6)
+        rng = ttk.LabelFrame(parent, text="Time Range", padding=5)
         rng.pack(side=tk.LEFT, padx=5)
     
         # Make the entry column stretchy
@@ -89,24 +89,31 @@ class ViewBuildMixin:
         nav = ttk.LabelFrame(parent, text="Navigation", padding=5)
         nav.pack(side=tk.LEFT, padx=8)
     
-        nav.grid_columnconfigure(0, weight=1)
-        nav.grid_columnconfigure(1, weight=0)
-        nav.grid_columnconfigure(2, weight=1)
+        # Create grid frame for consistent alignment with other sections
+        nav_grid = ttk.Frame(nav)
+        nav_grid.pack()
+        
+        # Configure grid for center alignment
+        nav_grid.grid_columnconfigure(0, weight=1)
+        nav_grid.grid_columnconfigure(1, weight=0)
+        nav_grid.grid_columnconfigure(2, weight=1)
     
-        row1 = ttk.Frame(nav)
-        row1.grid(row=0, column=1, pady=(0, 2))
-        ttk.Button(row1, text="<- Prev", command=self._prev_window).pack(side=tk.LEFT, padx=4)
-        ttk.Button(row1, text="Next ->", command=self._next_window).pack(side=tk.LEFT, padx=4)
+        # Row 0: Previous and Next buttons (aligned with other sections' top rows)
+        prev_next_frame = ttk.Frame(nav_grid)
+        prev_next_frame.grid(row=0, column=1, pady=2)
+        ttk.Button(prev_next_frame, text="<- Prev", command=self._prev_window).pack(side=tk.LEFT, padx=4)
+        ttk.Button(prev_next_frame, text="Next ->", command=self._next_window).pack(side=tk.LEFT, padx=4)
     
-        row2 = ttk.Frame(nav)
-        row2.grid(row=1, column=1, pady=(2, 0))
-        ttk.Label(row2, text="Step:").pack(side=tk.LEFT, padx=(0, 6))
-        self.step_entry = ttk.Entry(row2, width=16)
+        # Row 1: Step controls (aligned with other sections' bottom rows)
+        step_frame = ttk.Frame(nav_grid)
+        step_frame.grid(row=1, column=1, pady=2)
+        ttk.Label(step_frame, text="Step:").pack(side=tk.LEFT, padx=(0, 6))
+        self.step_entry = ttk.Entry(step_frame, width=16)
         self.step_entry.insert(0, str(self.step))
         self.step_entry.pack(side=tk.LEFT)
         self.step_entry.bind("<Return>", lambda _: self._apply_step_entry())
-        ttk.Button(row2, text="x2", width=4, command=self._double_step).pack(side=tk.LEFT, padx=4)
-        ttk.Button(row2, text="/2", width=4, command=self._halve_step).pack(side=tk.LEFT, padx=2)
+        ttk.Button(step_frame, text="x2", width=4, command=self._double_step).pack(side=tk.LEFT, padx=4)
+        ttk.Button(step_frame, text="/2", width=4, command=self._halve_step).pack(side=tk.LEFT, padx=2)
     
         # ── Label Actions (2x5 grid) ──────────────────────────────────────────────
         label_actions = ttk.LabelFrame(parent, text="Label Actions", padding=5)
@@ -123,23 +130,23 @@ class ViewBuildMixin:
         # Row 1: [Re-label, Add, Undo, Manage..., Fill Gaps...]
         ttk.Button(
             grid_frame, text="Re-label", command=self._relabel_interval
-        ).grid(row=0, column=0, sticky="ew", padx=1, pady=1)
+        ).grid(row=0, column=0, sticky="ew", padx=1, pady=2)
         
         ttk.Button(
             grid_frame, text="Add", command=self._add_interval
-        ).grid(row=0, column=1, sticky="ew", padx=1, pady=1)
+        ).grid(row=0, column=1, sticky="ew", padx=1, pady=2)
         
         ttk.Button(
             grid_frame, text="Undo", command=self._undo
-        ).grid(row=0, column=2, sticky="ew", padx=1, pady=1)
+        ).grid(row=0, column=2, sticky="ew", padx=1, pady=2)
         
         ttk.Button(
             grid_frame, text="Manage...", command=self._open_label_manager
-        ).grid(row=0, column=3, sticky="ew", padx=1, pady=1)
+        ).grid(row=0, column=3, sticky="ew", padx=1, pady=2)
         
         ttk.Button(
             grid_frame, text="Fill Gaps...", command=self._open_label_unassigned_dialog
-        ).grid(row=0, column=4, sticky="ew", padx=1, pady=1)
+        ).grid(row=0, column=4, sticky="ew", padx=1, pady=2)
         
         # Row 2: [Dropdown list, Delete, Redo, By-Rule..., Clear...]
         self.current_class_var = tk.StringVar(value=self.classes[0])
@@ -150,37 +157,73 @@ class ViewBuildMixin:
             state="readonly",
             width=12,
         )
-        self.class_combo.grid(row=1, column=0, sticky="ew", padx=1, pady=1)
+        self.class_combo.grid(row=1, column=0, sticky="ew", padx=1, pady=2)
         
         ttk.Button(
             grid_frame, text="Delete", command=self._delete_interval
-        ).grid(row=1, column=1, sticky="ew", padx=1, pady=1)
+        ).grid(row=1, column=1, sticky="ew", padx=1, pady=2)
         
         ttk.Button(
             grid_frame, text="Redo", command=self._redo
-        ).grid(row=1, column=2, sticky="ew", padx=1, pady=1)
+        ).grid(row=1, column=2, sticky="ew", padx=1, pady=2)
         
         ttk.Button(
             grid_frame, text="By-Rule...", command=self._open_label_by_rule_dialog
-        ).grid(row=1, column=3, sticky="ew", padx=1, pady=1)
+        ).grid(row=1, column=3, sticky="ew", padx=1, pady=2)
         
         ttk.Button(
             grid_frame, text="Clear...", command=self._open_clear_intervals_dialog
-        ).grid(row=1, column=4, sticky="ew", padx=1, pady=1)
+        ).grid(row=1, column=4, sticky="ew", padx=1, pady=2)
         
         # Add some spacing after the grid
         ttk.Frame(label_actions, width=10).pack(side=tk.LEFT)
         
-        # Export Labels and Reset Scale buttons (moved from old quick actions)
-        extra_actions = ttk.Frame(parent)
-        extra_actions.pack(side=tk.LEFT, padx=5)
-        ttk.Button(extra_actions, text="Export Labels…", command=self._export_labels_dialog).pack(side=tk.LEFT, padx=2)
-        ttk.Button(extra_actions, text="Reset Scale", command=self._reset_all_yscales).pack(side=tk.LEFT, padx=2)
+        # ── I/O (2x2 grid) ────────────────────────────────────────────────────────
+        io_section = ttk.LabelFrame(parent, text="I/O", padding=5)
+        io_section.pack(side=tk.LEFT, padx=8)
+        
+        # Create grid frame for 2x2 button layout
+        io_grid = ttk.Frame(io_section)
+        io_grid.pack()
+        
+        # Configure grid columns to have equal weight
+        io_grid.columnconfigure(0, weight=1)
+        io_grid.columnconfigure(1, weight=1)
+        
+        # Row 0: Save Session | Load Session
+        ttk.Button(
+            io_grid, text="Save Session", command=self._save_session
+        ).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        
+        ttk.Button(
+            io_grid, text="Load Session", command=self._load_session
+        ).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
+        
+        # Row 1: Export Labels... | (empty)
+        ttk.Button(
+            io_grid, text="Export Labels...", command=self._export_labels_dialog
+        ).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
+        
+        # Column 1, Row 1 is intentionally left empty
     
-        # --- Help button to show controls ---
-        help_box = ttk.Frame(parent)
-        help_box.pack(side=tk.LEFT, padx=6)
-        ttk.Button(help_box, text="Help (F1)", command=self._open_help_dialog).pack()
+        # --- Help and Reset Scale (aligned with grid rows) ---
+        help_section = ttk.LabelFrame(parent, text="Help", padding=5)
+        help_section.pack(side=tk.LEFT, padx=8)
+        
+        # Create grid frame to align with other sections
+        help_grid = ttk.Frame(help_section)
+        help_grid.pack()
+        
+        # Row 0: Help button (aligned with top row of other grids)
+        ttk.Button(
+            help_grid, text="Help (F1)", command=self._open_help_dialog
+        ).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        
+        # Row 1: Reset Scale button (aligned with bottom row of other grids)
+        ttk.Button(
+            help_grid, text="Reset Scale", command=self._reset_all_yscales
+        ).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
+        
         # make sure F1 still opens help (safe to call even if previously bound)
         self.root.bind("<F1>", lambda e: self._open_help_dialog())
 
@@ -498,53 +541,6 @@ class ViewBuildMixin:
         stats.pack(fill=tk.X, pady=5)
         self.stats_text = tk.Text(stats, height=8, width=30, state="disabled")
         self.stats_text.pack(fill=tk.BOTH, expand=True)
-
-        # Files
-        files = ttk.LabelFrame(parent, text="File Operations", padding=5)
-        files.pack(fill=tk.X, pady=5)
-        
-        # Create a grid frame for 3x2 button layout (3 rows, 2 columns)
-        file_button_grid = ttk.Frame(files)
-        file_button_grid.pack(fill=tk.X, expand=True)
-        
-        # Configure grid columns to have equal weight (2 columns)
-        file_button_grid.columnconfigure(0, weight=1)
-        file_button_grid.columnconfigure(1, weight=1)
-        
-        # Row 0: Save Session | Load Session
-        ttk.Button(
-            file_button_grid, 
-            text="Save Session", 
-            command=self._save_session
-        ).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
-        
-        ttk.Button(
-            file_button_grid, 
-            text="Load Session", 
-            command=self._load_session
-        ).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
-        
-        # Row 1: Export Intervals | Export Per-Sample
-        ttk.Button(
-            file_button_grid, 
-            text="Export Intervals", 
-            command=self._export_intervals
-        ).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
-        
-        ttk.Button(
-            file_button_grid, 
-            text="Export Per-Sample", 
-            command=self._export_per_sample
-        ).grid(row=1, column=1, sticky="ew", padx=2, pady=2)
-        
-        # Row 2: Export Labels… | (empty)
-        ttk.Button(
-            file_button_grid, 
-            text="Export Labels…", 
-            command=self._export_labels_dialog
-        ).grid(row=2, column=0, sticky="ew", padx=2, pady=2)
-        
-        # Column 1, Row 2 is intentionally left empty
 
         # Options
         opts = ttk.LabelFrame(parent, text="Options", padding=5)
