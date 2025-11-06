@@ -183,10 +183,11 @@ class IOExportMixin:
 
     def _export_labels_dialog(self) -> None:
         """
-        Small modal that lets the user choose:
+        Enhanced modal with live preview that lets the user choose:
           - Scope: Full dataset  |  Selected intervals only
           - Content: Index + labels (CSV)  |  Full DF + labels (CSV)
-    
+        
+        Shows real-time preview of first 10 rows and estimated total.
         Writes a CSV plus a sidecar '<chosen_name>_label_map.json'.
         """
         import tkinter as tk
@@ -196,35 +197,77 @@ class IOExportMixin:
             messagebox.showwarning("No Data", "There is no data to export.")
             return
     
-        # Modal container
+        # Modal container - larger size for side-by-side layout
         dlg = tk.Toplevel(self.root)
         dlg.title("Export Labels")
         dlg.transient(self.root)
         dlg.grab_set()
-        dlg.resizable(False, False)
-        pad = {"padx": 10, "pady": 8}
+        dlg.resizable(True, True)
+        dlg.geometry("800x500")  # Wider for preview
     
-        # --- Scope ---
+        # Main frame with two sides
+        main_frame = ttk.Frame(dlg)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Left side: Options (30% width)
+        options_frame = ttk.Frame(main_frame)
+        options_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        
+        # Right side: Preview (70% width)
+        preview_frame = ttk.LabelFrame(main_frame, text="Preview")
+        preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+    
+        # --- Scope Options ---
         scope_var = tk.StringVar(value="full")
-        scope_grp = ttk.LabelFrame(dlg, text="Scope")
-        scope_grp.grid(row=0, column=0, sticky="ew", **pad)
-        ttk.Radiobutton(scope_grp, text="Full dataset (unlabeled = -1)",
-                        variable=scope_var, value="full").pack(anchor="w", pady=2)
-        ttk.Radiobutton(scope_grp, text="Selected intervals only",
-                        variable=scope_var, value="selected").pack(anchor="w", pady=2)
+        scope_grp = ttk.LabelFrame(options_frame, text="Scope")
+        scope_grp.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Radiobutton(
+            scope_grp, text="Full dataset (unlabeled = -1)",
+            variable=scope_var, value="full"
+        ).pack(anchor="w", pady=2, padx=5)
+        
+        ttk.Radiobutton(
+            scope_grp, text="Selected intervals only",
+            variable=scope_var, value="selected"
+        ).pack(anchor="w", pady=2, padx=5)
     
-        # --- Content ---
+        # --- Content Options ---
         content_var = tk.StringVar(value="index_labels_csv")
-        content_grp = ttk.LabelFrame(dlg, text="Content")
-        content_grp.grid(row=1, column=0, sticky="ew", **pad)
-        ttk.Radiobutton(content_grp, text="Index + labels (CSV)",
-                        variable=content_var, value="index_labels_csv").pack(anchor="w", pady=2)
-        ttk.Radiobutton(content_grp, text="Full DataFrame + labels (CSV)",
-                        variable=content_var, value="full_df_labels_csv").pack(anchor="w", pady=2)
+        content_grp = ttk.LabelFrame(options_frame, text="Content")
+        content_grp.pack(fill=tk.X, pady=(0, 15))
+        
+        ttk.Radiobutton(
+            content_grp, text="Index + labels (CSV)",
+            variable=content_var, value="index_labels_csv"
+        ).pack(anchor="w", pady=2, padx=5)
+        
+        ttk.Radiobutton(
+            content_grp, text="Full DataFrame + labels (CSV)",
+            variable=content_var, value="full_df_labels_csv"
+        ).pack(anchor="w", pady=2, padx=5)
     
-        # --- Actions ---
-        btns = ttk.Frame(dlg)
-        btns.grid(row=2, column=0, sticky="e", **pad)
+        # --- Preview Panel ---
+        preview_text = tk.Text(
+            preview_frame, 
+            font=("Courier", 9), 
+            state="disabled",
+            wrap=tk.NONE,
+            bg="#f8f8f8"
+        )
+        
+        # Add scrollbars to preview
+        preview_scroll_y = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=preview_text.yview)
+        preview_scroll_x = ttk.Scrollbar(preview_frame, orient=tk.HORIZONTAL, command=preview_text.xview)
+        preview_text.configure(yscrollcommand=preview_scroll_y.set, xscrollcommand=preview_scroll_x.set)
+        
+        preview_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0), pady=5)
+        preview_scroll_y.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
+        preview_scroll_x.pack(side=tk.BOTTOM, fill=tk.X, padx=(5, 0))
+    
+        # --- Action Buttons ---
+        btns = ttk.Frame(options_frame)
+        btns.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
     
         def do_export_and_close():
             # Ask for CSV location
@@ -242,9 +285,41 @@ class IOExportMixin:
             except Exception as e:
                 messagebox.showerror("Export Failed", f"{e}")
     
-        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side=tk.RIGHT, padx=6)
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(btns, text="Export", command=do_export_and_close).pack(side=tk.RIGHT)
-    
+        
+        # --- Preview Update Functions ---
+        def update_preview():
+            """Update preview based on current dialog options."""
+            try:
+                preview_df, total_estimate, info = self._generate_export_preview(
+                    scope_var.get(), 
+                    content_var.get(), 
+                    limit=10
+                )
+                preview_content = self._format_dataframe_preview(preview_df, total_estimate, info)
+                
+                # Update preview text
+                preview_text.config(state="normal")
+                preview_text.delete(1.0, tk.END)
+                preview_text.insert(1.0, preview_content)
+                preview_text.config(state="disabled")
+                
+            except Exception as e:
+                # Show error in preview
+                error_msg = f"Preview Error:\n{str(e)}\n\nThis might indicate no data matches your selection."
+                preview_text.config(state="normal")
+                preview_text.delete(1.0, tk.END)
+                preview_text.insert(1.0, error_msg)
+                preview_text.config(state="disabled")
+        
+        # Connect option changes to preview updates
+        scope_var.trace_add("write", lambda *args: update_preview())
+        content_var.trace_add("write", lambda *args: update_preview())
+        
+        # Initial preview
+        dlg.after(100, update_preview)  # Small delay to ensure UI is ready
+        
         # Center over parent
         dlg.update_idletasks()
         if self.root is not None:
@@ -309,6 +384,263 @@ class IOExportMixin:
         sidecar = Path(csv_path).with_name(Path(csv_path).stem + "_label_map.json")
         with open(sidecar, "w", encoding="utf-8") as f:
             json.dump(label_to_id, f, indent=2)
+
+    def _generate_export_preview(self, scope: str, content: str, limit: int = 10):
+        """
+        Generate efficient preview of export data using only first few rows.
+        
+        Parameters
+        ----------
+        scope : {"full", "selected"}
+            Export scope selection
+        content : {"index_labels_csv", "full_df_labels_csv"}
+            Content type selection  
+        limit : int
+            Maximum number of rows to include in preview
+            
+        Returns
+        -------
+        tuple
+            (preview_df, total_estimate, info_dict)
+        """
+        import pandas as pd
+        
+        # Build label_id efficiently for preview
+        if scope == "full":
+            # Take first `limit` rows from original DataFrame
+            preview_input = self.df.head(limit)
+            total_estimate = len(self.df)
+            info = {
+                "scope_desc": "Full dataset",
+                "total_unlabeled": "Some rows may be unlabeled (-1)"
+            }
+        elif scope == "selected":
+            # Get first `limit` rows that fall within labeled intervals
+            preview_input, total_estimate = self._get_first_labeled_rows(limit)
+            if len(preview_input) == 0:
+                raise ValueError("No labeled intervals found in current data range")
+            info = {
+                "scope_desc": "Selected intervals only", 
+                "total_unlabeled": "All rows are labeled"
+            }
+        else:
+            raise ValueError(f"Unknown scope: {scope}")
+        
+        # Generate label_id series for preview data
+        label_id = self._compute_label_id_series_for_subset(preview_input)
+        
+        # Apply content formatting
+        if content == "index_labels_csv":
+            preview_df = pd.DataFrame({"label_id": label_id}, index=label_id.index)
+            preview_df.index.name = "time"
+            info["content_desc"] = "Index + labels only"
+        elif content == "full_df_labels_csv":
+            preview_df = preview_input.copy()
+            preview_df["label_id"] = label_id.astype(label_id.dtype)
+            if preview_df.index.name is None:
+                preview_df.index.name = "time"
+            info["content_desc"] = "Full DataFrame + labels"
+        else:
+            raise ValueError(f"Unknown content type: {content}")
+            
+        return preview_df, total_estimate, info
+    
+    def _get_first_labeled_rows(self, limit: int = 10):
+        """
+        Get first N rows that fall within labeled intervals.
+        
+        Parameters
+        ----------
+        limit : int
+            Maximum number of rows to return
+            
+        Returns
+        -------
+        tuple
+            (preview_df, total_labeled_count)
+        """
+        import pandas as pd
+        
+        if not self.intervals:
+            return pd.DataFrame(), 0
+        
+        collected_rows = []
+        total_labeled_count = 0
+        
+        # Sort intervals by start time for consistent preview
+        sorted_intervals = sorted(self.intervals, key=lambda iv: iv.start)
+        
+        for interval in sorted_intervals:
+            # Calculate total labeled count (for estimation)
+            interval_mask = (self.df.index >= interval.start) & (self.df.index <= interval.end)
+            interval_size = interval_mask.sum()
+            total_labeled_count += interval_size
+            
+            # For preview, only collect what we need
+            if len(collected_rows) < limit:
+                interval_df = self.df.loc[interval_mask]
+                remaining_needed = limit - len(collected_rows)
+                
+                if len(interval_df) > 0:
+                    rows_to_take = min(remaining_needed, len(interval_df))
+                    collected_rows.append(interval_df.iloc[:rows_to_take])
+        
+        if collected_rows:
+            preview_df = pd.concat(collected_rows)
+        else:
+            preview_df = pd.DataFrame()
+        
+        return preview_df, total_labeled_count
+    
+    def _compute_label_id_series_for_subset(self, subset_df):
+        """
+        Compute label_id series for a subset of data efficiently.
+        
+        Parameters
+        ----------
+        subset_df : pd.DataFrame
+            Subset of self.df to compute labels for
+            
+        Returns
+        -------
+        pd.Series
+            Label ID series aligned with subset_df.index
+        """
+        import pandas as pd
+        import numpy as np
+        
+        # Stable mapping from current classes
+        label_to_id = {label: i for i, label in enumerate(self.classes)}
+        unknown_id = -1
+        
+        # Determine dtype
+        n = len(label_to_id)
+        if n <= np.iinfo(np.int8).max:
+            dtype = np.int8
+        elif n <= np.iinfo(np.int16).max:
+            dtype = np.int16
+        else:
+            dtype = np.int32
+        
+        # Initialize with unknown
+        ids = np.full(len(subset_df), fill_value=unknown_id, dtype=dtype)
+        
+        # Apply interval labels
+        for i, ts in enumerate(subset_df.index):
+            for iv in self.intervals:
+                if iv.contains(ts):
+                    ids[i] = label_to_id.get(iv.label, unknown_id)
+                    break
+        
+        return pd.Series(ids, index=subset_df.index, name="label_id")
+    
+    def _format_dataframe_preview(self, preview_df, total_estimate: int, info: dict) -> str:
+        """
+        Format DataFrame for display in preview text widget.
+        
+        Parameters
+        ----------
+        preview_df : pd.DataFrame
+            Preview data to format
+        total_estimate : int
+            Estimated total rows in full export
+        info : dict
+            Additional information about the export
+            
+        Returns
+        -------
+        str
+            Formatted text for preview display
+        """
+        if preview_df.empty:
+            return (
+                "No data to preview.\n\n"
+                "This might occur if:\n"
+                "• No intervals are labeled\n"
+                "• No data exists in the current time range\n"
+                "• Selected intervals don't contain any data points"
+            )
+        
+        lines = []
+        
+        # Header with summary
+        if len(preview_df) < total_estimate:
+            lines.append(f"Preview (first {len(preview_df)} of ~{total_estimate:,} rows):")
+        else:
+            lines.append(f"Preview (all {len(preview_df)} rows):")
+        lines.append("")
+        
+        # Data preview - limit columns for readability
+        display_df = preview_df.copy()
+        columns_truncated = False
+        
+        # For wide DataFrames, show only first few columns + label_id
+        max_cols = 6
+        if len(display_df.columns) > max_cols:
+            # Keep label_id if it exists, otherwise just take first max_cols-1
+            if 'label_id' in display_df.columns:
+                other_cols = [col for col in display_df.columns if col != 'label_id']
+                cols_to_show = other_cols[:max_cols-1] + ['label_id']
+            else:
+                cols_to_show = list(display_df.columns[:max_cols])
+            
+            display_df = display_df[cols_to_show]
+            columns_truncated = True
+            lines.append(f"(Showing {len(cols_to_show)} of {len(preview_df.columns)} columns)")
+            lines.append("")
+        
+        # Add visual separator before DataFrame
+        lines.append("─" * 60)  # Horizontal line
+        
+        # Format the DataFrame with manual column truncation indication
+        df_str = display_df.to_string(max_rows=20, max_cols=max_cols)
+        
+        # Add ellipsis to column headers if truncated
+        if columns_truncated:
+            df_lines = df_str.split('\n')
+            if len(df_lines) > 0:
+                # Add "..." to the header line
+                header_line = df_lines[0]
+                if not header_line.endswith('...'):
+                    df_lines[0] = header_line + "  ..."
+                
+                # Add "..." to each data row
+                for i in range(1, len(df_lines)):
+                    if df_lines[i].strip() and not df_lines[i].endswith('...'):
+                        df_lines[i] = df_lines[i] + "  ..."
+                
+                df_str = '\n'.join(df_lines)
+        
+        lines.append(df_str)
+        
+        # Add row continuation indicator if we have more rows
+        if len(preview_df) < total_estimate:
+            lines.append("...")
+            lines.append(f"(+ {total_estimate - len(preview_df):,} more rows)")
+        
+        # Add visual separator after DataFrame
+        lines.append("─" * 60)  # Horizontal line
+        lines.append("")
+        
+        # Summary information
+        lines.append("Export Settings:")
+        lines.append(f"  Scope: {info['scope_desc']}")
+        lines.append(f"  Content: {info['content_desc']}")
+        if total_estimate > 1000:
+            est_size_mb = total_estimate * len(display_df.columns) * 20 / (1024 * 1024)  # Rough estimate
+            lines.append(f"  Estimated file size: ~{est_size_mb:.1f} MB")
+        
+        # Label mapping preview
+        if hasattr(self, 'classes') and self.classes:
+            lines.append("")
+            lines.append("Label ID Mapping:")
+            for i, label in enumerate(self.classes[:8]):  # Show first 8 labels
+                lines.append(f"  {i}: {label}")
+            if len(self.classes) > 8:
+                lines.append(f"  ... and {len(self.classes) - 8} more")
+            lines.append(f"  -1: UNLABELED")
+        
+        return "\n".join(lines)
 
 
     def _export_intervals(self) -> None:
