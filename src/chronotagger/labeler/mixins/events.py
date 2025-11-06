@@ -551,13 +551,33 @@ class EventsMixin:
         """
         Move/resize the animated preview band on each time-lane axes and blit only those.
         x0/x1 are Matplotlib date floats.
+        
+        Skip overlays only if RectangleSelector is actively being dragged by user.
         """
         if not getattr(self, "_time_overlays", None):
             return
+            
         left = min(x0, x1)
         width = max(abs(x1 - x0), 0.0)
         artists = []
-        for r in self._time_overlays.values():
+        
+        # Only skip overlays if RectangleSelector is actively being dragged
+        for ax, r in self._time_overlays.items():
+            ax_key = self._find_axes_key(ax)
+            
+            # Skip axes only if RectangleSelector is actively being used
+            should_skip = False
+            if hasattr(self, 'rect_selectors') and hasattr(self, '_drag_active'):
+                if ax_key and ax_key in self.rect_selectors:
+                    rect_sel = self.rect_selectors[ax_key]
+                    is_active = getattr(rect_sel, 'active', False)
+                    is_dragging = getattr(self, '_drag_active', False)  # Only skip if actually dragging
+                    if is_active and is_dragging:
+                        should_skip = True
+            
+            if should_skip:
+                continue  # Skip this axis to avoid conflicts
+            
             r.set_xy((left, 0))
             r.set_width(width)
             if not r.get_visible():
@@ -565,7 +585,7 @@ class EventsMixin:
             artists.append(r)
     
         blit = getattr(self, "_blit", None)
-        if blit is not None:
+        if blit is not None and artists:
             blit.draw(artists)
         else:
             # graceful fallback
@@ -693,9 +713,19 @@ class EventsMixin:
             self._update_time_overlays(self._two_click_t0, self._two_click_t0 + eps)
     
             t0 = pd.Timestamp(mdates.num2date(self._two_click_t0)).tz_localize(None)
+            
+            # CRITICAL: Clear box selection state so highlighting works properly
+            if hasattr(self, 'current_spans'):
+                self.current_spans.clear()
+            if hasattr(self, '_commit_spans'):
+                self._commit_spans.clear()
+            
             self.current_selection = (t0, t0)
             # draw strip sliver
             self._draw_strip_preview_spans([(self._two_click_t0, self._two_click_t0 + eps)])
+            
+            # NOTE: Don't show highlights on first click - only on completion
+            # self._show_selected_point_highlights(redraw=False)  # Disabled for performance
             return
     
         # Second click: finalize
@@ -728,10 +758,19 @@ class EventsMixin:
         except Exception:
             pass
     
+        # CRITICAL: Clear box selection state so highlighting works properly
+        if hasattr(self, 'current_spans'):
+            self.current_spans.clear()
+        if hasattr(self, '_commit_spans'):
+            self._commit_spans.clear()
+    
         self.current_selection = (s_ts, e_ts)
     
         x0 = mdates.date2num(s_ts); x1 = mdates.date2num(e_ts)
         self._draw_strip_preview_spans([(x0, x1)])
+        
+        # Show point highlights ONLY after final selection is complete
+        self._show_selected_point_highlights(redraw=True)  # Force redraw to ensure highlights appear
 
     
     
@@ -778,6 +817,12 @@ class EventsMixin:
         except Exception:
             pass
     
+        # CRITICAL: Clear box selection state so highlighting works properly
+        if hasattr(self, 'current_spans'):
+            self.current_spans.clear()
+        if hasattr(self, '_commit_spans'):
+            self._commit_spans.clear()
+    
         # keep the preview state; no full redraws here
         self.current_selection = (s_ts, e_ts)
         x0 = mdates.date2num(s_ts); x1 = mdates.date2num(e_ts)
@@ -789,6 +834,9 @@ class EventsMixin:
     
         self._update_time_overlays(x0, x1)
         self._draw_strip_preview_spans([(x0, x1)])
+        
+        # NOTE: No real-time highlighting during motion for performance
+        # self._show_selected_point_highlights(redraw=False)  # Disabled for performance
 
 
 
@@ -915,10 +963,20 @@ class EventsMixin:
     def _preview_selection(self, start, end) -> None:
         """Show live preview across panels using current_selection (blitted)."""
         import matplotlib.dates as mdates
+        
+        # CRITICAL: Clear box selection state so highlighting works properly
+        if hasattr(self, 'current_spans'):
+            self.current_spans.clear()
+        if hasattr(self, '_commit_spans'):
+            self._commit_spans.clear()
+        
         self.current_selection = (start, end)
         x0 = mdates.date2num(start); x1 = mdates.date2num(end)
         self._update_time_overlays(x0, x1)
         self._draw_strip_preview_spans([(x0, x1)])
+        
+        # Show point highlights during strip editing preview  
+        self._show_selected_point_highlights(redraw=True)  # Force redraw to ensure highlights appear
     
     def _apply_snap_clamp(self, start: pd.Timestamp, end: pd.Timestamp) -> Tuple[pd.Timestamp, pd.Timestamp]:
         """Apply snapping (if enabled), clamp to data, and enforce min duration."""
@@ -1685,8 +1743,13 @@ class EventsMixin:
                     indices.append(int(idx))
             
             except Exception:
-                # Timestamp not in windowed index, skip
-                continue
+                # Try nearest neighbor approach as fallback
+                try:
+                    nearest_idx = windowed_idx.get_indexer([ts], method="nearest")[0]
+                    if 0 <= nearest_idx < len(windowed_idx):
+                        indices.append(int(nearest_idx))
+                except Exception:
+                    continue
         
         return indices
 
