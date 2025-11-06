@@ -59,7 +59,23 @@ class EventsMixin:
         try:
             idx = int(self.intervals_tree.item(item)["text"]) - 1  # type: ignore[union-attr]
             if 0 <= idx < len(self.intervals):
-                self.selected_interval = self.intervals[idx]
+                candidate_interval = self.intervals[idx]
+                
+                # Check if this is the already selected interval - if so, deselect it
+                if hasattr(self, 'selected_interval') and self.selected_interval is candidate_interval:
+                    # Deselect by clearing tree selection (this will trigger this method again with no selection)
+                    self.intervals_tree.selection_remove(item)  # type: ignore[union-attr]
+                    self.selected_interval = None
+                    if hasattr(self, '_clear_selected_interval_highlights'):
+                        self._clear_selected_interval_highlights()
+                    self._update_strip()
+                    if self.status_var is not None:
+                        self.status_var.set("Interval deselected")
+                    self.canvas.draw()  # type: ignore[union-attr]
+                    return
+                
+                # Otherwise, select this interval
+                self.selected_interval = candidate_interval
                 iv = self.selected_interval
                 self.status_var.set(  # type: ignore[union-attr]
                     f"Selected: {iv.label} [{iv.start.strftime('%H:%M:%S')} → {iv.end.strftime('%H:%M:%S')}]"
@@ -414,6 +430,20 @@ class EventsMixin:
 
         for iv in self.intervals:
             if iv.contains(click_ts):
+                # Check if this is the already selected interval - if so, deselect it
+                if hasattr(self, 'selected_interval') and self.selected_interval is iv:
+                    self.selected_interval = None
+                    if hasattr(self, '_clear_selected_interval_highlights'):
+                        self._clear_selected_interval_highlights()
+                    self._update_strip()
+                    if hasattr(self, '_update_intervals_list'):
+                        self._update_intervals_list()
+                    if self.status_var is not None:
+                        self.status_var.set("Interval deselected")
+                    self.canvas.draw()  # type: ignore[union-attr]
+                    return
+                
+                # Otherwise, select this interval
                 self.selected_interval = iv
                 self.status_var.set(  # type: ignore[union-attr]
                     f"Selected: {iv.label} [{iv.start.strftime('%H:%M:%S')} → {iv.end.strftime('%H:%M:%S')}]"
@@ -448,7 +478,7 @@ class EventsMixin:
     def _on_key_press(self, event) -> None:
         key = event.keysym
 
-        # ---- Escape cancels ANY active selection/preview ----
+        # ---- Escape cancels ANY active selection/preview OR deselects interval ----
         if key == "Escape":
             # Check if we have any active selection or preview
             has_selection = (
@@ -464,6 +494,20 @@ class EventsMixin:
                 self._cancel_active_selection()
                 if self.status_var is not None:
                     self.status_var.set("Selection canceled (Escape)")
+                return
+            
+            # If no active selection, check for selected interval to deselect
+            if hasattr(self, 'selected_interval') and self.selected_interval is not None:
+                self.selected_interval = None
+                if hasattr(self, '_clear_selected_interval_highlights'):
+                    self._clear_selected_interval_highlights()
+                self._update_strip()
+                if hasattr(self, '_update_intervals_list'):
+                    self._update_intervals_list()
+                if self.canvas is not None:
+                    self.canvas.draw_idle()
+                if self.status_var is not None:
+                    self.status_var.set("Interval deselected (Escape)")
                 return
 
         # ---- Focus-aware early exit -------------------------------------------
@@ -1469,7 +1513,7 @@ class EventsMixin:
     
     def _on_right_click_cancel(self, event) -> None:
         """
-        Handle right-click to cancel active selections.
+        Handle right-click to cancel active selections or deselect interval.
         Works on any axis (time axes, position axes, strip).
         """
         if getattr(event, "button", None) != 3:  # Only handle right-click
@@ -1489,7 +1533,20 @@ class EventsMixin:
             self._cancel_active_selection()
             if self.status_var is not None:
                 self.status_var.set("Selection canceled (right-click)")
-            # Prevent event from propagating to other handlers
+            return
+        
+        # If no active selection, check for selected interval to deselect
+        if hasattr(self, 'selected_interval') and self.selected_interval is not None:
+            self.selected_interval = None
+            if hasattr(self, '_clear_selected_interval_highlights'):
+                self._clear_selected_interval_highlights()
+            self._update_strip()
+            if hasattr(self, '_update_intervals_list'):
+                self._update_intervals_list()
+            if self.canvas is not None:
+                self.canvas.draw_idle()
+            if self.status_var is not None:
+                self.status_var.set("Interval deselected (right-click)")
             return
 
     # ========== Rectangle Selection Edge Clamping ==========
