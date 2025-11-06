@@ -41,18 +41,20 @@ class ViewBuildMixin:
 
         # need to create sidebar BEFORE creating full plot, otherwise it
         # doesn't show up
-        sidebar = ttk.Frame(main, width=320)
-        sidebar.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
-        sidebar.pack_propagate(False)
-        self._build_sidebar(sidebar)
+        self.sidebar_frame = ttk.Frame(main, width=320)
+        self.sidebar_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
+        self.sidebar_frame.pack_propagate(False)
+        self._build_sidebar(self.sidebar_frame)
         
-        plot_frame = ttk.Frame(main)
-        plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._build_plot(plot_frame)
+        self.plot_frame = ttk.Frame(main)
+        self.plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._build_plot(self.plot_frame)
 
         self.root.bind("<Key>", self._on_key_press)
         # F1 opens Help
         self.root.bind("<F1>", self._open_help_dialog)
+        # F9 toggles sidebar visibility
+        self.root.bind("<F9>", lambda e: self._toggle_sidebar())
 
     def _build_top_controls(self, parent: ttk.Frame) -> None:
         from tkinter import filedialog  # ensure Tk is initialized on Windows
@@ -226,6 +228,30 @@ class ViewBuildMixin:
         
         # make sure F1 still opens help (safe to call even if previously bound)
         self.root.bind("<F1>", lambda e: self._open_help_dialog())
+        
+        # --- Sidebar Toggle (always visible) ---
+        sidebar_toggle_section = ttk.LabelFrame(parent, text="View", padding=5)
+        sidebar_toggle_section.pack(side=tk.LEFT, padx=8)
+        
+        # Create grid frame to align with other sections
+        toggle_grid = ttk.Frame(sidebar_toggle_section)
+        toggle_grid.pack()
+        
+        # Row 0: Sidebar toggle button (aligned with top row)
+        self.sidebar_toggle_btn = ttk.Button(
+            toggle_grid, 
+            text="Hide Panel ▶", 
+            command=self._toggle_sidebar,
+            width=12
+        )
+        self.sidebar_toggle_btn.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        
+        # Add tooltip functionality to the button
+        self._create_tooltip(self.sidebar_toggle_btn, "Hide sidebar (F9)")
+        
+        # Row 1: Empty (or could add another view control later)
+        # This keeps alignment with other sections
+        # Note: Sidebar toggle completely hides/shows the entire sidebar frame
 
 
     def _build_plot(self, parent: ttk.Frame) -> None:
@@ -466,12 +492,17 @@ class ViewBuildMixin:
 
     def _build_sidebar(self, parent: ttk.Frame) -> None:
         """
-        Build the right sidebar with scrollable content.
+        Build the right sidebar with scrollable content and collapse functionality.
         
         Uses Canvas + Scrollbar pattern for smooth scrolling when content
         exceeds available vertical space. All sidebar sections are placed
         inside a scrollable interior frame.
         """
+        # Initialize collapse state
+        self.sidebar_collapsed = False
+        self.sidebar_expanded_width = 320
+        # No collapsed width needed since we completely hide/show
+        
         # Create canvas for scrolling
         self.sidebar_canvas = tk.Canvas(parent, borderwidth=0, highlightthickness=0)
         
@@ -512,10 +543,11 @@ class ViewBuildMixin:
         Args:
             parent: The interior frame inside the canvas
         """
-        # Intervals list
+        # Intervals list (no toggle button here anymore - moved to top bar)
         frame = ttk.LabelFrame(parent, text="Labeled Intervals", padding=5)
         frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
-
+        
+        # Treeview for intervals
         columns = ("Start", "End", "Label", "Duration")
         self.intervals_tree = ttk.Treeview(
             frame, columns=columns, show="tree headings", height=15
@@ -801,3 +833,134 @@ class ViewBuildMixin:
         self.sidebar_canvas.bind("<Leave>", on_leave)
         self.sidebar_interior.bind("<Enter>", on_enter)
         self.sidebar_interior.bind("<Leave>", on_leave)
+    
+    def _toggle_sidebar(self) -> None:
+        """
+        Toggle the sidebar between expanded and collapsed states.
+        
+        The toggle button is now in the top bar and always visible.
+        When collapsed, the entire sidebar is hidden.
+        """
+        if self.sidebar_collapsed:
+            # Expand sidebar
+            self.sidebar_collapsed = False
+            
+            # Update button appearance
+            self.sidebar_toggle_btn.configure(text="Hide Panel ▶")
+            
+            # To ensure proper layout, temporarily unpack plot frame
+            # then repack sidebar and plot frame in correct order
+            self.plot_frame.pack_forget()
+            
+            # Pack sidebar first (right side)
+            self.sidebar_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
+            self.sidebar_frame.pack_propagate(False)
+            
+            # Then pack plot frame (left side, fills remaining space)
+            self.plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            
+            # Restore normal width
+            self.sidebar_frame.configure(width=self.sidebar_expanded_width)
+            
+            # Force immediate geometry update
+            self.sidebar_frame.update_idletasks()
+            self.plot_frame.update_idletasks()
+            
+            # Force layout updates and refresh
+            self.root.after_idle(self._refresh_sidebar_layout)
+            
+            # Update tooltip
+            self._update_tooltip_text("Hide sidebar (F9)")
+            
+        else:
+            # Collapse sidebar
+            self.sidebar_collapsed = True
+            
+            # Update button appearance
+            self.sidebar_toggle_btn.configure(text="◀ Show Panel")
+            
+            # Hide the entire sidebar frame
+            self.sidebar_frame.pack_forget()
+            
+            # Update tooltip
+            self._update_tooltip_text("Show sidebar (F9)")
+    
+    def _create_tooltip(self, widget, text):
+        """
+        Create a simple tooltip for a widget.
+        
+        Args:
+            widget: The widget to add tooltip to
+            text: The tooltip text to display
+        """
+        # Store initial tooltip text
+        widget.tooltip_text = text
+        
+        def on_enter(event):
+            # Use stored text (which may have been updated)
+            current_text = getattr(widget, 'tooltip_text', text)
+            
+            # Create tooltip window
+            tooltip = tk.Toplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+            
+            # Add tooltip text
+            label = tk.Label(
+                tooltip, 
+                text=current_text, 
+                background="lightyellow", 
+                relief="solid", 
+                borderwidth=1,
+                font=("TkDefaultFont", 8)
+            )
+            label.pack()
+            
+            # Store reference to tooltip
+            widget.tooltip = tooltip
+        
+        def on_leave(event):
+            # Destroy tooltip
+            if hasattr(widget, 'tooltip'):
+                widget.tooltip.destroy()
+                del widget.tooltip
+        
+        # Bind events
+        widget.bind("<Enter>", on_enter)
+        widget.bind("<Leave>", on_leave)
+    
+    def _update_tooltip_text(self, new_text):
+        """
+        Update the tooltip text for the sidebar toggle button.
+        
+        Args:
+            new_text: The new tooltip text to display
+        """
+        # Store the new text so future tooltip displays will use it
+        self.sidebar_toggle_btn.tooltip_text = new_text
+    
+    def _refresh_sidebar_layout(self):
+        """
+        Force a complete refresh of the sidebar layout.
+        
+        This is called after expanding the sidebar to ensure all widgets
+        properly recalculate their sizes and positions.
+        """
+        # Only refresh if sidebar is expanded and exists
+        if not self.sidebar_collapsed and hasattr(self, 'sidebar_canvas') and hasattr(self, 'sidebar_interior'):
+            # Force geometry updates
+            self.sidebar_frame.update_idletasks()
+            self.sidebar_interior.update_idletasks()
+            self.sidebar_canvas.update_idletasks()
+            
+            # Reconfigure canvas window width
+            canvas_width = self.sidebar_canvas.winfo_width()
+            if canvas_width > 1:
+                self.sidebar_canvas.itemconfig(self.sidebar_canvas_window, width=canvas_width)
+                
+            # Update scroll region
+            self._update_sidebar_scroll_region()
+            
+            # Final geometry update
+            self.sidebar_canvas.update_idletasks()
+            self.sidebar_interior.update_idletasks()
