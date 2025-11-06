@@ -90,6 +90,17 @@ class EventsMixin:
           If the selection covers ~entire y-range of the axis (>=95%), we treat it as time-only.
           Otherwise, we treat it as a box over data points on time-lane panels.
         """
+        # Which selector triggered this?
+        triggered_selector_key = None
+        for key, selector in getattr(self, 'rect_selectors', {}).items():
+            if self.user_axes.get(key) is eclick.inaxes:
+                triggered_selector_key = key
+                break
+        
+        # Only process if we have a valid selector match
+        if triggered_selector_key is None:
+            return
+        
         if eclick.xdata is None or erelease.xdata is None:
             return
         ax = getattr(eclick, "inaxes", None)
@@ -201,7 +212,8 @@ class EventsMixin:
         # Branch on axis role
         if role == "not-time":
             # === NOT-TIME AXIS path (position plots, phase space, etc.) ===
-            spans_commit = self._box_select_on_not_time_axis(drag_ax, xlo, xhi, ylo, yhi)
+            # Use the triggered selector key directly
+            spans_commit = self._box_select_on_not_time_axis(drag_ax, xlo, xhi, ylo, yhi, triggered_selector_key)
             
             if not spans_commit:
                 self.current_spans.clear()
@@ -1207,13 +1219,127 @@ class EventsMixin:
         return runs
     
     def _box_select_on_not_time_axis(self, ax, xlo: float, xhi: float, 
-                                      ylo: float, yhi: float) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+                                      ylo: float, yhi: float, 
+                                      triggered_key: Optional[str] = None) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
         """
         Given a box on a "not-time" axis (e.g., position plot X-Y), find which points fall inside,
         map them to timestamps via their order in the windowed dataframe, and return time intervals.
         
+        First tries direct dataframe filtering (if x_col/y_col configured), 
+        then falls back to artist-based extraction for backwards compatibility.
+        
         Returns:
             List of (start, end) timestamp tuples for half-open intervals [start, end)
+        """
+        # Try direct dataframe filtering first
+        # Use the triggered selector key if available, otherwise fall back to search
+        ax_key = triggered_key or self._find_axes_key(ax)
+        if ax_key:
+            intervals = self._try_dataframe_box_filter(ax_key, xlo, xhi, ylo, yhi)
+            if intervals is not None:
+                return intervals
+        
+        # Fallback to artist-based extraction (original method)
+        return self._box_select_via_artists(ax, xlo, xhi, ylo, yhi)
+    
+    def _try_dataframe_box_filter(self, ax_key: str, xlo: float, xhi: float, 
+                                   ylo: float, yhi: float) -> Optional[list[tuple[pd.Timestamp, pd.Timestamp]]]:
+        """
+        Try direct dataframe filtering using configured column mappings.
+        
+        Args:
+            ax_key: Key for the axes (e.g., "xy_gse", "xy_sse")
+            xlo, xhi, ylo, yhi: Box bounds in data coordinates
+        
+        Returns:
+            List of intervals if successful, None if no column mapping available
+        """
+        # Get area configuration - check multiple possible locations
+        area_config = None
+        
+        # Try axes_meta first
+        if hasattr(self, 'axes_meta') and self.axes_meta:
+            area_config = self.axes_meta.get(ax_key, {})
+        
+        # Always also check layout_spec for custom keys (in case they got stripped)
+        if hasattr(self, 'layout_spec') and self.layout_spec:
+            # Look through the areas in layout_spec
+            areas = self.layout_spec.get('areas', [])
+            for area in areas:
+                if area.get('key') == ax_key:
+                    layout_config = area
+                    # Merge layout_spec config into area_config (layout_spec takes precedence for custom keys)
+                    if area_config is None:
+                        area_config = layout_config
+                    else:
+                        # Merge, with layout_spec taking precedence for x_col/y_col
+                        area_config = {**area_config, **{k: v for k, v in layout_config.items() 
+                                                        if k in ['x_col', 'y_col']}}
+                    break
+        
+        if not area_config:
+            return None
+        
+        # Check if column mappings are configured
+        x_col = area_config.get('x_col')
+        y_col = area_config.get('y_col')
+        
+        if not x_col or not y_col:
+            return None  # No column mapping - use fallback method
+        
+        # Verify columns exist in dataframe
+        if x_col not in self.df.columns or y_col not in self.df.columns:
+            return None  # Columns don't exist - use fallback method
+        
+        try:
+            # Get the current windowed dataframe
+            windowed_df = self.df.loc[self.t0:self.t1].copy()
+            if windowed_df.empty:
+                return []
+            
+            # Filter by box bounds using dataframe columns directly
+            mask = (
+                (windowed_df[x_col] >= xlo) & (windowed_df[x_col] <= xhi) &
+                (windowed_df[y_col] >= ylo) & (windowed_df[y_col] <= yhi)
+            )
+            
+            selected_df = windowed_df[mask]
+            
+            if selected_df.empty:
+                return []
+            
+            # Get timestamps of selected points
+            selected_timestamps = selected_df.index.tolist()
+            
+            # Map to index positions in the FULL dataframe
+            idx_full = self.df.index
+            pos_in_full = []
+            for ts in selected_timestamps:
+                j = idx_full.get_indexer([ts], method="nearest")[0]
+                if 0 <= j < len(idx_full):
+                    pos_in_full.append(j)
+            
+            if not pos_in_full:
+                return []
+            
+            # Find contiguous runs
+            runs = self._find_contiguous_runs(pos_in_full)
+            
+            # Convert to half-open intervals
+            intervals = self._runs_to_half_open_intervals(idx_full, runs)
+            
+            return intervals
+                
+        except Exception as e:
+            # If anything goes wrong, fall back to artist method
+            return None
+    
+    def _box_select_via_artists(self, ax, xlo: float, xhi: float, 
+                                ylo: float, yhi: float) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Box selection using artist-based extraction (original method).
+        
+        This is the fallback method when direct dataframe filtering is not available.
         """
         import numpy as np
         
@@ -1372,6 +1498,8 @@ class EventsMixin:
         Records which axes the drag started in so we can clamp to that
         axes if the mouse leaves it during the drag.
         
+        Also disables other rectangle selectors to prevent coordinate interference.
+        
         Args:
             eclick: matplotlib mouse event (button press)
         """
@@ -1386,6 +1514,19 @@ class EventsMixin:
             self._rect_drag_start = (eclick.xdata, eclick.ydata)
         else:
             self._rect_drag_start = None
+        
+        # Disable all other rectangle selectors to prevent interference
+        if hasattr(self, 'rect_selectors') and self._rect_drag_axes is not None:
+            active_key = None
+            for key, ax in self.user_axes.items():
+                if ax is self._rect_drag_axes:
+                    active_key = key
+                    break
+            
+            # Disable all selectors except the active one
+            for key, selector in self.rect_selectors.items():
+                if key != active_key:
+                    selector.set_active(False)
     
     def _on_rect_selector_motion(self, event) -> None:
         """
@@ -1501,11 +1642,18 @@ class EventsMixin:
         """
         Clean up rectangle selection tracking on mouse release.
         
+        Re-enables all rectangle selectors that were disabled during drag.
+        
         Called automatically when user releases the mouse button.
         
         Args:
             erelease: matplotlib mouse event (button release)
         """
+        # Re-enable all rectangle selectors
+        if hasattr(self, 'rect_selectors'):
+            for key, selector in self.rect_selectors.items():
+                selector.set_active(True)
+        
         # Clear tracking state
         self._rect_drag_axes = None
         self._rect_drag_start = None
@@ -1531,12 +1679,12 @@ class EventsMixin:
         """
         Extract (x, y) data from axes at specified indices.
         
-        Works for both time-series and position plots by using index-based
-        lookup rather than timestamp-based. Handles Line2D and scatter artists.
+        CRITICAL: Only extracts from main dataframe artists, not boundary markers.
+        Uses cached windowed data to ensure we only highlight actual dataframe points.
         
         Args:
             ax: matplotlib Axes object
-            indices: List of integer indices into the data arrays
+            indices: List of integer indices into the windowed dataframe
         
         Returns:
             Tuple of (x_values, y_values) lists
@@ -1546,45 +1694,95 @@ class EventsMixin:
         x_vals = []
         y_vals = []
         
-        try:
-            # Extract from Line2D objects
-            for line in ax.lines:
-                try:
-                    xs = np.asarray(line.get_xdata(orig=False))
-                    ys = np.asarray(line.get_ydata(orig=False))
-                    
-                    if len(xs) == 0 or len(ys) == 0:
-                        continue
-                    
-                    # Extract data at requested indices
-                    for idx in indices:
-                        if 0 <= idx < len(xs) and 0 <= idx < len(ys):
-                            x_vals.append(float(xs[idx]))
-                            y_vals.append(float(ys[idx]))
-                except Exception:
-                    continue
-            
-            # Extract from scatter collections (PathCollection)
-            for coll in ax.collections:
-                if not hasattr(coll, 'get_offsets'):
-                    continue
-                    
-                try:
-                    offsets = np.asarray(coll.get_offsets())
-                    if offsets.size == 0:
-                        continue
-                    
-                    # Extract data at requested indices
-                    for idx in indices:
-                        if 0 <= idx < len(offsets):
-                            x_vals.append(float(offsets[idx, 0]))
-                            y_vals.append(float(offsets[idx, 1]))
-                except Exception:
-                    continue
+        # Get the windowed index and dataframe (cached from last plot)
+        windowed_idx = getattr(self, '_last_windowed_index', None)
+        windowed_df = getattr(self, '_last_windowed_df', None)
         
-        except Exception:
-            # Silently fail for unexpected artist types
-            pass
+        if windowed_idx is None or windowed_df is None or len(windowed_idx) == 0:
+            # Fallback: create windowed data on the fly
+            try:
+                windowed_df = self.df.loc[self.t0:self.t1].copy()
+                windowed_idx = windowed_df.index
+                if windowed_df.empty:
+                    return x_vals, y_vals
+            except Exception as e:
+                return x_vals, y_vals
+        
+        # CRITICAL: Instead of extracting from ALL artists (which includes boundary markers),
+        # extract directly from the cached windowed dataframe data
+        
+        # Find the axes role to determine what data to extract
+        ax_key = self._find_axes_key(ax)
+        if not ax_key:
+            return x_vals, y_vals
+            
+        axis_meta = self.axes_meta.get(ax_key, {})
+        role = axis_meta.get("role", "time").lower()
+        
+        if role == "time":
+            # For time axes: x = time (matplotlib date format), y = data column values
+            try:
+                # Get time values (convert to matplotlib date format)
+                import matplotlib.dates as mdates
+                time_vals = [mdates.date2num(windowed_idx[idx]) for idx in indices 
+                            if 0 <= idx < len(windowed_idx)]
+                
+                # For time axes, we need to determine which column is being plotted
+                # This is trickier - for now, extract from the first legitimate line artist
+                # that has the right number of data points
+                for line in ax.lines:
+                    try:
+                        ys = np.asarray(line.get_ydata(orig=False))
+                        if len(ys) == len(windowed_idx):  # Main data artist
+                            y_vals = [float(ys[idx]) for idx in indices 
+                                     if 0 <= idx < len(ys)]
+                            x_vals = time_vals[:len(y_vals)]  # Match lengths
+                            break
+                    except Exception:
+                        continue
+                        
+            except Exception:
+                return x_vals, y_vals
+                
+        elif role == "not-time":
+            # For position plots: extract directly from dataframe using configured columns
+            try:
+                # Get area configuration
+                area_config = self.axes_meta.get(ax_key, {})
+                if hasattr(self, 'layout_spec') and self.layout_spec:
+                    areas = self.layout_spec.get('areas', [])
+                    for area in areas:
+                        if area.get('key') == ax_key:
+                            area_config.update(area)
+                            break
+                
+                x_col = area_config.get('x_col')
+                y_col = area_config.get('y_col')
+                
+                if x_col and y_col and x_col in windowed_df.columns and y_col in windowed_df.columns:
+                    # Extract directly from dataframe - guaranteed to be main data only
+                    for idx in indices:
+                        if 0 <= idx < len(windowed_df):
+                            row = windowed_df.iloc[idx]
+                            x_vals.append(float(row[x_col]))
+                            y_vals.append(float(row[y_col]))
+                else:
+                    # Fallback: extract from first artist with correct data length
+                    for line in ax.lines:
+                        try:
+                            xs = np.asarray(line.get_xdata(orig=False))
+                            ys = np.asarray(line.get_ydata(orig=False))
+                            if len(xs) == len(windowed_idx) and len(ys) == len(windowed_idx):
+                                for idx in indices:
+                                    if 0 <= idx < len(xs) and 0 <= idx < len(ys):
+                                        x_vals.append(float(xs[idx]))
+                                        y_vals.append(float(ys[idx]))
+                                break
+                        except Exception:
+                            continue
+                            
+            except Exception:
+                return x_vals, y_vals
         
         return x_vals, y_vals
     
