@@ -232,9 +232,9 @@ class EventsMixin:
         if role == "not-time":
             # === NOT-TIME AXIS path (position plots, phase space, etc.) ===
             # Use the triggered selector key directly
-            spans_commit = self._box_select_on_not_time_axis(drag_ax, xlo, xhi, ylo, yhi, triggered_selector_key)
+            exact_intervals = self._box_select_on_not_time_axis(drag_ax, xlo, xhi, ylo, yhi, triggered_selector_key)
             
-            if not spans_commit:
+            if not exact_intervals:
                 self.current_spans.clear()
                 self.current_selection = None
                 self._commit_spans = []
@@ -243,8 +243,12 @@ class EventsMixin:
                 self.canvas.draw_idle()
                 return
             
-            # Convert to preview format (spans_commit are already half-open)
-            spans_preview = [(s, e) for s, e in spans_commit]
+            # APPLY LOCALIZED PADDING IMMEDIATELY for preview (user's request)
+            padded_intervals = self._apply_localized_padding_to_intervals(exact_intervals)
+            
+            # Use padded intervals for both preview AND commit
+            spans_commit = padded_intervals
+            spans_preview = [(s, e) for s, e in padded_intervals]
             
             # Optional snap (preview only)
             if self.snap_var.get():
@@ -380,22 +384,19 @@ class EventsMixin:
             run_start = prev = j
         runs.append((run_start, prev))
     
-        # Turn runs into half-open [start, end) spans
-        # --- Build both views of the runs ---
-        # (a) What we COMMIT: half-open [first, just-after-last]
-        spans_commit = self._runs_to_half_open_intervals(idx_full, runs)
+        # Turn runs into intervals
+        # --- For BOX SELECTIONS: Use exact intervals [first, last] ---
+        # This avoids boundary issues where highlighting doesn't match selection
+        exact_intervals = self._runs_to_exact_intervals(idx_full, runs)
         
-        # (b) What we PREVIEW on panels/strip: [first, last] (ends AT last included point)
-        spans_preview: list[tuple[pd.Timestamp, pd.Timestamp]] = []
-        for i0, i1 in runs:
-            s = pd.Timestamp(idx_full[i0])
-            e = pd.Timestamp(idx_full[i1])  # last included sample time
-            s = max(s, self.data_start)
-            e = min(e, self.data_end)
-            if e >= s:
-                spans_preview.append((s, e))
+        # APPLY LOCALIZED PADDING IMMEDIATELY for preview (user's request)
+        padded_intervals = self._apply_localized_padding_to_intervals(exact_intervals)
         
-        # Optional snap (preview only; commit stays half-open)
+        # Use padded intervals for both preview AND commit
+        spans_commit = padded_intervals
+        spans_preview = [(s, e) for s, e in padded_intervals]
+        
+        # Optional snap (preview only)
         if self.snap_var.get():  # type: ignore[union-attr]
             snapped_prev: list[tuple[pd.Timestamp, pd.Timestamp]] = []
             for s, e in spans_preview:
@@ -405,8 +406,8 @@ class EventsMixin:
         
         # Stash both: preview for drawing, commit for "Add Label"
         self.current_selection = None
-        self.current_spans = spans_preview        # was: self.current_spans = spans
-        self._commit_spans = spans_commit         # NEW: used by _add_interval
+        self.current_spans = spans_preview        # exact intervals for highlighting
+        self._commit_spans = spans_commit         # exact intervals for interval creation
         self.status_var.set(
             f"Selected {len(spans_preview)} contiguous block(s) from {len(pos)} point(s)"
         )
@@ -1072,6 +1073,126 @@ class EventsMixin:
             # ultra-conservative fallback
             return last_ts + pd.Timedelta(microseconds=1)
     
+    def _compute_localized_median_time_diff(self, target_time: pd.Timestamp, window_points: int = 50) -> pd.Timedelta:
+        """
+        Compute localized median time difference using ±window_points around target_time.
+        
+        Args:
+            target_time: The timestamp around which to compute the local median
+            window_points: Number of points on each side (total window = 2 * window_points)
+        
+        Returns:
+            Median time difference around the target point
+        """
+        try:
+            target_idx = self.df.index.get_indexer([target_time], method="nearest")[0]
+            if target_idx < 0:
+                return pd.Timedelta(seconds=60)
+            
+            start_idx = max(0, target_idx - window_points)
+            end_idx = min(len(self.df.index), target_idx + window_points + 1)
+            
+            local_times = self.df.index[start_idx:end_idx]
+            
+            if len(local_times) < 2:
+                return pd.Timedelta(seconds=60)
+            
+            time_diffs = []
+            for i in range(1, len(local_times)):
+                diff = local_times[i] - local_times[i-1]
+                time_diffs.append(diff)
+            
+            if not time_diffs:
+                return pd.Timedelta(seconds=60)
+            
+            diff_seconds = [diff.total_seconds() for diff in time_diffs]
+            diff_seconds.sort()
+            n = len(diff_seconds)
+            
+            if n % 2 == 0:
+                median_seconds = (diff_seconds[n//2 - 1] + diff_seconds[n//2]) / 2.0
+            else:
+                median_seconds = diff_seconds[n//2]
+            
+            return pd.Timedelta(seconds=median_seconds)
+            
+        except Exception:
+            return pd.Timedelta(seconds=60)
+
+    def _apply_localized_padding_to_intervals(self, intervals: list[tuple[pd.Timestamp, pd.Timestamp]]) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Apply localized padding to intervals during preview creation.
+        
+        For each interval, computes localized median time difference around start and end points,
+        then expands the interval bounds as:
+        [time_of_first_pt - local_med_time_diff/2, time_of_last_pt + local_med_time_diff/2]
+        
+        Args:
+            intervals: List of (start, end) timestamp pairs
+            
+        Returns:
+            List of padded (start, end) timestamp pairs
+        """
+        if not intervals:
+            return intervals
+            
+        padded_intervals = []
+        
+        for start_time, end_time in intervals:
+            if start_time == end_time:
+                # Single-point interval - apply symmetric padding
+                local_med_diff = self._compute_localized_median_time_diff(start_time)
+                half_diff = local_med_diff / 2
+                
+                padded_start = start_time - half_diff
+                padded_end = end_time + half_diff
+            else:
+                # Multi-point interval - compute separate medians for start and end
+                start_local_med = self._compute_localized_median_time_diff(start_time)
+                end_local_med = self._compute_localized_median_time_diff(end_time)
+                
+                padded_start = start_time - (start_local_med / 2)
+                padded_end = end_time + (end_local_med / 2)
+            
+            # Clamp to data bounds
+            padded_start = max(padded_start, self.data_start)
+            padded_end = min(padded_end, self.data_end)
+            
+            # Ensure start <= end after padding
+            if padded_start > padded_end:
+                padded_start, padded_end = start_time, end_time
+            
+            padded_intervals.append((padded_start, padded_end))
+        
+        return padded_intervals
+    
+    
+    def _runs_to_exact_intervals(
+        self,
+        idx: pd.DatetimeIndex,
+        runs: list[tuple[int, int]],   # inclusive index ranges [(i0, i1), ...]
+    ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Convert inclusive index runs to exact [start, end] timestamp pairs for box selections:
+          start = time of first included sample
+          end   = time of last included sample (NOT the sample after)
+        
+        This creates intervals that exactly match what the user visually selected,
+        avoiding the boundary issues with half-open intervals for box selections.
+        """
+        out: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+        
+        for i0, i1 in runs:
+            s = pd.Timestamp(idx[i0])  # First selected point
+            e = pd.Timestamp(idx[i1])  # Last selected point
+            
+            # Clamp to data bounds
+            s = max(s, self.data_start)
+            e = min(e, self.data_end)
+            
+            if e >= s:
+                out.append((s, e))
+        return out
     
     def _runs_to_half_open_intervals(
         self,
@@ -1083,6 +1204,8 @@ class EventsMixin:
           start = time of first included sample
           end   = time of the sample AFTER the last included (if it exists),
                   else a tiny epsilon after the last sample.
+        
+        Used for two-click selections and other cases where precise boundaries are needed.
         """
         out: list[tuple[pd.Timestamp, pd.Timestamp]] = []
         n = len(idx)
@@ -1373,8 +1496,8 @@ class EventsMixin:
             # Find contiguous runs
             runs = self._find_contiguous_runs(pos_in_full)
             
-            # Convert to half-open intervals
-            intervals = self._runs_to_half_open_intervals(idx_full, runs)
+            # Convert to exact intervals for box selections (avoids boundary issues)
+            intervals = self._runs_to_exact_intervals(idx_full, runs)
             
             return intervals
                 
@@ -1453,8 +1576,8 @@ class EventsMixin:
         # Find contiguous runs
         runs = self._find_contiguous_runs(pos_in_full)
         
-        # Convert to half-open intervals
-        return self._runs_to_half_open_intervals(idx_full, runs)
+        # Convert to exact intervals for box selections (avoids boundary issues)
+        return self._runs_to_exact_intervals(idx_full, runs)
     
     def _clear_two_click_state(self, *, keep_selection: bool = False) -> None:
         """Stop preview + clear anchor; optionally keep the current preview selection."""
