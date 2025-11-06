@@ -261,6 +261,15 @@ class EventsMixin:
             self.current_selection = None
             self.current_spans = spans_preview
             self._commit_spans = spans_commit
+            
+            # UPDATE TIME OVERLAYS for multi-span preview with padded intervals
+            self._update_time_overlays_for_multi_spans(spans_preview)
+            
+            # UPDATE STRIP PREVIEW with padded intervals
+            import matplotlib.dates as mdates
+            spans_float = [(mdates.date2num(s), mdates.date2num(e)) for s, e in spans_preview]
+            self._draw_strip_preview_spans(spans_float)
+            
             self.status_var.set(f"Selected {len(spans_preview)} block(s) from position axis")
             self._update_strip()
             
@@ -408,6 +417,15 @@ class EventsMixin:
         self.current_selection = None
         self.current_spans = spans_preview        # exact intervals for highlighting
         self._commit_spans = spans_commit         # exact intervals for interval creation
+        
+        # UPDATE TIME OVERLAYS for multi-span preview with padded intervals
+        self._update_time_overlays_for_multi_spans(spans_preview)
+        
+        # UPDATE STRIP PREVIEW with padded intervals
+        import matplotlib.dates as mdates
+        spans_float = [(mdates.date2num(s), mdates.date2num(e)) for s, e in spans_preview]
+        self._draw_strip_preview_spans(spans_float)
+        
         self.status_var.set(
             f"Selected {len(spans_preview)} contiguous block(s) from {len(pos)} point(s)"
         )
@@ -608,10 +626,14 @@ class EventsMixin:
             return None
     
     
-    def _update_time_overlays(self, x0: float, x1: float) -> None:
+    def _update_time_overlays(self, x0: float, x1: float, color: str = "tab:orange") -> None:
         """
         Move/resize the animated preview band on each time-lane axes and blit only those.
         x0/x1 are Matplotlib date floats.
+        
+        Args:
+            x0, x1: Time range in matplotlib date format
+            color: Color for the overlay ("yellow" for dragbox, "tab:orange" for two-click)
         
         Skip overlays only if RectangleSelector is actively being dragged by user.
         """
@@ -641,6 +663,8 @@ class EventsMixin:
             
             r.set_xy((left, 0))
             r.set_width(width)
+            # Set the correct color for this selection type
+            r.set_facecolor(color)
             if not r.get_visible():
                 r.set_visible(True)
             artists.append(r)
@@ -652,6 +676,34 @@ class EventsMixin:
             # graceful fallback
             if getattr(self, "canvas", None) is not None:
                 self.canvas.draw_idle()
+
+    def _update_time_overlays_for_multi_spans(self, spans: list[tuple[pd.Timestamp, pd.Timestamp]]) -> None:
+        """
+        Update time overlays to show multiple time spans (for box selections).
+        Creates a combined overlay that covers all selected time ranges.
+        Uses YELLOW color to distinguish from orange two-click selections.
+        
+        Args:
+            spans: List of (start, end) timestamp pairs
+        """
+        if not spans or not getattr(self, "_time_overlays", None):
+            return
+        
+        import matplotlib.dates as mdates
+        
+        # Find the overall time range that encompasses all spans
+        all_starts = [s for s, e in spans]
+        all_ends = [e for s, e in spans]
+        
+        overall_start = min(all_starts)
+        overall_end = max(all_ends)
+        
+        # Convert to matplotlib date floats
+        x0 = mdates.date2num(overall_start)
+        x1 = mdates.date2num(overall_end)
+        
+        # Use YELLOW color for dragbox selections (vs orange for two-click)
+        self._update_time_overlays(x0, x1, color="yellow")
     
     
     def _hide_time_overlays(self) -> None:
@@ -771,7 +823,7 @@ class EventsMixin:
     
             # Show a visible sliver
             eps = self._px_to_data_dx(primary_ax or event.inaxes, 2) if (primary_ax or event.inaxes) is not None else 1e-10
-            self._update_time_overlays(self._two_click_t0, self._two_click_t0 + eps)
+            self._update_time_overlays(self._two_click_t0, self._two_click_t0 + eps, color="tab:orange")
     
             t0 = pd.Timestamp(mdates.num2date(self._two_click_t0)).tz_localize(None)
             
@@ -797,7 +849,7 @@ class EventsMixin:
         self._two_click_t0 = None
         self._two_click_last_x = None
         # keep preview visible at final span (user can press Enter to add)
-        self._update_time_overlays(t0, t1)
+        self._update_time_overlays(t0, t1, color="tab:orange")
     
         lo_f, hi_f = sorted([t0, t1])
         s_ts = pd.Timestamp(mdates.num2date(lo_f)).tz_localize(None)
@@ -893,7 +945,7 @@ class EventsMixin:
             eps = self._px_to_data_dx(primary_ax or event.inaxes, 2) if (primary_ax or event.inaxes) is not None else 1e-10
             x1 = x0 + eps
     
-        self._update_time_overlays(x0, x1)
+        self._update_time_overlays(x0, x1, color="tab:orange")
         self._draw_strip_preview_spans([(x0, x1)])
         
         # NOTE: No real-time highlighting during motion for performance
@@ -1033,7 +1085,8 @@ class EventsMixin:
         
         self.current_selection = (start, end)
         x0 = mdates.date2num(start); x1 = mdates.date2num(end)
-        self._update_time_overlays(x0, x1)
+        # Use orange for strip editing (like two-click selections)
+        self._update_time_overlays(x0, x1, color="tab:orange")
         self._draw_strip_preview_spans([(x0, x1)])
         
         # Show point highlights during strip editing preview  
