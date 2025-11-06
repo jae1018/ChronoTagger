@@ -637,8 +637,12 @@ class EventsMixin:
         
         Skip overlays only if RectangleSelector is actively being dragged by user.
         """
+        # Ensure overlay system exists
         if not getattr(self, "_time_overlays", None):
-            return
+            self._init_time_overlays()
+            
+        if not getattr(self, "_time_overlays", None):
+            return  # Still failed to create
             
         left = min(x0, x1)
         width = max(abs(x1 - x0), 0.0)
@@ -686,8 +690,15 @@ class EventsMixin:
         Args:
             spans: List of (start, end) timestamp pairs
         """
-        if not spans or not getattr(self, "_time_overlays", None):
+        if not spans:
             return
+            
+        # Ensure overlay system exists
+        if not getattr(self, "_time_overlays", None):
+            self._init_time_overlays()
+            
+        if not getattr(self, "_time_overlays", None):
+            return  # Still failed to create
         
         import matplotlib.dates as mdates
         
@@ -707,20 +718,81 @@ class EventsMixin:
     
     
     def _hide_time_overlays(self) -> None:
-        if not getattr(self, "_time_overlays", None):
-            return
+        """
+        Hide all time overlay rectangles with aggressive cleanup.
+        Searches for orphaned overlays across all axes.
+        """
         changed = []
-        for r in self._time_overlays.values():
-            if r.get_visible():
-                r.set_visible(False)
-                changed.append(r)
+        
+        # First, hide all tracked overlays
+        if hasattr(self, '_time_overlays') and self._time_overlays:
+            for ax, r in self._time_overlays.items():
+                try:
+                    if r.get_visible():
+                        r.set_visible(False)
+                        changed.append(r)
+                except Exception:
+                    continue
+        
+        # Aggressive cleanup: Search ALL axes for overlay-like rectangles
+        all_axes = []
+        if hasattr(self, 'user_axes'):
+            all_axes.extend(self.user_axes.values())
+        if hasattr(self, 'strip_ax') and self.strip_ax is not None:
+            all_axes.append(self.strip_ax)
+            
+        for ax in all_axes:
+            try:
+                # Look for any rectangle that could be an overlay
+                patches_to_hide = []
+                for patch in ax.patches:
+                    try:
+                        # Check if this looks like one of our overlay rectangles
+                        is_overlay = (
+                            hasattr(patch, 'get_animated') and 
+                            hasattr(patch, 'get_facecolor') and
+                            hasattr(patch, 'get_alpha') and
+                            patch.get_visible()
+                        )
+                        
+                        if is_overlay:
+                            # Additional checks to identify our overlays
+                            alpha = patch.get_alpha()
+                            is_animated = patch.get_animated()
+                            
+                            # Our overlays have alpha=0.25 and are animated
+                            if alpha == 0.25 and is_animated:
+                                patches_to_hide.append(patch)
+                    except Exception:
+                        continue
+                
+                # Hide found overlay patches
+                for patch in patches_to_hide:
+                    try:
+                        patch.set_visible(False)
+                        changed.append(patch)
+                    except Exception:
+                        continue
+                        
+            except Exception:
+                continue
+        
+        # If no overlays found, we're done
         if not changed:
             return
+            
+        # Use blitting for performance, fallback to full redraw
         blit = getattr(self, "_blit", None)
         if blit is not None:
-            blit.draw(changed)
+            try:
+                blit.draw(changed)
+            except Exception:
+                # Fallback to full redraw if blitting fails
+                if hasattr(self, "canvas") and self.canvas is not None:
+                    self.canvas.draw_idle()
         else:
-            if getattr(self, "canvas", None) is not None:
+            # Graceful fallback
+            if hasattr(self, "canvas") and self.canvas is not None:
                 self.canvas.draw_idle()
     
     
@@ -728,10 +800,13 @@ class EventsMixin:
         """
         Create/refresh translucent preview bands on every time axis plus the strip. 
         Mark them animated so we can blit them cheaply.
+        
+        CRITICAL: Does NOT automatically restore overlays - only creates fresh hidden ones.
         """
         import matplotlib.patches as mpatches
         from matplotlib.transforms import blended_transform_factory
-    
+        
+        # Always start completely fresh
         self._time_overlays = {}
         self._two_click_active = False
         self._two_click_t0 = None
@@ -752,11 +827,11 @@ class EventsMixin:
             r = mpatches.Rectangle(
                 (0, 0), 0, 1,
                 transform=trans,
-                facecolor="tab:orange",
+                facecolor="yellow",  # Default color
                 edgecolor="none",
                 alpha=0.25,
                 zorder=ax.get_zorder() + 10,
-                visible=False,
+                visible=False,  # Always start hidden - NO automatic restoration
             )
             r.set_animated(True)  # <- critical for blitting
             ax.add_patch(r)
@@ -764,6 +839,45 @@ class EventsMixin:
     
         # also prep a (reusable) pool of strip preview rectangles for multi-span previews
         self._strip_preview_pool = []  # created lazily when needed
+        
+        # DO NOT restore overlays automatically - only when explicitly requested
+    
+    
+    def _restore_current_selection_overlays(self) -> None:
+        """
+        Restore overlay display for current selection after overlays are recreated.
+        Only restores if there's actually an active selection.
+        """
+        import matplotlib.dates as mdates
+        
+        # Only restore if we have actual active selections
+        has_active_selection = (
+            (hasattr(self, 'current_spans') and self.current_spans) or
+            (hasattr(self, 'current_selection') and self.current_selection is not None) or
+            getattr(self, "_two_click_active", False)
+        )
+        
+        if not has_active_selection:
+            return  # No active selection, don't restore anything
+        
+        # Check for multi-span selection (dragbox) - use YELLOW
+        if hasattr(self, 'current_spans') and self.current_spans:
+            self._update_time_overlays_for_multi_spans(self.current_spans)
+            return
+        
+        # Check for single-span selection
+        if hasattr(self, 'current_selection') and self.current_selection:
+            start_ts, end_ts = self.current_selection
+            x0 = mdates.date2num(start_ts)
+            x1 = mdates.date2num(end_ts)
+            
+            # Use YELLOW for completed selections, ORANGE only for active two-click motion
+            color = "yellow"  # Default to yellow for all completed selections
+            if getattr(self, "_two_click_active", False):
+                color = "tab:orange"  # Only during active two-click motion
+            
+            self._update_time_overlays(x0, x1, color=color)
+            return
     
     
     def _on_time_click(self, event) -> None:
@@ -849,7 +963,8 @@ class EventsMixin:
         self._two_click_t0 = None
         self._two_click_last_x = None
         # keep preview visible at final span (user can press Enter to add)
-        self._update_time_overlays(t0, t1, color="tab:orange")
+        # Use yellow for completed selections to match dragbox behavior
+        self._update_time_overlays(t0, t1, color="yellow")
     
         lo_f, hi_f = sorted([t0, t1])
         s_ts = pd.Timestamp(mdates.num2date(lo_f)).tz_localize(None)
@@ -1085,8 +1200,8 @@ class EventsMixin:
         
         self.current_selection = (start, end)
         x0 = mdates.date2num(start); x1 = mdates.date2num(end)
-        # Use orange for strip editing (like two-click selections)
-        self._update_time_overlays(x0, x1, color="tab:orange")
+        # Use yellow for strip editing (consistent with other completed selections)
+        self._update_time_overlays(x0, x1, color="yellow")
         self._draw_strip_preview_spans([(x0, x1)])
         
         # Show point highlights during strip editing preview  
@@ -1657,33 +1772,34 @@ class EventsMixin:
 
     def _cancel_active_selection(self) -> None:
         """
-        Cancel any active selection or preview state.
-        Clears all selection types: two-click, box selection, and previews.
+        Cancel any active selection - SIMPLE BUT THOROUGH approach.
         """
-        # Clear two-click state
-        self._clear_two_click_state()
-        
-        # Clear all selection states
+        # Clear all selection state
         self.current_selection = None
         if hasattr(self, 'current_spans'):
             self.current_spans.clear()
         if hasattr(self, '_commit_spans'):
             self._commit_spans.clear()
         
+        # Clear two-click state
+        self._two_click_active = False
+        self._two_click_t0 = None
+        self._two_click_last_x = None
+        
         # Clear point highlights
         if hasattr(self, '_clear_selected_point_highlights'):
             self._clear_selected_point_highlights()
         
-        # Hide time overlays
+        # Hide overlays using existing method
         self._hide_time_overlays()
         
         # Clear strip previews
         self._draw_strip_preview_spans([])
         
-        # Update strip display
+        # Update strip
         self._update_strip()
         
-        # Refresh display
+        # Force canvas redraw
         if hasattr(self, 'canvas') and self.canvas is not None:
             self.canvas.draw_idle()
     
