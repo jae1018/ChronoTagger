@@ -88,7 +88,7 @@ class TimeIntervalLabeler(
 
         # Label classes & colors
         if classes is None:
-            classes = ["PlasmaSheet", "Lobe", "Magnetosheath", "SolarWind", "UNKNOWN"]
+            classes = ["UNKNOWN", "label_1", "label_2"]
         self.classes: List[str] = list(classes)
 
         if class_colors is None:
