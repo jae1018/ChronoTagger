@@ -588,8 +588,8 @@ class EventsMixin:
     
     def _init_time_overlays(self) -> None:
         """
-        Create/refresh translucent preview bands on every time-lane panel (col 0, role='time')
-        plus the strip. Mark them animated so we can blit them cheaply.
+        Create/refresh translucent preview bands on every time axis plus the strip. 
+        Mark them animated so we can blit them cheaply.
         """
         import matplotlib.patches as mpatches
         from matplotlib.transforms import blended_transform_factory
@@ -600,11 +600,11 @@ class EventsMixin:
         self._two_click_last_x = None
     
         axes = []
-        # only time-lane axes in column 0
+        # Include ALL time axes (not just time-lane axes in column 0)
         if getattr(self, "_time_axis_keys", None):
             for k in self._time_axis_keys:
                 ax = self.user_axes.get(k)
-                if ax is not None and self._is_time_lane_axis(ax):
+                if ax is not None:
                     axes.append(ax)
         if getattr(self, "strip_ax", None) is not None:
             axes.append(self.strip_ax)

@@ -32,6 +32,7 @@ class IntervalsMixin:
         """
         commit_spans = getattr(self, "_commit_spans", []) or []
         preview_spans = getattr(self, "current_spans", []) or []
+        current_selection = getattr(self, "current_selection", None)
     
         label = self.current_class_var.get()  # type: ignore[union-attr]
         policy = getattr(self, "_overlap_policy", "skip")
@@ -51,9 +52,9 @@ class IntervalsMixin:
             self.current_spans.clear()
             self.current_selection = None
         
-        # Clear point highlights
-        if hasattr(self, '_clear_selected_point_highlights'):
-            self._clear_selected_point_highlights()
+            # Clear point highlights
+            if hasattr(self, '_clear_selected_point_highlights'):
+                self._clear_selected_point_highlights()
     
             if count > 0:
                 self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
@@ -76,7 +77,8 @@ class IntervalsMixin:
             if policy == "skip":
                 final_spans = []
                 for s, e in spans_to_add:
-                    final_spans.extend(self._subtract_overlaps_from_span(s, e))
+                    subtracted = self._subtract_overlaps_from_span(s, e)
+                    final_spans.extend(subtracted)
             else:
                 # Future: handle "replace" by carving, for now just add as-is
                 final_spans = spans_to_add
@@ -104,12 +106,17 @@ class IntervalsMixin:
             return
     
         # === 3) Single-span path ===
-        if not self.current_selection:
+        if not current_selection:
             from tkinter import messagebox
             messagebox.showwarning("No Selection", "Select a time range first (drag or click×2).")
             return
     
-        s, e = self.current_selection
+        s, e = current_selection
+        if e <= s:
+            from tkinter import messagebox
+            messagebox.showwarning("Invalid Selection", "End time must be after start time.")
+            return
+            
         self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
         self.current_selection = None
         
