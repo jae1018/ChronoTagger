@@ -579,5 +579,11 @@ class LabelByRuleDialog(tk.Toplevel):
 
     def _on_cancel(self) -> None:
         """Cancel and close the dialog."""
+        # Clear any active preview before closing
+        try:
+            self._on_clear_preview_cb()
+        except Exception:
+            pass  # Silently ignore errors during cleanup
+        
         self.result = None
         self.destroy()

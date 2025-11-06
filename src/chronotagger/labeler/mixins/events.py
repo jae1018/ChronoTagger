@@ -450,8 +450,8 @@ class EventsMixin:
             has_selection = (
                 getattr(self, "_pick_anchor_ts", None) is not None or 
                 getattr(self, "current_selection", None) is not None or
-                getattr(self, "current_spans", []) or
-                getattr(self, "_commit_spans", []) or
+                bool(getattr(self, "current_spans", None)) or
+                bool(getattr(self, "_commit_spans", None)) or
                 getattr(self, "_two_click_active", False)
             )
             
@@ -680,10 +680,10 @@ class EventsMixin:
         if btn == 3:
             # Check if we have any active selection (not just two-click)
             has_selection = (
-                getattr(self, "_pick_anchor_ts", None) is not None or 
-                getattr(self, "current_selection", None) is not None or
-                getattr(self, "current_spans", []) or
-                getattr(self, "_commit_spans", [])
+            getattr(self, "_pick_anchor_ts", None) is not None or 
+            getattr(self, "current_selection", None) is not None or
+            bool(getattr(self, "current_spans", None)) or
+            bool(getattr(self, "_commit_spans", None))
             )
             
             if has_selection:
@@ -1475,8 +1475,8 @@ class EventsMixin:
         has_selection = (
             getattr(self, "_pick_anchor_ts", None) is not None or 
             getattr(self, "current_selection", None) is not None or
-            getattr(self, "current_spans", []) or
-            getattr(self, "_commit_spans", []) or
+            bool(getattr(self, "current_spans", None)) or
+            bool(getattr(self, "_commit_spans", None)) or
             getattr(self, "_two_click_active", False)
         )
         
