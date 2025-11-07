@@ -39,7 +39,24 @@ def plot_fn():
 def labeler(df_hour, plot_fn):
     """Create a labeler with GUI built but window withdrawn (no popup)."""
     from chronotagger.labeler import TimeIntervalLabeler
-    lbl = TimeIntervalLabeler(df=df_hour, plot_fn=plot_fn, window=pd.Timedelta("30min"))
+
+    # Define layout_spec for grid-only mode
+    layout_spec = {
+        'nrows': 3,
+        'ncols': 1,
+        'areas': [
+            {'key': 'panel1', 'row': 0, 'col': 0, 'rowspan': 1, 'colspan': 1, 'role': 'time'},
+            {'key': 'panel2', 'row': 1, 'col': 0, 'rowspan': 1, 'colspan': 1, 'role': 'time'},
+            {'key': 'labels', 'row': 2, 'col': 0, 'rowspan': 1, 'colspan': 1, 'role': 'labels'}
+        ]
+    }
+
+    lbl = TimeIntervalLabeler(
+        df=df_hour,
+        plot_fn=plot_fn,
+        window=pd.Timedelta("30min"),
+        layout_spec=layout_spec
+    )
     lbl._build_gui()           # build axes & widgets
     lbl.root.withdraw()        # keep window hidden on CI/Windows
     yield lbl
