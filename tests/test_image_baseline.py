@@ -11,7 +11,18 @@ import pandas as pd
 def test_baseline_overlay_image(df_hour, plot_fn):
     from chronotagger.labeler import TimeIntervalLabeler
 
-    lbl = TimeIntervalLabeler(df=df_hour, plot_fn=plot_fn)
+    # Define layout_spec for grid-only mode
+    layout_spec = {
+        'nrows': 3,
+        'ncols': 1,
+        'areas': [
+            {'key': 'panel1', 'row': 0, 'col': 0, 'rowspan': 1, 'colspan': 1, 'role': 'time'},
+            {'key': 'panel2', 'row': 1, 'col': 0, 'rowspan': 1, 'colspan': 1, 'role': 'time'},
+            {'key': 'labels', 'row': 2, 'col': 0, 'rowspan': 1, 'colspan': 1, 'role': 'labels'}
+        ]
+    }
+
+    lbl = TimeIntervalLabeler(df=df_hour, plot_fn=plot_fn, layout_spec=layout_spec)
 
     # --- Build figure & axes without Tk ---
     fig = Figure(figsize=(10, 6))
@@ -25,6 +36,10 @@ def test_baseline_overlay_image(df_hour, plot_fn):
         "panel2": fig.add_subplot(gs[1, 0]),
     }
     lbl.strip_ax = fig.add_subplot(gs[4, 0], sharex=lbl.user_axes["panel1"])
+
+    # Set up time axis tracking (normally done by _build_gui)
+    lbl._time_axis_keys = {"panel1", "panel2"}
+    lbl._primary_time_key = "panel1"
 
     # Apply time formatting like the app would
     for ax in list(lbl.user_axes.values()) + [lbl.strip_ax]:

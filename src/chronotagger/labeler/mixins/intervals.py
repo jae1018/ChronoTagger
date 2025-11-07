@@ -779,7 +779,8 @@ class IntervalsMixin:
         return {
             'deleted': deleted,
             'truncated': truncated,
-            'split': split
+            'split': split,
+            'total_affected': deleted + truncated + split
         }
     
     def _open_clear_intervals_dialog(self) -> None:

@@ -58,6 +58,7 @@ def labeler(df_hour, plot_fn):
         layout_spec=layout_spec
     )
     lbl._build_gui()           # build axes & widgets
+    lbl._update_plot()         # draw initial data and set xlim
     lbl.root.withdraw()        # keep window hidden on CI/Windows
     yield lbl
     lbl.root.destroy()

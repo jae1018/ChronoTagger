@@ -68,21 +68,25 @@ def labeler_with_position_plot(df_hour, plot_fn):
     
     # Layout with mixed axis types
     layout_spec = {
+        "nrows": 2,
+        "ncols": 2,
         "areas": [
             {"key": "time1", "role": "time", "row": 0, "col": 0},
             {"key": "time2", "role": "time", "row": 1, "col": 0},
-            {"key": "xy_plot", "role": "not-time", "row": 0, "col": 1, 
+            {"key": "xy_plot", "role": "not-time", "row": 0, "col": 1,
              "x_col": "BX", "y_col": "BY"},
+            {"key": "labels", "role": "labels", "row": 1, "col": 1},
         ]
     }
     
     lbl = TimeIntervalLabeler(
-        df=df_hour, 
+        df=df_hour,
         plot_fn=enhanced_plot_fn,
         window=pd.Timedelta("30min"),
         layout_spec=layout_spec
     )
     lbl._build_gui()
+    lbl._update_plot()  # Draw initial data and set xlim
     lbl.root.withdraw()  # Hide window for tests
     yield lbl
     lbl.root.destroy()

@@ -154,7 +154,8 @@ class PlottingMixin:
     
         # Strip + sidebar
         self._update_strip()
-        self._update_intervals_list()
+        if hasattr(self, 'intervals_tree'):
+            self._update_intervals_list()
     
         # --- Keep two-click preview overlays alive across redraws (existing logic) ---
         if getattr(self, "two_click_mode", False):

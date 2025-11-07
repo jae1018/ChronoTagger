@@ -4,8 +4,9 @@ import matplotlib.dates as mdates
 def test_drag_select_then_add(labeler):
     t1 = labeler.df.index[5]
     t2 = labeler.df.index[20]
-    e1 = type("E", (), {"xdata": mdates.date2num(t1)})
-    e2 = type("E", (), {"xdata": mdates.date2num(t2)})
+    ax = list(labeler.user_axes.values())[0]
+    e1 = type("E", (), {"xdata": mdates.date2num(t1), "inaxes": ax})
+    e2 = type("E", (), {"xdata": mdates.date2num(t2), "inaxes": ax})
 
     labeler._on_rectangle_select(e1, e2)
     labeler._add_interval()

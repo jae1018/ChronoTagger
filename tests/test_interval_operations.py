@@ -519,21 +519,21 @@ class TestClearRangeOperations:
     def test_clear_intervals_truncate_overlap(self, labeler):
         """Test clearing truncates partially overlapping intervals."""
         idx = labeler.df.index
-        
+
         labeler.intervals = [
             Interval(idx[10], idx[25], "A"),  # Left overlap
-            Interval(idx[20], idx[35], "B"),  # Right overlap
+            Interval(idx[24], idx[35], "B"),  # Right overlap
         ]
-        
+
         # Clear middle range
         results = labeler._clear_intervals_in_range(idx[22], idx[28])
-        
+
         assert results['truncated'] == 2
-        
+
         # A should be truncated to [10,22]
         a_iv = [iv for iv in labeler.intervals if iv.label == "A"][0]
         assert a_iv.end == idx[22]
-        
+
         # B should be truncated to [28,35]
         b_iv = [iv for iv in labeler.intervals if iv.label == "B"][0]
         assert b_iv.start == idx[28]
