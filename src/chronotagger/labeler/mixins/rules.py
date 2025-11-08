@@ -72,8 +72,15 @@ class RulesMixin:
         points = int(mask.sum())
         runs = self._mask_to_runs(mask)
 
-        # Build full-scope preview+commit
-        preview_full, commit_full = self._runs_to_preview_and_commit(df_scope.index, runs)
+        # APPLY RULE-AWARE PADDING directly to runs (avoids timestamp-to-index mapping errors)
+        # This expands intervals by min(local_median/2, distance_to_nearest_false_point)
+        # ensuring we don't capture points that don't satisfy the rule
+        padded_intervals = self._apply_rule_aware_padding(runs, mask, df_scope.index)
+        
+        # For commit, we need half-open intervals, but padded_intervals are already in 
+        # the correct format (start_ts, end_ts) from rule-aware padding
+        preview_full = padded_intervals
+        commit_full = padded_intervals
 
         # For drawing, clip preview to current visible window only (avoid painting the whole dataset)
         preview_for_window = self._clip_spans_to_window(preview_full, self.t0, self.t1)
@@ -368,3 +375,101 @@ class RulesMixin:
             # Clip to window bounds
             out.append((max(s, t0), min(e, t1)))
         return out
+
+    def _apply_rule_aware_padding(
+        self,
+        runs: List[Tuple[int, int]],
+        mask: np.ndarray,
+        idx: pd.DatetimeIndex
+    ) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Apply localized padding to runs while respecting rule boundaries.
+        
+        Works directly with index runs to avoid timestamp-to-index mapping errors.
+        Pads by min(local_median/2, distance_to_nearest_non_matching_point).
+        
+        Args:
+            runs: List of (start_idx, end_idx) tuples (inclusive indices into mask/idx)
+            mask: Boolean mask indicating which points satisfy the rule
+            idx: DatetimeIndex corresponding to the mask
+        
+        Returns:
+            List of padded (start_timestamp, end_timestamp) tuples
+            
+        Example:
+            Run at indices [100, 101, 102] (SCPot >= 17)
+            Point at index 103: SCPot = 16.8 (doesn't satisfy)
+            
+            Without boundary check:
+              Pad by median/2 → might capture index 103 ❌
+            
+            With boundary check:
+              Pad by min(median/2, distance_to_idx_103 - ε) → stops before idx 103 ✓
+        """
+        if not runs:
+            return []
+        
+        padded_intervals = []
+        
+        for i0, i1 in runs:
+            # Validate indices
+            if i0 < 0 or i1 < 0 or i0 >= len(idx) or i1 >= len(idx) or i0 > i1:
+                # Invalid run, skip
+                continue
+            
+            # Get timestamps for this run
+            start_ts = pd.Timestamp(idx[i0])
+            end_ts = pd.Timestamp(idx[i1])
+            
+            # Compute localized medians (default padding)
+            start_median = self._compute_localized_median_time_diff(start_ts)
+            end_median = self._compute_localized_median_time_diff(end_ts)
+            
+            # Default padding: median/2
+            start_pad_seconds = start_median.total_seconds() / 2
+            end_pad_seconds = end_median.total_seconds() / 2
+            
+            # === CRITICAL: Scan mask using actual indices, not mapped timestamps ===
+            
+            # Find distance to nearest False point BEFORE start (scan backward)
+            for i in range(i0 - 1, -1, -1):
+                if not mask[i]:
+                    # Found a False point - compute distance
+                    false_ts = pd.Timestamp(idx[i])
+                    dist_to_false = (start_ts - false_ts).total_seconds()
+                    # Pad by min(median/2, distance - epsilon)
+                    epsilon = 0.001  # Small buffer to avoid capturing boundary point
+                    start_pad_seconds = min(start_pad_seconds, max(0, dist_to_false - epsilon))
+                    break
+            # If we never found a False (all True up to start), keep full median padding
+            
+            # Find distance to nearest False point AFTER end (scan forward)
+            for i in range(i1 + 1, len(mask)):
+                if not mask[i]:
+                    # Found a False point - compute distance
+                    false_ts = pd.Timestamp(idx[i])
+                    dist_to_false = (false_ts - end_ts).total_seconds()
+                    # Pad by min(median/2, distance - epsilon)
+                    epsilon = 0.001  # Small buffer to avoid capturing boundary point
+                    end_pad_seconds = min(end_pad_seconds, max(0, dist_to_false - epsilon))
+                    break
+            # If we never found a False (all True after end), keep full median padding
+            
+            # Apply padding (ensuring non-negative)
+            start_pad_seconds = max(0, start_pad_seconds)
+            end_pad_seconds = max(0, end_pad_seconds)
+            
+            padded_start = start_ts - pd.Timedelta(seconds=start_pad_seconds)
+            padded_end = end_ts + pd.Timedelta(seconds=end_pad_seconds)
+            
+            # Clamp to data bounds
+            padded_start = max(padded_start, self.data_start)
+            padded_end = min(padded_end, self.data_end)
+            
+            # Ensure start <= end after padding
+            if padded_start > padded_end:
+                padded_start, padded_end = start_ts, end_ts
+            
+            padded_intervals.append((padded_start, padded_end))
+        
+        return padded_intervals
