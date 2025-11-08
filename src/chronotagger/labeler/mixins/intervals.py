@@ -24,11 +24,187 @@ class IntervalsMixin:
     # ---- user actions ----
     def _add_interval(self) -> None:
         """
-        Add one or more intervals:
-          • If self._commit_spans is non-empty -> add each span exactly as provided
-            (already policy-processed by dialogs).
-          • Else if self.current_spans is set -> normalize to half-open and apply policy here.
-          • Else warn the user.
+        Add one or more intervals with overlap detection and resolution.
+        
+        Flow:
+        1. Check for overlaps with existing intervals
+        2. If overlaps exist, show resolution dialog
+        3. User picks policy (skip/replace) and preview updates
+        4. On confirm, add intervals with chosen policy
+        """
+        commit_spans = getattr(self, "_commit_spans", []) or []
+        preview_spans = getattr(self, "current_spans", []) or []
+        current_selection = getattr(self, "current_selection", None)
+    
+        label = self.current_class_var.get()  # type: ignore[union-attr]
+        
+        # Determine which spans to work with
+        if commit_spans:
+            # Rule-driven or manual with preview
+            spans_to_check = commit_spans
+        elif preview_spans:
+            # Box-select path
+            spans_to_check = self._normalize_preview_spans_to_half_open(preview_spans)
+        elif current_selection:
+            # Single-span path
+            s, e = current_selection
+            if e <= s:
+                messagebox.showwarning("Invalid Selection", "End time must be after start time.")
+                return
+            spans_to_check = [(s, e)]
+        else:
+            messagebox.showwarning("No Selection", "Select a time range first (drag or click×2).")
+            return
+        
+        # Check for overlaps
+        overlap_count = self._count_overlapping_intervals(spans_to_check)
+        
+        if overlap_count > 0:
+            # Show overlap resolution dialog
+            from ..dialogs.overlap_resolution import OverlapResolutionDialog
+            
+            dialog = OverlapResolutionDialog(
+                parent=self.root,  # type: ignore[arg-type]
+                overlap_count=overlap_count,
+                on_policy_selected=lambda policy: self._preview_with_policy(spans_to_check, policy)
+            )
+            
+            self.root.wait_window(dialog)  # type: ignore[union-attr]
+            
+            if dialog.policy is None:
+                # User canceled - clear preview
+                self._clear_preview_state()
+                return
+            
+            # User confirmed - use selected policy
+            policy = dialog.policy
+        else:
+            # No overlaps - proceed directly
+            policy = "skip"  # Doesn't matter, no overlaps to handle
+        
+        # Add intervals with chosen policy
+        self._add_intervals_with_policy(spans_to_check, label, policy)
+        
+        # Clear selection state
+        self._clear_preview_state()
+    
+    def _count_overlapping_intervals(
+        self, spans: List[Tuple[pd.Timestamp, pd.Timestamp]]
+    ) -> int:
+        """
+        Count how many existing intervals overlap with the proposed spans.
+        
+        Args:
+            spans: List of (start, end) timestamp pairs to check
+            
+        Returns:
+            Number of unique intervals that have any overlap with spans
+        """
+        overlapping = set()
+        for s, e in spans:
+            for iv in self.intervals:
+                # Check if interval overlaps with span
+                if not (iv.end <= s or iv.start >= e):
+                    overlapping.add(id(iv))
+        return len(overlapping)
+    
+    def _preview_with_policy(
+        self, spans: List[Tuple[pd.Timestamp, pd.Timestamp]], policy: str
+    ) -> tuple[int, int]:
+        """
+        Apply overlap policy to spans and update preview.
+        
+        Called by OverlapResolutionDialog when user selects a policy.
+        Updates the yellow preview to show what will actually be added.
+        
+        Args:
+            spans: Original spans before policy application
+            policy: "skip" or "replace"
+            
+        Returns:
+            Tuple of (num_points, num_intervals) after policy application
+        """
+        # Apply policy
+        final_spans = self._apply_overlap_policy_to_spans(spans, policy)
+        
+        # Update preview to show actual result
+        # Convert to preview format (end at last included sample)
+        preview_spans = self._commit_to_preview_spans(final_spans)
+        self.current_spans = preview_spans
+        self._commit_spans = final_spans
+        
+        # Count points in final spans
+        total_points = 0
+        for s, e in final_spans:
+            try:
+                sub = self.df.loc[s:e]
+                total_points += len(sub)
+            except Exception:
+                pass
+        
+        # Update plot to show new preview
+        self._update_plot()
+        
+        return total_points, len(final_spans)
+    
+    def _add_intervals_with_policy(
+        self,
+        spans: List[Tuple[pd.Timestamp, pd.Timestamp]],
+        label: str,
+        policy: str
+    ) -> None:
+        """
+        Add intervals with the specified overlap policy.
+        
+        Args:
+            spans: List of (start, end) timestamp pairs
+            label: Label to assign to intervals
+            policy: "skip" (keep only non-overlapping) or "replace" (delete overlaps)
+        """
+        count = 0
+        
+        if policy == "replace":
+            # Carve out existing intervals, then add new ones
+            for s, e in spans:
+                if e <= s:
+                    continue
+                self._carve_existing_for_new_span(s, e)
+                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+                count += 1
+        else:
+            # Skip overlaps - only add non-overlapping portions
+            final_spans = self._apply_overlap_policy_to_spans(spans, "skip")
+            for s, e in final_spans:
+                if e <= s:
+                    continue
+                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+                count += 1
+        
+        if count > 0:
+            self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
+            self._update_plot()
+            self._maybe_autosave()
+        else:
+            messagebox.showwarning(
+                "Nothing Added",
+                "No intervals added after applying overlap policy."
+            )
+    
+    def _clear_preview_state(self) -> None:
+        """Clear all preview-related state variables."""
+        if hasattr(self, "_commit_spans"):
+            self._commit_spans.clear()
+        if hasattr(self, "current_spans"):
+            self.current_spans.clear()
+        self.current_selection = None
+        if hasattr(self, '_clear_selected_point_highlights'):
+            self._clear_selected_point_highlights()
+        self._update_plot()
+    
+    # === OLD CODE PATH (remove after testing) ===
+    def _add_interval_old(self) -> None:
+        """
+        DEPRECATED: Old add interval logic. Remove after testing new overlap dialog.
         """
         commit_spans = getattr(self, "_commit_spans", []) or []
         preview_spans = getattr(self, "current_spans", []) or []
