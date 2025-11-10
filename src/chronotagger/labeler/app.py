@@ -28,6 +28,7 @@ from chronotagger.core.commands import (
 )
 
 # Relative imports to labeler submodules (unchanged)
+from .tab_pane import TabPane
 from .mixins.view_build import ViewBuildMixin
 from .mixins.plotting import PlottingMixin
 from .mixins.events import EventsMixin
@@ -65,7 +66,7 @@ class TimeIntervalLabeler(
     def __init__(
         self,
         df: pd.DataFrame,
-        plot_fn: Callable,
+        plot_fn: Optional[Callable] = None,
         classes: Optional[List[str]] = None,
         class_colors: Optional[Dict[str, str]] = None,
         window: pd.Timedelta = pd.Timedelta("30min"),
@@ -75,16 +76,63 @@ class TimeIntervalLabeler(
         autosave_path: Optional[str] = None,
         *,
         layout_spec: Optional[Dict[str, Any]] = None,
+        panes: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         # --- Validate inputs ---
         if not isinstance(df.index, pd.DatetimeIndex):
             raise TypeError("DataFrame must have a DatetimeIndex.")
-        if not callable(plot_fn):
-            raise TypeError("plot_fn must be callable.")
+
+        # Validate panes vs plot_fn usage
+        if panes is not None and plot_fn is not None:
+            raise ValueError(
+                "Cannot specify both 'panes' and 'plot_fn'. "
+                "Use 'panes' for multi-pane mode or 'plot_fn' for single-pane mode."
+            )
+        if panes is None and plot_fn is None:
+            raise ValueError(
+                "Must specify either 'panes' (for multi-pane mode) or 'plot_fn' (for single-pane mode)."
+            )
+
+        # Determine mode and convert to unified internal representation
+        if panes is not None:
+            # Multi-pane mode
+            self.multi_pane_mode = True
+            self._panes_config: List[Dict[str, Any]] = panes
+            # Validate that each pane has a plot_fn
+            for i, pane in enumerate(self._panes_config):
+                if "plot_fn" not in pane or not callable(pane["plot_fn"]):
+                    raise ValueError(f"Pane at index {i} must have a callable 'plot_fn'.")
+        else:
+            # Single-pane mode (backward compatibility)
+            if not callable(plot_fn):
+                raise TypeError("plot_fn must be callable.")
+            self.multi_pane_mode = False
+            self._panes_config: List[Dict[str, Any]] = [
+                {
+                    "title": "Main",
+                    "plot_fn": plot_fn,
+                    "layout_spec": layout_spec,
+                }
+            ]
+
+        # Convert config dicts to TabPane objects
+        self.panes: List[TabPane] = [
+            TabPane(
+                title=config["title"],
+                plot_fn=config["plot_fn"],
+                layout_spec=config.get("layout_spec"),
+            )
+            for config in self._panes_config
+        ]
+
+        # Track active pane
+        self.active_pane_idx: int = 0
 
         # Core data / plotting contract
         self.df = df
-        self.plot_fn = plot_fn
+        # For backward compatibility, maintain these as references to active pane
+        self.plot_fn = self.active_pane.plot_fn
+        self.layout_spec = self.active_pane.layout_spec
 
         # Label classes & colors
         if classes is None:
@@ -131,10 +179,17 @@ class TimeIntervalLabeler(
 
         # GUI state
         self.root: Optional[tk.Tk] = None
-        self.fig: Optional[plt.Figure] = None
-        self.canvas = None
-        self.user_axes: Dict[str, plt.Axes] = {}
-        self.strip_ax: Optional[plt.Axes] = None
+
+        # === MOVED TO TabPane (will remove after refactoring complete) ===
+        # These attributes are now stored per-pane and accessed via properties:
+        # self.fig: Optional[plt.Figure] = None
+        # self.canvas = None
+        # self.user_axes: Dict[str, plt.Axes] = {}
+        # self.strip_ax: Optional[plt.Axes] = None
+        # self.rect_selectors: Dict[str, RectangleSelector] = {}
+        # self._auto_xlims: Dict[plt.Axes, Tuple[float, float]] = {}
+        # self._auto_ylims: Dict[plt.Axes, Tuple[float, float]] = {}
+        # self._manual_zooms: Dict[plt.Axes, Set[str]] = {}
 
         # Layout & axes metadata
         # layout_spec supports "role" field for each axis area:
@@ -142,7 +197,9 @@ class TimeIntervalLabeler(
         #   - "not-time": Non-time plots like position/phase space (box-select maps point order to time)
         # Box selection on "time" axes extracts timestamps directly from x-coordinates.
         # Box selection on "not-time" axes uses point order to map back to timestamps.
-        self.layout_spec: Optional[Dict[str, Any]] = layout_spec
+        # NOTE: layout_spec is now set above from active_pane.layout_spec for backward compatibility
+        # NOTE: For now, keeping these on main class until mixins are refactored.
+        #       Eventually these will be delegated to active_pane like fig/canvas/user_axes.
         self.axes_meta: Dict[str, Dict[str, Any]] = {}            # key -> {role, row, col, ...}
         self._time_axis_keys: Set[str] = set()                     # which keys are "time"
         self._primary_time_key: Optional[str] = None               # first time axis in col 0
@@ -197,12 +254,72 @@ class TimeIntervalLabeler(
         
         # label-rule policy
         self._overlap_policy: str = "skip"   # v1 default for rule-based adds
-        
+
         # === Axis zoom state (for Y-zoom and cross-plot X/Y zoom) ===
+        # NOTE: These are stored per-pane in TabPane, but kept here temporarily
+        # until mixins are refactored in Phase 2
         self._auto_xlims: Dict[plt.Axes, Tuple[float, float]] = {}  # Auto X limits for cross-plots
         self._auto_ylims: Dict[plt.Axes, Tuple[float, float]] = {}  # Auto Y limits for all plots
         self._manual_zooms: Dict[plt.Axes, Set[str]] = {}           # Track manual zoom: {ax: {'x', 'y'}}
         self._time_range_dirty: bool = False                        # Flag: time range changed
+
+    # -------- Pane configuration properties --------
+
+    @property
+    def active_pane_config(self) -> Dict[str, Any]:
+        """Return the configuration dictionary for the currently active pane."""
+        return self._panes_config[self.active_pane_idx]
+
+    @property
+    def active_pane(self) -> TabPane:
+        """Get the currently active TabPane object."""
+        return self.panes[self.active_pane_idx]
+
+    # -------- Backward compatibility delegation properties --------
+    # These delegate to the active pane so existing code continues to work
+
+    @property
+    def fig(self) -> Optional[plt.Figure]:
+        """Delegate to active pane for backward compatibility."""
+        return self.active_pane.fig
+
+    @fig.setter
+    def fig(self, value: Optional[plt.Figure]) -> None:
+        """Set fig on active pane."""
+        self.active_pane.fig = value
+
+    @property
+    def canvas(self) -> Optional[FigureCanvasTkAgg]:
+        """Delegate to active pane for backward compatibility."""
+        return self.active_pane.canvas
+
+    @canvas.setter
+    def canvas(self, value: Optional[FigureCanvasTkAgg]) -> None:
+        """Set canvas on active pane."""
+        self.active_pane.canvas = value
+
+    @property
+    def user_axes(self) -> Dict[str, plt.Axes]:
+        """Delegate to active pane for backward compatibility."""
+        return self.active_pane.user_axes
+
+    @user_axes.setter
+    def user_axes(self, value: Dict[str, plt.Axes]) -> None:
+        """Set user_axes on active pane."""
+        self.active_pane.user_axes = value
+
+    @property
+    def strip_ax(self) -> Optional[plt.Axes]:
+        """Delegate to active pane for backward compatibility."""
+        return self.active_pane.strip_ax
+
+    @strip_ax.setter
+    def strip_ax(self, value: Optional[plt.Axes]) -> None:
+        """Set strip_ax on active pane."""
+        self.active_pane.strip_ax = value
+
+    # Note: axes_meta and rect_selectors are kept as regular attributes for now
+    # until mixins are refactored in Phase 2
 
     # -------- Public entrypoint --------
 
