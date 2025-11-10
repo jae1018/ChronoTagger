@@ -22,7 +22,7 @@ import numpy as np
 class SelectionMixin:
     """Mixin providing selection-related event handlers and utilities."""
 
-    def _on_rectangle_select(self, eclick, erelease) -> None:
+    def _on_rectangle_select(self, eclick, erelease, pane) -> None:
         """
         Handle both:
           • Full-height time selection (t0..t1)  -> single preview span (legacy)
@@ -31,11 +31,16 @@ class SelectionMixin:
         Rule of thumb:
           If the selection covers ~entire y-range of the axis (>=95%), we treat it as time-only.
           Otherwise, we treat it as a box over data points on time-lane panels.
+
+        Args:
+            eclick: Mouse click event at selection start
+            erelease: Mouse release event at selection end
+            pane: The TabPane where the selection occurred
         """
         # Which selector triggered this?
         triggered_selector_key = None
-        for key, selector in getattr(self, 'rect_selectors', {}).items():
-            if self.user_axes.get(key) is eclick.inaxes:
+        for key, selector in pane.rect_selectors.items():
+            if pane.user_axes.get(key) is eclick.inaxes:
                 triggered_selector_key = key
                 break
 
@@ -119,7 +124,7 @@ class SelectionMixin:
             self.canvas.draw_idle()
             return
 
-        if drag_ax is self.strip_ax:
+        if drag_ax is pane.strip_ax:
             # Box drawn on strip → abort
             self.current_spans.clear()
             self.current_selection = None
@@ -131,7 +136,7 @@ class SelectionMixin:
 
         # Determine which axis key and role
         meta_key = None
-        for k, a in self.user_axes.items():
+        for k, a in pane.user_axes.items():
             if a is drag_ax:
                 meta_key = k
                 break
@@ -146,7 +151,7 @@ class SelectionMixin:
             return
 
         # Get axis role from metadata
-        role = self.axes_meta.get(meta_key, {}).get("role", "time").lower()
+        role = pane.axes_meta.get(meta_key, {}).get("role", "time").lower()
 
         xlo, xhi = float(x_lo), float(x_hi)
         ylo, yhi = float(y_lo), float(y_hi)

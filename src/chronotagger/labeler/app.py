@@ -29,6 +29,7 @@ from chronotagger.core.commands import (
 
 # Relative imports to labeler submodules (unchanged)
 from .tab_pane import TabPane
+from .sync import PaneSyncManager
 from .mixins.view_build import ViewBuildMixin
 from .mixins.plotting import PlottingMixin
 from .mixins.events import EventsMixin
@@ -127,6 +128,9 @@ class TimeIntervalLabeler(
 
         # Track active pane
         self.active_pane_idx: int = 0
+
+        # Create sync manager for multi-pane coordination
+        self.sync_manager = PaneSyncManager(self)
 
         # Core data / plotting contract
         self.df = df

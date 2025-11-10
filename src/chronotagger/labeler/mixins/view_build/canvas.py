@@ -290,7 +290,7 @@ class CanvasMixin:
                 ax = pane.user_axes[k]
                 rs = RectangleSelector(
                     ax,
-                    onselect=self._on_rectangle_select,
+                    onselect=lambda eclick, erelease, p=pane: self._on_rectangle_select(eclick, erelease, p),
                     useblit=True,
                     button=[1],
                     minspanx=5, minspany=5,

@@ -231,6 +231,9 @@ class IntervalCRUDMixin:
                 count += 1
 
         if count > 0:
+            # Sync intervals across all panes
+            self.sync_manager.sync_intervals_changed()
+
             self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
             self._update_plot()
             self._maybe_autosave()
@@ -278,6 +281,10 @@ class IntervalCRUDMixin:
         new_label = self.current_class_var.get()  # type: ignore[union-attr]
         cmd = RelabelIntervalCommand(self, self.selected_interval, new_label)
         self._execute_command(cmd)
+
+        # Sync intervals across all panes
+        self.sync_manager.sync_intervals_changed()
+
         self.status_var.set(f"Relabeled → {new_label}")  # type: ignore[union-attr]
         self._update_plot()
         self._maybe_autosave()
@@ -290,6 +297,10 @@ class IntervalCRUDMixin:
         cmd = DeleteIntervalCommand(self, self.selected_interval)
         self._execute_command(cmd)
         self.selected_interval = None
+
+        # Sync intervals across all panes
+        self.sync_manager.sync_intervals_changed()
+
         # Clear interval highlights when interval is deleted
         if hasattr(self, '_clear_selected_interval_highlights'):
             self._clear_selected_interval_highlights()
@@ -450,6 +461,9 @@ class IntervalCRUDMixin:
 
             # Perform the clear operation
             results = self._clear_intervals_in_range(t0, t1)
+
+            # Sync intervals across all panes
+            self.sync_manager.sync_intervals_changed()
 
             # Build status message
             parts = []
@@ -884,6 +898,10 @@ class IntervalCRUDMixin:
         if messagebox.askyesno("Clear All", f"Delete all {len(self.intervals)} intervals?"):
             self.intervals.clear()
             self.selected_interval = None
+
+            # Sync intervals across all panes
+            self.sync_manager.sync_intervals_changed()
+
             # Clear interval highlights when all intervals are cleared
             if hasattr(self, '_clear_selected_interval_highlights'):
                 self._clear_selected_interval_highlights()

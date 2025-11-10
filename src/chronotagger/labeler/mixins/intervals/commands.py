@@ -29,6 +29,9 @@ class IntervalCommandsMixin:
         cmd.undo()
         self.redo_stack.append(cmd)
 
+        # Sync intervals across all panes
+        self.sync_manager.sync_intervals_changed()
+
         # Check if the currently selected interval still exists after undo
         if hasattr(self, 'selected_interval') and self.selected_interval is not None:
             if self.selected_interval not in self.intervals:
@@ -47,6 +50,9 @@ class IntervalCommandsMixin:
         cmd = self.redo_stack.pop()
         cmd.execute()
         self.undo_stack.append(cmd)
+
+        # Sync intervals across all panes
+        self.sync_manager.sync_intervals_changed()
 
         # Check if the currently selected interval still exists after redo
         if hasattr(self, 'selected_interval') and self.selected_interval is not None:
