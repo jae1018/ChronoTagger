@@ -179,6 +179,7 @@ class TimeIntervalLabeler(
 
         # GUI state
         self.root: Optional[tk.Tk] = None
+        self.notebook: Optional[ttk.Notebook] = None  # Only created if multi_pane_mode
 
         # === MOVED TO TabPane (will remove after refactoring complete) ===
         # These attributes are now stored per-pane and accessed via properties:

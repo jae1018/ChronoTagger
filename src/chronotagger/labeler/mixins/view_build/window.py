@@ -57,12 +57,56 @@ class WindowMixin:
         self.sidebar_frame.pack_propagate(False)
         self._build_sidebar(self.sidebar_frame)
 
-        self.plot_frame = ttk.Frame(main)
-        self.plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._build_plot(self.plot_frame)
+        # === Multi-pane vs single-pane logic ===
+        if self.multi_pane_mode:
+            # Create notebook with tabs
+            self.notebook = ttk.Notebook(main)
+            self.notebook.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            # Create a tab for each pane
+            for idx, pane in enumerate(self.panes):
+                tab_frame = ttk.Frame(self.notebook)
+                self.notebook.add(tab_frame, text=pane.title)
+
+                # Build figure/canvas for this pane
+                self._build_pane_canvas(pane, tab_frame)
+
+            # Bind tab change event
+            self.notebook.bind('<<NotebookTabChanged>>', self._on_tab_changed)
+        else:
+            # Single-pane mode (backward compatible)
+            self.plot_frame = ttk.Frame(main)
+            self.plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            # Build figure/canvas for the single pane
+            self._build_plot(self.plot_frame)
 
         self.root.bind("<Key>", self._on_key_press)
         # F1 opens Help
         self.root.bind("<F1>", self._open_help_dialog)
         # F9 toggles sidebar visibility
         self.root.bind("<F9>", lambda e: self._toggle_sidebar())
+
+    def _on_tab_changed(self, event) -> None:
+        """Handle notebook tab change event."""
+        if not self.multi_pane_mode or self.notebook is None:
+            return
+
+        # Update active pane index
+        self.active_pane_idx = self.notebook.index(self.notebook.select())
+
+        # Sync pane metadata to main class for backward compatibility
+        pane = self.active_pane
+        self.axes_meta = pane.axes_meta
+        self._time_axis_keys = pane.time_axis_keys
+        self._primary_time_key = pane.primary_time_key
+
+        # Redraw if the newly active pane is dirty
+        if self.active_pane.needs_update(self.t0, self.t1):
+            self._update_plot()
+
+        # Update sidebar to show intervals in current window
+        if hasattr(self, 'update_intervals_list'):
+            self.update_intervals_list()
+        if hasattr(self, '_update_stats'):
+            self._update_stats()
