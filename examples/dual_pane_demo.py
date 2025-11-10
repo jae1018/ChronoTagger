@@ -2,7 +2,7 @@
 
 import pandas as pd
 import numpy as np
-from src.chronotagger.labeler import TimeIntervalLabeler
+from chronotagger.labeler import TimeIntervalLabeler
 
 # Create test data
 dates = pd.date_range('2024-01-01', periods=1000, freq='1min')

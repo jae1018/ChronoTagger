@@ -130,9 +130,7 @@ class TimeIntervalLabeler(
 
         # Core data / plotting contract
         self.df = df
-        # For backward compatibility, maintain these as references to active pane
-        self.plot_fn = self.active_pane.plot_fn
-        self.layout_spec = self.active_pane.layout_spec
+        # Note: plot_fn and layout_spec are now properties that delegate to active_pane
 
         # Label classes & colors
         if classes is None:
@@ -318,6 +316,16 @@ class TimeIntervalLabeler(
     def strip_ax(self, value: Optional[plt.Axes]) -> None:
         """Set strip_ax on active pane."""
         self.active_pane.strip_ax = value
+
+    @property
+    def plot_fn(self) -> Callable:
+        """Delegate to active pane for backward compatibility."""
+        return self.active_pane.plot_fn
+
+    @property
+    def layout_spec(self) -> Optional[Dict[str, Any]]:
+        """Delegate to active pane for backward compatibility."""
+        return self.active_pane.layout_spec
 
     # Note: axes_meta and rect_selectors are kept as regular attributes for now
     # until mixins are refactored in Phase 2
