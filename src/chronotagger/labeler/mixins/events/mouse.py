@@ -22,41 +22,6 @@ HANDLE_PX = 8  # hit tolerance in screen pixels for edge resize
 
 
 class MouseEventsMixin:
-    def _on_strip_click(self, event) -> None:
-        if event.artist not in self.strip_ax.patches:  # type: ignore[union-attr]
-            return
-        if event.mouseevent.xdata is None:
-            return
-        dt = mdates.num2date(event.mouseevent.xdata)
-        if getattr(dt, "tzinfo", None) is not None:
-            dt = dt.replace(tzinfo=None)
-        click_ts = pd.Timestamp(dt)
-
-        for iv in self.intervals:
-            if iv.contains(click_ts):
-                # Check if this is the already selected interval - if so, deselect it
-                if hasattr(self, 'selected_interval') and self.selected_interval is iv:
-                    self.selected_interval = None
-                    if hasattr(self, '_clear_selected_interval_highlights'):
-                        self._clear_selected_interval_highlights()
-                    self._update_strip()
-                    if hasattr(self, '_update_intervals_list'):
-                        self._update_intervals_list()
-                    if self.status_var is not None:
-                        self.status_var.set("Interval deselected")
-                    self.canvas.draw()  # type: ignore[union-attr]
-                    return
-
-                # Otherwise, select this interval
-                self.selected_interval = iv
-                self.status_var.set(  # type: ignore[union-attr]
-                    f"Selected: {iv.label} [{iv.start.strftime('%H:%M:%S')} → {iv.end.strftime('%H:%M:%S')}]"
-                )
-                self._update_strip()
-                self._show_selected_interval_highlights()
-                self.canvas.draw()  # type: ignore[union-attr]
-                break
-
     def _px_to_data_dx(self, ax, px=2) -> float:
         """Return the data-domain x-width that corresponds to ~px screen pixels."""
         inv = ax.transData.inverted()

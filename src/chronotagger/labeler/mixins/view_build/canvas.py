@@ -34,7 +34,7 @@ class CanvasMixin:
     - _on_time_motion(event) - Callback for time axis motion
     - _init_time_overlays() - Method to initialize time overlays (if available)
     - _on_rectangle_select(eclick, erelease) - Callback for rectangle selection
-    - _on_strip_click(event) - Callback for strip clicks (pick events)
+    - _on_strip_click(event, pane) - Callback for strip clicks (pick events)
     - _on_strip_press(event) - Callback for strip press events
     - _on_strip_motion(event) - Callback for strip motion events
     - _on_strip_release(event) - Callback for strip release events
