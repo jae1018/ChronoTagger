@@ -34,6 +34,7 @@ class TabPane:
     canvas: Optional[FigureCanvasTkAgg] = None
     user_axes: Dict[str, plt.Axes] = field(default_factory=dict)
     strip_ax: Optional[plt.Axes] = None
+    _blit: Optional[Any] = None  # BlitHelper for fast rendering (initialized in canvas.py)
 
     # Axes metadata (populated during layout building)
     axes_meta: Dict[str, Dict[str, Any]] = field(default_factory=dict)

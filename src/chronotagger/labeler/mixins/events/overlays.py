@@ -72,13 +72,16 @@ class OverlaysMixin:
                 r.set_visible(True)
             artists.append(r)
 
-        blit = getattr(self, "_blit", None)
+        # Use active pane's BlitHelper for fast rendering
+        pane = self.active_pane if hasattr(self, 'active_pane') else self
+        blit = getattr(pane, "_blit", None)
         if blit is not None and artists:
             blit.draw(artists)
         else:
             # graceful fallback
-            if getattr(self, "canvas", None) is not None:
-                self.canvas.draw_idle()
+            canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, 'canvas', None)
+            if canvas is not None:
+                canvas.draw_idle()
 
     def _update_time_overlays_for_multi_spans(self, spans: list[tuple[pd.Timestamp, pd.Timestamp]]) -> None:
         """
@@ -334,19 +337,22 @@ class OverlaysMixin:
         if not changed:
             return
 
-        # Use blitting for performance, fallback to full redraw
-        blit = getattr(self, "_blit", None)
+        # Use active pane's BlitHelper for fast rendering
+        pane = self.active_pane if hasattr(self, 'active_pane') else self
+        blit = getattr(pane, "_blit", None)
         if blit is not None:
             try:
                 blit.draw(changed)
             except Exception:
                 # Fallback to full redraw if blitting fails
-                if hasattr(self, "canvas") and self.canvas is not None:
-                    self.canvas.draw_idle()
+                canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, 'canvas', None)
+                if canvas is not None:
+                    canvas.draw_idle()
         else:
             # Graceful fallback
-            if hasattr(self, "canvas") and self.canvas is not None:
-                self.canvas.draw_idle()
+            canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, 'canvas', None)
+            if canvas is not None:
+                canvas.draw_idle()
 
     def _init_time_overlays(self) -> None:
         """
