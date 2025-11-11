@@ -8,7 +8,8 @@ def test_drag_select_then_add(labeler):
     e1 = type("E", (), {"xdata": mdates.date2num(t1), "inaxes": ax})
     e2 = type("E", (), {"xdata": mdates.date2num(t2), "inaxes": ax})
 
-    labeler._on_rectangle_select(e1, e2)
+    # Pass active_pane as third argument (Phase 3 signature change)
+    labeler._on_rectangle_select(e1, e2, labeler.active_pane)
     labeler._add_interval()
 
     assert len(labeler.intervals) == 1

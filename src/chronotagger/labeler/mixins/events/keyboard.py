@@ -175,7 +175,7 @@ class KeyboardEventsMixin:
 
     def _next_tab(self, event=None) -> str:
         """Switch to next tab (cycle forward)."""
-        if not getattr(self, 'multi_pane_mode', False) or not hasattr(self, 'notebook'):
+        if not getattr(self, 'multi_pane_mode', False) or not getattr(self, 'notebook', None):
             return 'break'
 
         n_tabs = len(self.panes)
@@ -185,7 +185,7 @@ class KeyboardEventsMixin:
 
     def _prev_tab(self, event=None) -> str:
         """Switch to previous tab (cycle backward)."""
-        if not getattr(self, 'multi_pane_mode', False) or not hasattr(self, 'notebook'):
+        if not getattr(self, 'multi_pane_mode', False) or not getattr(self, 'notebook', None):
             return 'break'
 
         n_tabs = len(self.panes)
@@ -195,7 +195,7 @@ class KeyboardEventsMixin:
 
     def _go_to_tab(self, idx: int) -> str:
         """Jump to specific tab by index (0-based)."""
-        if not getattr(self, 'multi_pane_mode', False) or not hasattr(self, 'notebook'):
+        if not getattr(self, 'multi_pane_mode', False) or not getattr(self, 'notebook', None):
             return 'break'
 
         if 0 <= idx < len(self.panes):

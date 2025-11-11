@@ -213,6 +213,154 @@ The "Label Unassigned..." button opens a dialog to:
 - **Smart caching** - Reuses matplotlib artists where possible
 - **Efficient slicing** - Pandas datetime indexing for data windows
 
+### Multi-Pane Interface
+
+ChronoTagger supports multiple tabbed panes for viewing different visualizations of the same data simultaneously. This is useful when labeling requires many plots that won't fit comfortably in a single figure.
+
+#### Basic Usage
+
+Create multiple panes with different plot functions:
+
+```python
+import pandas as pd
+from chronotagger import TimeIntervalLabeler
+
+# Load your data
+df = pd.read_parquet("magnetosphere_data.parquet")
+
+# Define plot functions for each pane
+def plot_overview(axs, df, t0, t1):
+    axs['density'].plot(df.index, df['n_density'])
+    axs['density'].set_ylabel('Density (cm⁻³)')
+
+    axs['temp'].semilogy(df.index, df['temperature'])
+    axs['temp'].set_ylabel('Temperature (K)')
+
+def plot_fields(axs, df, t0, t1):
+    for component in ['Bx', 'By', 'Bz']:
+        axs['b_field'].plot(df.index, df[component], label=component)
+    axs['b_field'].set_ylabel('B (nT)')
+    axs['b_field'].legend()
+
+def plot_positions(axs, df, t0, t1):
+    axs['xy'].scatter(df['X_GSE'], df['Y_GSE'], s=1)
+    axs['xy'].set_xlabel('X (RE)')
+    axs['xy'].set_ylabel('Y (RE)')
+
+# Define layouts for each pane
+layout_overview = {
+    "nrows": 3,
+    "ncols": 1,
+    "areas": [
+        {"key": "density", "row": 0, "col": 0, "role": "time"},
+        {"key": "temp", "row": 1, "col": 0, "role": "time"},
+        {"key": "labels", "row": 2, "col": 0, "role": "labels"},
+    ]
+}
+
+layout_fields = {
+    "nrows": 2,
+    "ncols": 1,
+    "areas": [
+        {"key": "b_field", "row": 0, "col": 0, "role": "time"},
+        {"key": "labels", "row": 1, "col": 0, "role": "labels"},
+    ]
+}
+
+layout_positions = {
+    "nrows": 2,
+    "ncols": 1,
+    "areas": [
+        {"key": "xy", "row": 0, "col": 0, "role": "not-time"},
+        {"key": "labels", "row": 1, "col": 0, "role": "labels"},
+    ]
+}
+
+# Create multi-pane labeler
+panes = [
+    {
+        "title": "Overview",
+        "plot_fn": plot_overview,
+        "layout_spec": layout_overview,
+    },
+    {
+        "title": "Magnetic Field",
+        "plot_fn": plot_fields,
+        "layout_spec": layout_fields,
+    },
+    {
+        "title": "Position",
+        "plot_fn": plot_positions,
+        "layout_spec": layout_positions,
+    },
+]
+
+labeler = TimeIntervalLabeler(
+    df=df,
+    panes=panes,  # Use 'panes' instead of 'plot_fn'
+    window=pd.Timedelta("4h"),
+    step=pd.Timedelta("30min"),
+)
+
+labeler.run()
+```
+
+#### Features
+
+**Tab Navigation:**
+- Click tabs to switch between panes
+- `Ctrl+Tab` / `Ctrl+Shift+Tab` - Next/previous tab
+- `Ctrl+1` through `Ctrl+9` - Jump directly to tabs 1-9
+- `Ctrl+0` - Jump to tab 10
+
+**Tab Management:**
+- Right-click tab → Rename, refresh
+- Custom tab names persist in saved sessions
+
+**Synchronized State:**
+- All panes share the same intervals and labels
+- Time window synchronized across panes
+- Labeling on any pane affects all panes
+
+**Performance:**
+- Only active pane updates in real-time
+- Inactive panes update when switched to
+- Efficient blitting for fast overlay rendering
+
+#### When to Use Multi-Pane
+
+✅ **Good use cases:**
+- Need to see 10+ plots for accurate labeling
+- Different views of same data (time series + position plots)
+- Comparing different parameter combinations
+- Separating overview from detailed plots
+
+❌ **Not recommended:**
+- Only need 2-3 plots (use single pane with subplots)
+- Very slow plot functions (will multiply startup time)
+- More than 5-6 panes (gets cluttered)
+
+#### Migrating from Single to Multi-Pane
+
+Existing single-pane code still works:
+
+```python
+# Old way (still supported)
+labeler = TimeIntervalLabeler(
+    df=df,
+    plot_fn=my_plot_function,
+    layout_spec=my_layout,
+)
+
+# New multi-pane way
+panes = [
+    {"title": "Main View", "plot_fn": my_plot_function, "layout_spec": my_layout}
+]
+labeler = TimeIntervalLabeler(df=df, panes=panes)
+```
+
+See `examples/dual_pane_demo.py` and `examples/multi_pane_magnetosphere.py` for complete examples.
+
 ## User Interface
 
 ### Main Layout
@@ -264,6 +412,16 @@ The "Label Unassigned..." button opens a dialog to:
 | `r` | Relabel selected | | `Ctrl+S` | Save session |
 | `m` | Manage labels | | `Ctrl+E` | Export dialog |
 | `F1` | Help dialog | | `Escape` | Clear selection |
+
+**Multi-Pane Shortcuts (when using tabbed interface):**
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Tab` | Switch to next tab |
+| `Ctrl+Shift+Tab` | Switch to previous tab |
+| `Ctrl+1` to `Ctrl+9` | Jump to tab 1-9 |
+| `Ctrl+0` | Jump to tab 10 |
+| Right-click tab | Show tab menu (rename, refresh) |
 
 ### Mouse Controls
 
@@ -382,9 +540,16 @@ app = TimeIntervalLabeler(..., autosave_path="auto_backup.json")
 ```python
 TimeIntervalLabeler(
     df: pd.DataFrame,                      # Data with DatetimeIndex
-    plot_fn: Callable,                     # Your plot function
+
+    # Single-pane mode (backward compatible)
+    plot_fn: Callable = None,              # Your plot function
     layout_spec: dict = None,              # Panel layout specification
     n_panels: int = None,                  # Override panel count
+
+    # Multi-pane mode (NEW)
+    panes: List[Dict] = None,              # List of pane configs (see below)
+
+    # Common parameters
     classes: List[str] = None,             # Label names (default: common plasma regions)
     class_colors: Dict[str, str] = None,   # Label colors (auto-generated if not provided)
     window: pd.Timedelta = "30min",        # View window size
@@ -393,6 +558,16 @@ TimeIntervalLabeler(
     end: pd.Timestamp = None,              # Initial end time (default: start + window)
     autosave_path: Path = None,            # Auto-save location
 )
+
+# Pane configuration (for multi-pane mode):
+panes = [
+    {
+        "title": str,                      # Tab label
+        "plot_fn": Callable,               # Plot function for this pane
+        "layout_spec": dict,               # Layout for this pane (optional)
+    },
+    # ... more panes
+]
 ```
 
 ### Layout Specification
@@ -455,6 +630,8 @@ See the `examples/` directory for complete demonstrations:
 - `layout_wizard_demo.py` - Interactive layout builder with sample data
 - `layout_wizard_simple.py` - Minimal layout builder for CSV files
 - `simple_layout_test.py` - Testing layout specifications
+- `dual_pane_demo.py` - Simple 2-tab multi-pane example
+- `multi_pane_magnetosphere.py` - Comprehensive 4-tab space physics example
 
 ## Project Structure
 

@@ -1,4 +1,23 @@
-"""Test multi-pane mode with two tabs."""
+"""
+Simple Dual-Pane Example
+
+Demonstrates basic multi-pane functionality with two views:
+- Pane 1: Sinusoidal waves (sin/cos)
+- Pane 2: Random walk + histogram
+
+This is the minimal example to get started with multi-pane labeling.
+For a more comprehensive example with real scientific data, see:
+  examples/multi_pane_magnetosphere.py
+
+Usage:
+    python examples/dual_pane_demo.py
+
+Keyboard shortcuts:
+    Ctrl+Tab        - Switch to next pane
+    Ctrl+1 / Ctrl+2 - Jump directly to pane 1 or 2
+    Right-click tab - Rename or refresh pane
+    F1              - Show all shortcuts
+"""
 
 import pandas as pd
 import numpy as np
@@ -52,6 +71,10 @@ panes = [
 
 # Create labeler with multi-pane mode
 print('Creating multi-pane labeler...')
+print('='*70)
+print('MULTI-PANE DEMO')
+print('='*70)
+
 labeler = TimeIntervalLabeler(
     df=df,
     panes=panes,
@@ -63,6 +86,13 @@ labeler = TimeIntervalLabeler(
 print(f'Multi-pane mode: {labeler.multi_pane_mode}')
 print(f'Number of panes: {len(labeler.panes)}')
 print(f'Pane titles: {[p.title for p in labeler.panes]}')
+print()
+print('Multi-pane shortcuts:')
+print('  • Ctrl+Tab / Ctrl+Shift+Tab - Switch tabs')
+print('  • Ctrl+1 / Ctrl+2 - Jump to specific tab')
+print('  • Right-click tab - Rename/refresh')
+print('  • F1 - Show all shortcuts')
+print('='*70)
 print('Launching GUI...')
 
 labeler.run()

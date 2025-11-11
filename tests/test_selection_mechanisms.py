@@ -99,15 +99,15 @@ class TestTwoClickSelection:
         """First click should arm selection and show preview."""
         # Get a time axis
         ax = list(labeler.user_axes.values())[0]
-        
+
         # Create first click event
         t_click = labeler.df.index[10]
         x_click = mdates.date2num(t_click)
         event = MockEvent(xdata=x_click, inaxes=ax)
-        
-        # Simulate first click
-        labeler._on_time_click(event)
-        
+
+        # Simulate first click (Phase 3 signature: event, pane)
+        labeler._on_time_click(event, labeler.active_pane)
+
         # Check that selection is armed
         assert labeler._two_click_active is True
         assert labeler._two_click_t0 is not None
@@ -121,18 +121,18 @@ class TestTwoClickSelection:
     def test_two_click_finalizes_on_second_click(self, labeler):
         """Second click should finalize selection."""
         ax = list(labeler.user_axes.values())[0]
-        
+
         # First click
         t1 = labeler.df.index[10]
         x1 = mdates.date2num(t1)
         event1 = MockEvent(xdata=x1, inaxes=ax)
-        labeler._on_time_click(event1)
-        
+        labeler._on_time_click(event1, labeler.active_pane)
+
         # Second click
         t2 = labeler.df.index[30]
         x2 = mdates.date2num(t2)
         event2 = MockEvent(xdata=x2, inaxes=ax)
-        labeler._on_time_click(event2)
+        labeler._on_time_click(event2, labeler.active_pane)
         
         # Check finalized state
         assert labeler._two_click_active is False
@@ -156,18 +156,18 @@ class TestTwoClickSelection:
     def test_two_click_preview_updates_during_motion(self, labeler):
         """Preview should update as mouse moves after first click."""
         ax = list(labeler.user_axes.values())[0]
-        
+
         # First click to arm
         t1 = labeler.df.index[10]
         x1 = mdates.date2num(t1)
         event1 = MockEvent(xdata=x1, inaxes=ax)
-        labeler._on_time_click(event1)
+        labeler._on_time_click(event1, labeler.active_pane)
         
         # Simulate motion
         t_motion = labeler.df.index[20]
         x_motion = mdates.date2num(t_motion)
         motion_event = MockEvent(xdata=x_motion, inaxes=ax)
-        labeler._on_time_motion(motion_event)
+        labeler._on_time_motion(motion_event, labeler.active_pane)
         
         # Preview should be updated
         assert labeler.current_selection is not None
@@ -177,18 +177,18 @@ class TestTwoClickSelection:
     def test_right_click_cancels_two_click(self, labeler):
         """Right click should cancel active two-click selection."""
         ax = list(labeler.user_axes.values())[0]
-        
+
         # Start two-click
         t1 = labeler.df.index[10]
         x1 = mdates.date2num(t1)
         event1 = MockEvent(xdata=x1, inaxes=ax)
-        labeler._on_time_click(event1)
-        
+        labeler._on_time_click(event1, labeler.active_pane)
+
         assert labeler._two_click_active is True
-        
+
         # Right click to cancel
         cancel_event = MockEvent(button=3, inaxes=ax)
-        labeler._on_time_click(cancel_event)
+        labeler._on_time_click(cancel_event, labeler.active_pane)
         
         # Should be cancelled
         assert labeler._two_click_active is False
@@ -218,9 +218,9 @@ class TestBoxSelection:
             if user_ax == ax:
                 labeler.rect_selectors = {key: MagicMock()}
                 break
-        
-        # Trigger selection
-        labeler._on_rectangle_select(eclick, erelease)
+
+        # Trigger selection (Phase 3 signature: eclick, erelease, pane)
+        labeler._on_rectangle_select(eclick, erelease, labeler.active_pane)
         
         # For a full-height selection, should create single span
         if labeler.current_selection is not None:
@@ -277,8 +277,8 @@ class TestBoxSelection:
         # Mock the rectangle selector
         labeler.rect_selectors = {"xy_plot": MagicMock()}
         
-        # Perform selection
-        labeler._on_rectangle_select(eclick, erelease)
+        # Perform selection (Phase 3 signature: eclick, erelease, pane)
+        labeler._on_rectangle_select(eclick, erelease, labeler.active_pane)
         
         # Should have created spans based on which points fall in box
         # The actual mapping depends on data values
@@ -331,7 +331,7 @@ class TestSelectionCancellation:
         t1 = labeler.df.index[10]
         x1 = mdates.date2num(t1)
         event = MockEvent(xdata=x1, inaxes=ax)
-        labeler._on_time_click(event)
+        labeler._on_time_click(event, labeler.active_pane)
         
         assert labeler._two_click_active is True
         assert labeler.current_selection is not None
@@ -581,8 +581,8 @@ class TestMultiSpanSelection:
         ]
         labeler._draw_strip_preview_spans(spans_float)
         
-        # Verify preview pool has enough rectangles
-        assert len(labeler._strip_preview_pool) >= len(spans)
+        # Verify preview pool has enough rectangles (Phase 3: per-pane attribute)
+        assert len(labeler.active_pane._strip_preview_pool) >= len(spans)
 
 
 # Additional test utilities
