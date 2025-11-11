@@ -80,6 +80,16 @@ class IOExportMixin:
             "data_end": self.data_end.isoformat(),
             "intervals": [iv.to_dict() for iv in self.intervals],
             "layout_spec": self.layout_spec,  # Save layout configuration
+            # Multi-pane metadata
+            "multi_pane_mode": getattr(self, 'multi_pane_mode', False),
+            "active_pane_idx": getattr(self, 'active_pane_idx', 0) if getattr(self, 'multi_pane_mode', False) else 0,
+            "panes": [
+                {
+                    "title": pane.title,
+                    "layout_spec": getattr(pane, 'layout_spec', None),
+                }
+                for pane in getattr(self, 'panes', [])
+            ] if getattr(self, 'multi_pane_mode', False) else [],
         }
         with open(target, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -140,6 +150,23 @@ class IOExportMixin:
             self.end_time_entry.insert(0, str(self.t1))
             self.step_entry.delete(0, tk.END)
             self.step_entry.insert(0, str(self.step))
+
+        # Restore active tab if multi-pane
+        if getattr(self, 'multi_pane_mode', False) and "active_pane_idx" in data:
+            idx = data["active_pane_idx"]
+            if hasattr(self, 'notebook') and hasattr(self, 'panes'):
+                if 0 <= idx < len(self.panes):
+                    self.active_pane_idx = idx
+                    self.notebook.select(idx)
+
+        # Restore pane titles if saved
+        if getattr(self, 'multi_pane_mode', False) and "panes" in data:
+            saved_panes = data["panes"]
+            for i, saved_pane in enumerate(saved_panes):
+                if i < len(self.panes) and "title" in saved_pane:
+                    self.panes[i].title = saved_pane["title"]
+                    if hasattr(self, 'notebook'):
+                        self.notebook.tab(i, text=saved_pane["title"])
 
         self._update_plot()
         self.status_var.set(f"Loaded from {path}")  # type: ignore[union-attr]

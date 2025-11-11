@@ -170,3 +170,34 @@ class KeyboardEventsMixin:
         # Force canvas redraw
         if hasattr(self, 'canvas') and self.canvas is not None:
             self.canvas.draw_idle()
+
+    # ---- Multi-pane tab navigation methods ----
+
+    def _next_tab(self, event=None) -> str:
+        """Switch to next tab (cycle forward)."""
+        if not getattr(self, 'multi_pane_mode', False) or not hasattr(self, 'notebook'):
+            return 'break'
+
+        n_tabs = len(self.panes)
+        next_idx = (self.active_pane_idx + 1) % n_tabs
+        self.notebook.select(next_idx)
+        return 'break'  # Prevent default Tab behavior
+
+    def _prev_tab(self, event=None) -> str:
+        """Switch to previous tab (cycle backward)."""
+        if not getattr(self, 'multi_pane_mode', False) or not hasattr(self, 'notebook'):
+            return 'break'
+
+        n_tabs = len(self.panes)
+        prev_idx = (self.active_pane_idx - 1) % n_tabs
+        self.notebook.select(prev_idx)
+        return 'break'
+
+    def _go_to_tab(self, idx: int) -> str:
+        """Jump to specific tab by index (0-based)."""
+        if not getattr(self, 'multi_pane_mode', False) or not hasattr(self, 'notebook'):
+            return 'break'
+
+        if 0 <= idx < len(self.panes):
+            self.notebook.select(idx)
+        return 'break'

@@ -26,6 +26,14 @@ KEYBOARD_SHORTCUTS: Tuple[Tuple[str, str], ...] = (
     ("Ctrl+Y / Shift+Backspace", "Redo"),
 )
 
+MULTI_PANE_SHORTCUTS: Tuple[Tuple[str, str], ...] = (
+    ("Ctrl+Tab",          "Next tab"),
+    ("Ctrl+Shift+Tab",    "Previous tab"),
+    ("Ctrl+1...9",        "Jump to tab 1-9"),
+    ("Ctrl+0",            "Jump to tab 10"),
+    ("Right-click tab",   "Show tab menu (rename, refresh)"),
+)
+
 MOUSE_CONTROLS: Tuple[Tuple[str, str], ...] = (
     ("Left-click (time axes)",          "Two-click interval selection (click start, click end)"),
     ("Left-drag (time axes)",           "Box-select points → contiguous blocks previewed"),
@@ -67,6 +75,12 @@ class HelpMixin:
 
         self._build_table(kb_frame, ("Keys", "Action"), KEYBOARD_SHORTCUTS)
         self._build_table(mouse_frame, ("Control", "Action"), MOUSE_CONTROLS)
+
+        # Add multi-pane shortcuts tab if in multi-pane mode
+        if getattr(self, 'multi_pane_mode', False):
+            multi_pane_frame = ttk.Frame(nb, padding=8)
+            nb.add(multi_pane_frame, text="Multi-Pane")
+            self._build_table(multi_pane_frame, ("Keys", "Action"), MULTI_PANE_SHORTCUTS)
 
         # Footer
         footer = ttk.Frame(container)
