@@ -604,19 +604,26 @@ class OverlaysMixin:
                     rect_patch.set_visible(True)
 
                 # Use BlitHelper for fast redraw (same technique as two-click selection)
-                if hasattr(self, '_blit') and self._blit is not None:
-                    self._blit.draw([rect_patch])
-                else:
+                pane = self.active_pane if hasattr(self, 'active_pane') else self
+                blit = getattr(pane, '_blit', None)
+                canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, 'canvas', None)
+
+                if blit is not None:
+                    blit.draw([rect_patch])
+                elif canvas is not None:
                     # Fallback to axes-specific blit (still faster than full redraw)
                     axes.draw_artist(rect_patch)
-                    self.canvas.blit(axes.bbox)
+                    canvas.blit(axes.bbox)
 
             except AttributeError:
                 # If we can't access internals, fall back to setting extents
                 # (slower but still works)
+                pane = self.active_pane if hasattr(self, 'active_pane') else self
+                canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, 'canvas', None)
                 extents = [left, right, bottom, top]
                 rect_selector.extents = extents
-                self.canvas.draw_idle()
+                if canvas is not None:
+                    canvas.draw_idle()
 
         except Exception:
             # Silently fail - better to have normal behavior than crash

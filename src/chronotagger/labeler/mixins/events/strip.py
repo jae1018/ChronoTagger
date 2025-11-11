@@ -48,20 +48,25 @@ class StripInteractionMixin:
     def _ensure_strip_preview_pool(self, needed: int) -> list:
         """
         Ensure there are at least `needed` animated preview rectangles on the strip.
-        Returns the pool.
+        Returns the pool. Uses active pane's strip axis for multi-pane support.
         """
         import matplotlib.patches as mpatches
         from matplotlib.transforms import blended_transform_factory
 
-        if getattr(self, "strip_ax", None) is None:
-            return []
-        if not hasattr(self, "_strip_preview_pool"):
-            self._strip_preview_pool = []
+        # Use active pane's strip axis for multi-pane support
+        pane = self.active_pane if hasattr(self, 'active_pane') else self
+        ax = pane.strip_ax if hasattr(pane, 'strip_ax') else getattr(self, "strip_ax", None)
 
-        ax = self.strip_ax
+        if ax is None:
+            return []
+
+        # Store preview pool per-pane to support multiple panes
+        if not hasattr(pane, "_strip_preview_pool"):
+            pane._strip_preview_pool = []
+
         trans = blended_transform_factory(ax.transData, ax.transAxes)
 
-        while len(self._strip_preview_pool) < needed:
+        while len(pane._strip_preview_pool) < needed:
             r = mpatches.Rectangle(
                 (0, 0), 0, 0.9,
                 transform=trans,
@@ -74,18 +79,19 @@ class StripInteractionMixin:
             )
             r.set_animated(True)
             ax.add_patch(r)
-            self._strip_preview_pool.append(r)
+            pane._strip_preview_pool.append(r)
 
         # hide extras for now (cheap to flip visible later)
-        for i, r in enumerate(self._strip_preview_pool):
+        for i, r in enumerate(pane._strip_preview_pool):
             r.set_visible(i < needed and r.get_visible())
 
-        return self._strip_preview_pool
+        return pane._strip_preview_pool
 
     def _draw_strip_preview_spans(self, spans_float: list[tuple[float, float]]) -> None:
         """
         Update the (animated) strip preview rectangles to depict one or more spans.
         spans_float uses Matplotlib date floats [(x0,x1), ...].
+        Uses active pane's canvas for multi-pane support.
         """
         pool = self._ensure_strip_preview_pool(len(spans_float))
         artists = []
@@ -104,12 +110,31 @@ class StripInteractionMixin:
                 pool[j].set_visible(False)
                 artists.append(pool[j])
 
-        blit = getattr(self, "_blit", None)
+        # Use active pane's blit helper and canvas for multi-pane support
+        pane = self.active_pane if hasattr(self, 'active_pane') else self
+        blit = getattr(pane, "_blit", None)
+
         if blit is not None and artists:
-            blit.draw(artists)
+            try:
+                blit.draw(artists)
+            except Exception:
+                # Blit failed (likely no background saved yet)
+                # Fallback: temporarily disable animation and force canvas redraw
+                for r in artists:
+                    if hasattr(r, 'set_animated'):
+                        r.set_animated(False)
+                canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, 'canvas', None)
+                if canvas is not None:
+                    canvas.draw_idle()
+                # Re-enable animation for next time
+                for r in artists:
+                    if hasattr(r, 'set_animated'):
+                        r.set_animated(True)
         else:
-            if getattr(self, "canvas", None) is not None:
-                self.canvas.draw_idle()
+            # No blit helper - draw directly
+            canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, "canvas", None)
+            if canvas is not None:
+                canvas.draw_idle()
 
 
 

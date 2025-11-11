@@ -45,10 +45,10 @@ class ZoomMixin:
     
     # ---------- axis zoom methods ----------
     
-    def _zoom_y_axis(self, event) -> None:
+    def _zoom_y_axis_in_pane(self, event, pane) -> None:
         """
         Zoom Y-axis of the plot under cursor.
-        
+
         Zooms around the axis center (not cursor position) for consistent behavior.
         This ensures zooming out then in cancels perfectly.
         Fast redraw using canvas.draw_idle() without full replot.
@@ -56,89 +56,89 @@ class ZoomMixin:
         ax = event.inaxes
         if ax is None:
             return
-        
+
         direction = 1 if getattr(event, 'button', None) == 'up' else -1
-        
+
         # Get current ylim
         ymin, ymax = ax.get_ylim()
         y_range = ymax - ymin
-        
+
         # Always zoom around axis center (not cursor) for consistent behavior
         center_y = (ymin + ymax) / 2
-        
+
         # Calculate new limits
         zoom_factor = (1 - self.zoom_sensitivity) if direction > 0 else (1 + self.zoom_sensitivity)
         new_range = y_range * zoom_factor
-        
+
         half = new_range / 2
         new_ymin = center_y - half
         new_ymax = center_y + half
-        
+
         # Apply
         ax.set_ylim(new_ymin, new_ymax)
-        
+
         # Track manual zoom
         if ax not in self._manual_zooms:
             self._manual_zooms[ax] = set()
         self._manual_zooms[ax].add('y')
-        
-        # Fast redraw (no replot)
-        self.canvas.draw_idle()
+
+        # Fast redraw (no replot) - use pane canvas
+        pane.canvas.draw_idle()
     
-    def _zoom_x_axis(self, event) -> None:
+    def _zoom_x_axis_in_pane(self, event, pane) -> None:
         """
         Zoom X-axis of cross-plot under cursor.
-        
+
         Only works on cross-plots (role='not-time').
         Zooms around the axis center (not cursor position) for consistent behavior.
         """
         ax = event.inaxes
-        if ax is None or not self._is_cross_plot_axis(ax):
+        if ax is None or not self._is_cross_plot_axis_in_pane(ax, pane):
             return
-        
+
         direction = 1 if getattr(event, 'button', None) == 'up' else -1
-        
+
         # Get current xlim
         xmin, xmax = ax.get_xlim()
         x_range = xmax - xmin
-        
+
         # Always zoom around axis center (not cursor) for consistent behavior
         center_x = (xmin + xmax) / 2
-        
+
         # Calculate new limits
         zoom_factor = (1 - self.zoom_sensitivity) if direction > 0 else (1 + self.zoom_sensitivity)
         new_range = x_range * zoom_factor
-        
+
         half = new_range / 2
         new_xmin = center_x - half
         new_xmax = center_x + half
-        
+
         # Apply
         ax.set_xlim(new_xmin, new_xmax)
-        
+
         # Track manual zoom
         if ax not in self._manual_zooms:
             self._manual_zooms[ax] = set()
         self._manual_zooms[ax].add('x')
-        
-        # Fast redraw (no replot)
-        self.canvas.draw_idle()
+
+        # Fast redraw (no replot) - use pane canvas
+        pane.canvas.draw_idle()
     
-    def _zoom_both_axes(self, event) -> None:
+    def _zoom_both_axes_in_pane(self, event, pane) -> None:
         """
         Zoom both X and Y axes of cross-plot under cursor (simultaneously).
-        
+
         Only works on cross-plots (role='not-time').
         Zooms around the axis centers (not cursor position) for consistent behavior.
         This is the default scroll behavior for cross-plots.
         """
         ax = event.inaxes
-        if ax is None or not self._is_cross_plot_axis(ax):
+        if ax is None or not self._is_cross_plot_axis_in_pane(ax, pane):
             return
-        
+
         direction = 1 if getattr(event, 'button', None) == 'up' else -1
         zoom_factor = (1 - self.zoom_sensitivity) if direction > 0 else (1 + self.zoom_sensitivity)
-        
+
         # Zoom X-axis
         xmin, xmax = ax.get_xlim()
         x_range = xmax - xmin
@@ -146,7 +146,7 @@ class ZoomMixin:
         new_x_range = x_range * zoom_factor
         half_x = new_x_range / 2
         ax.set_xlim(center_x - half_x, center_x + half_x)
-        
+
         # Zoom Y-axis
         ymin, ymax = ax.get_ylim()
         y_range = ymax - ymin
@@ -154,15 +154,15 @@ class ZoomMixin:
         new_y_range = y_range * zoom_factor
         half_y = new_y_range / 2
         ax.set_ylim(center_y - half_y, center_y + half_y)
-        
+
         # Track manual zoom
         if ax not in self._manual_zooms:
             self._manual_zooms[ax] = set()
         self._manual_zooms[ax].add('x')
         self._manual_zooms[ax].add('y')
-        
-        # Fast redraw (no replot)
-        self.canvas.draw_idle()
+
+        # Fast redraw (no replot) - use pane canvas
+        pane.canvas.draw_idle()
     
     def _zoom_time_range(self, event) -> None:
         """
@@ -213,16 +213,20 @@ class ZoomMixin:
         self._time_range_dirty = True
         self._sync_entries_and_plot()
     
-    def _is_cross_plot_axis(self, ax) -> bool:
+    def _is_cross_plot_axis_in_pane(self, ax, pane) -> bool:
         """
-        Check if axis is a cross-plot (role='not-time').
-        
+        Check if axis is a cross-plot (role='not-time') in the given pane.
+
+        Args:
+            ax: The axis to check
+            pane: The TabPane containing the axis
+
         Returns:
             True if axis has role='not-time', False otherwise
         """
-        for key, axis in self.user_axes.items():
+        for key, axis in pane.user_axes.items():
             if axis is ax:
-                role = self.axes_meta.get(key, {}).get('role', 'time').lower()
+                role = pane.axes_meta.get(key, {}).get('role', 'time').lower()
                 return role == 'not-time'
         return False
     
@@ -252,45 +256,53 @@ class ZoomMixin:
 
     # ---------- wheel handler ----------
 
-    def _on_scroll_zoom(self, event) -> None:
+    def _on_scroll_zoom(self, event, pane) -> None:
         """
         Matplotlib 'scroll_event' handler with split behavior:
-        
+
         - Over a cross-plot (no modifiers) → Zoom both X and Y axes
         - Over a time plot (no modifiers) → Zoom Y-axis only
         - Over a cross-plot (Ctrl/Alt) → Zoom X-axis only
         - Not over a plot (no modifiers) → Zoom time range (centered)
         - Shift + Wheel → Pan time range left/right (existing behavior)
-        
+
         The cursor location determines which zoom mode activates.
+
+        Args:
+            event: Matplotlib scroll event
+            pane: The TabPane where the scroll occurred
         """
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         # Check for modifier keys
         key = getattr(event, 'key', None) or ''
         has_shift = 'shift' in key
         has_ctrl = 'control' in key or 'ctrl' in key
         has_alt = 'alt' in key
-        
+
         # Shift + Wheel = Pan (preserve existing behavior)
         if has_shift:
             self._pan_time_range(event)
             return
-        
-        # Determine where the cursor is
-        if event.inaxes in self.user_axes.values():
+
+        # Determine where the cursor is - use pane.user_axes
+        if event.inaxes in pane.user_axes.values():
             # Over a DATA PLOT
-            is_cross_plot = self._is_cross_plot_axis(event.inaxes)
-            
+            is_cross_plot = self._is_cross_plot_axis_in_pane(event.inaxes, pane)
+
             if is_cross_plot:
                 # Cross-plot behavior
                 if has_ctrl or has_alt:
                     # Modifier key → X-axis only
-                    self._zoom_x_axis(event)
+                    self._zoom_x_axis_in_pane(event, pane)
                 else:
                     # No modifier → Both axes (simultaneous zoom)
-                    self._zoom_both_axes(event)
+                    self._zoom_both_axes_in_pane(event, pane)
             else:
                 # Time plot → Y-axis only
-                self._zoom_y_axis(event)
+                self._zoom_y_axis_in_pane(event, pane)
         else:
             # Not over a plot (strip, empty canvas, etc.) → Time zoom
             self._zoom_time_range(event)

@@ -365,8 +365,12 @@ class SelectionMixin:
         self.canvas.draw_idle()
 
 
-    def _on_strip_click(self, event) -> None:
-        if event.artist not in self.strip_ax.patches:  # type: ignore[union-attr]
+    def _on_strip_click(self, event, pane) -> None:
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
+        if event.artist not in pane.strip_ax.patches:  # type: ignore[union-attr]
             return
         if event.mouseevent.xdata is None:
             return
@@ -623,11 +627,15 @@ class SelectionMixin:
         # Convert to exact intervals for box selections (avoids boundary issues)
         return self._runs_to_exact_intervals(idx_full, runs)
 
-    def _on_right_click_cancel(self, event) -> None:
+    def _on_right_click_cancel(self, event, pane) -> None:
         """
         Handle right-click to cancel active selections or deselect interval.
         Works on any axis (time axes, position axes, strip).
         """
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         if getattr(event, "button", None) != 3:  # Only handle right-click
             return
 
@@ -792,12 +800,16 @@ class SelectionMixin:
                     rect_patch.set_visible(True)
 
                 # Use BlitHelper for fast redraw (same technique as two-click selection)
-                if hasattr(self, '_blit') and self._blit is not None:
-                    self._blit.draw([rect_patch])
-                else:
+                pane = self.active_pane if hasattr(self, 'active_pane') else self
+                blit = getattr(pane, '_blit', None)
+                canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, 'canvas', None)
+
+                if blit is not None:
+                    blit.draw([rect_patch])
+                elif canvas is not None:
                     # Fallback to axes-specific blit (still faster than full redraw)
                     axes.draw_artist(rect_patch)
-                    self.canvas.blit(axes.bbox)
+                    canvas.blit(axes.bbox)
 
             except AttributeError:
                 # If we can't access internals, fall back to setting extents
@@ -1025,8 +1037,11 @@ class SelectionMixin:
                 continue
 
         # Redraw canvas to show highlights (unless caller will handle it)
-        if redraw and hasattr(self, 'canvas') and self.canvas is not None:
-            self.canvas.draw_idle()
+        if redraw:
+            # Use active pane's canvas for multi-pane support
+            canvas = self.active_pane.canvas if hasattr(self, 'active_pane') else self.canvas
+            if canvas is not None:
+                canvas.draw_idle()
 
     def _clear_selected_point_highlights(self) -> None:
         """

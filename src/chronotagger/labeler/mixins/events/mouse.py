@@ -102,13 +102,17 @@ class MouseEventsMixin:
             return None
 
 
-    def _on_time_click(self, event) -> None:
+    def _on_time_click(self, event, pane) -> None:
         """
         Two-click selection with blitted preview (canvas-wide).
           • Left-click #1 arms at t0 and shows slim band across time-lane panels + strip.
           • Left-click #2 finalizes [t0, t1] and keeps the preview visible (no full redraw).
           • Right-click cancels.
         """
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         import pandas as pd, matplotlib.dates as mdates
 
         btn = getattr(event, "button", None)
@@ -220,15 +224,19 @@ class MouseEventsMixin:
         self._draw_strip_preview_spans([(x0, x1)])
 
         # Show point highlights ONLY after final selection is complete
-        self._show_selected_point_highlights(redraw=True)  # Force redraw to ensure highlights appear
+        self._show_selected_point_highlights(redraw=True)
 
 
 
-    def _on_time_motion(self, event):
+    def _on_time_motion(self, event, pane):
         """
         While first-click is active, keep the multi-panel overlay AND the strip preview
         in sync with the cursor using blitting (no full redraws).
         """
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         if not getattr(self, "_two_click_active", False):
             return
 
@@ -305,10 +313,11 @@ class MouseEventsMixin:
         If pointer is near selected interval on the strip, return a mode:
           "resize_left" | "resize_right" | "move" | None
         """
-        if self.selected_interval is None or event.inaxes is not self.strip_ax:
+        strip_ax = self.active_pane.strip_ax if hasattr(self, 'active_pane') else self.strip_ax
+        if self.selected_interval is None or event.inaxes is not strip_ax:
             return None
 
-        ax = self.strip_ax
+        ax = strip_ax
         iv = self.selected_interval
         x0 = mdates.date2num(iv.start)
         x1 = mdates.date2num(iv.end)
@@ -342,9 +351,13 @@ class MouseEventsMixin:
 
     # === Strip drag/resize/move handlers ===
 
-    def _on_strip_press(self, event) -> None:
+    def _on_strip_press(self, event, pane) -> None:
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         # Left-click only, and only on the strip axis
-        if event.button != 1 or event.inaxes is not self.strip_ax:
+        if event.button != 1 or event.inaxes is not pane.strip_ax:
             return
 
         # If no selected interval yet, select the one under the cursor (if any)
@@ -380,10 +393,14 @@ class MouseEventsMixin:
         else:
             self._set_cursor("sb_h_double_arrow")
 
-    def _on_strip_motion(self, event) -> None:
+    def _on_strip_motion(self, event, pane) -> None:
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         # Hover cursor feedback when not dragging
         if self._drag_mode is None:
-            if event.inaxes is self.strip_ax:
+            if event.inaxes is pane.strip_ax:
                 mode = self._hit_test_selected(event)
                 if mode == "move":
                     self._set_cursor("fleur")
@@ -396,7 +413,7 @@ class MouseEventsMixin:
             return
 
         # During drag: compute live preview
-        if event.inaxes is not self.strip_ax:
+        if event.inaxes is not pane.strip_ax:
             return
         ts = self._ts_from_event(event)
         if ts is None or self._drag_iv is None or self._drag_initial is None:
@@ -422,7 +439,11 @@ class MouseEventsMixin:
         self._drag_preview = (new_start, new_end)
         self._preview_selection(new_start, new_end)
 
-    def _on_strip_release(self, event) -> None:
+    def _on_strip_release(self, event, pane) -> None:
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         if self._drag_mode is None:
             return
 
@@ -464,11 +485,15 @@ class MouseEventsMixin:
         self._set_cursor(None)
 
 
-    def _on_right_click_cancel(self, event) -> None:
+    def _on_right_click_cancel(self, event, pane) -> None:
         """
         Handle right-click to cancel active selections or deselect interval.
         Works on any axis (time axes, position axes, strip).
         """
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         if getattr(event, "button", None) != 3:  # Only handle right-click
             return
 
@@ -633,12 +658,16 @@ class MouseEventsMixin:
                     rect_patch.set_visible(True)
 
                 # Use BlitHelper for fast redraw (same technique as two-click selection)
-                if hasattr(self, '_blit') and self._blit is not None:
-                    self._blit.draw([rect_patch])
-                else:
+                pane = self.active_pane if hasattr(self, 'active_pane') else self
+                blit = getattr(pane, '_blit', None)
+                canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, 'canvas', None)
+
+                if blit is not None:
+                    blit.draw([rect_patch])
+                elif canvas is not None:
                     # Fallback to axes-specific blit (still faster than full redraw)
                     axes.draw_artist(rect_patch)
-                    self.canvas.blit(axes.bbox)
+                    canvas.blit(axes.bbox)
 
             except AttributeError:
                 # If we can't access internals, fall back to setting extents

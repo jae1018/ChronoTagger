@@ -53,10 +53,10 @@ class BlitHelper:
                 bg = self._bg.get(ax)
                 if bg is None:
                     raise RuntimeError("no background")
-    
+
                 # Restore background for this axes
                 self.canvas.restore_region(bg)
-    
+
                 # Optionally include any other visible animated artists on this axes
                 if include_other_animated:
                     seen = {id(g) for g in group}
@@ -70,11 +70,11 @@ class BlitHelper:
                         except Exception:
                             # be permissive; skip odd artists
                             pass
-    
+
                 # Draw all in order
                 for a in group:
                     a.axes.draw_artist(a)
-    
+
                 # Blit just this axes
                 self.canvas.blit(ax.bbox)
         except Exception:

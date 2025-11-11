@@ -252,36 +252,45 @@ class CanvasMixin:
 
             # ── Blitting: cache per-axes backgrounds and keep them fresh ────────────────
             from ...utils.fastdraw import BlitHelper
-            # Note: Blitting is managed per-pane in multi-pane mode
-            # For now, only create blit helper if this is the active pane
-            if pane is self.active_pane:
-                self._blit = BlitHelper(pane.fig, pane.canvas)
-                _axes_for_blit = [pane.user_axes[k] for k in (pane.time_axis_keys or []) if k in pane.user_axes]
-                if pane.strip_ax is not None:
-                    _axes_for_blit.append(pane.strip_ax)
-                self._blit.add_axes(_axes_for_blit)
-                pane.canvas.mpl_connect("draw_event", self._blit.recache)
+            # Create blit helper for EACH pane (stored per-pane for multi-pane support)
+            pane._blit = BlitHelper(pane.fig, pane.canvas)
+            _axes_for_blit = [pane.user_axes[k] for k in (pane.time_axis_keys or []) if k in pane.user_axes]
+            if pane.strip_ax is not None:
+                _axes_for_blit.append(pane.strip_ax)
+            pane._blit.add_axes(_axes_for_blit)
+            pane.canvas.mpl_connect("draw_event", pane._blit.recache)
             # ───────────────────────────────────────────────────────────────────────────
 
             self.root.after(0, pane.canvas.draw_idle)
 
 
-            # Wheel zoom/pan - wire only for active pane initially
-            if pane is self.active_pane and getattr(self, "_scroll_cid", None) is None:
-                self._scroll_cid = pane.canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
+            # Initialize connection storage for this pane
+            if not hasattr(pane, 'canvas_connections'):
+                pane.canvas_connections = []
 
-            # Two-click selection wiring (coexists with drag-rectangle) - active pane only
-            if pane is self.active_pane:
-                if self._time_click_cid is None:
-                    self._time_click_cid = pane.canvas.mpl_connect(
-                        "button_release_event", self._on_time_click
-                    )
-                if self._time_motion_cid is None:
-                    self._time_motion_cid = pane.canvas.mpl_connect(
-                        "motion_notify_event", self._on_time_motion
-                    )
-                if hasattr(self, "_init_time_overlays"):
-                    self._init_time_overlays()
+            # Wheel zoom/pan - wire for ALL panes, pass pane parameter
+            cid = pane.canvas.mpl_connect(
+                "scroll_event",
+                lambda event, p=pane: self._on_scroll_zoom(event, p)
+            )
+            pane.canvas_connections.append(cid)
+
+            # Two-click selection wiring (coexists with drag-rectangle) - wire for ALL panes
+            cid = pane.canvas.mpl_connect(
+                "button_release_event",
+                lambda event, p=pane: self._on_time_click(event, p)
+            )
+            pane.canvas_connections.append(cid)
+
+            cid = pane.canvas.mpl_connect(
+                "motion_notify_event",
+                lambda event, p=pane: self._on_time_motion(event, p)
+            )
+            pane.canvas_connections.append(cid)
+
+            # Initialize time overlays only for active pane (visual state, not events)
+            if pane is self.active_pane and hasattr(self, "_init_time_overlays"):
+                self._init_time_overlays()
 
             # Rectangle selectors on **ALL** user axes (time and not-time)
             # This allows box selection on both time-series and position plots
@@ -306,32 +315,55 @@ class CanvasMixin:
                 )
                 pane.rect_selectors[k] = rs
 
-            # Wire up edge-clamping for rectangle selectors (active pane only)
+            # Wire up edge-clamping for rectangle selectors (active pane only for now)
+            # TODO: May need to wire for all panes if edge clamping doesn't work on pane switch
             if pane is self.active_pane:
                 self._setup_rectangle_edge_clamping()
 
-            # Strip interactions (active pane only)
-            if pane is self.active_pane:
-                if self.pick_cid is None:
-                    self.pick_cid = pane.canvas.mpl_connect("pick_event", self._on_strip_click)
-                if self._press_cid is None:
-                    self._press_cid = pane.canvas.mpl_connect("button_press_event", self._on_strip_press)
-                if self._motion_cid is None:
-                    self._motion_cid = pane.canvas.mpl_connect("motion_notify_event", self._on_strip_motion)
-                if self._release_cid is None:
-                    self._release_cid = pane.canvas.mpl_connect("button_release_event", self._on_strip_release)
+            # Strip interactions - wire for ALL panes, pass pane parameter
+            cid = pane.canvas.mpl_connect(
+                "pick_event",
+                lambda event, p=pane: self._on_strip_click(event, p)
+            )
+            pane.canvas_connections.append(cid)
 
-            # Right-click cancellation (works on any axis) - active pane only
-            if pane is self.active_pane:
-                if not hasattr(self, '_right_click_cid') or self._right_click_cid is None:
-                    self._right_click_cid = pane.canvas.mpl_connect("button_press_event", self._on_right_click_cancel)
+            cid = pane.canvas.mpl_connect(
+                "button_press_event",
+                lambda event, p=pane: self._on_strip_press(event, p)
+            )
+            pane.canvas_connections.append(cid)
 
-            # --- Drag gate: discriminate drag vs click so click1-click2 doesn't steal events
-            if pane is self.active_pane:
-                if getattr(self, "_gate_press_cid", None) is None:
-                    self._gate_press_cid = pane.canvas.mpl_connect("button_press_event", self._gate_press)
-                if getattr(self, "_gate_release_cid", None) is None:
-                    self._gate_release_cid = pane.canvas.mpl_connect("button_release_event", self._gate_release)
+            cid = pane.canvas.mpl_connect(
+                "motion_notify_event",
+                lambda event, p=pane: self._on_strip_motion(event, p)
+            )
+            pane.canvas_connections.append(cid)
+
+            cid = pane.canvas.mpl_connect(
+                "button_release_event",
+                lambda event, p=pane: self._on_strip_release(event, p)
+            )
+            pane.canvas_connections.append(cid)
+
+            # Right-click cancellation - wire for ALL panes, pass pane parameter
+            cid = pane.canvas.mpl_connect(
+                "button_press_event",
+                lambda event, p=pane: self._on_right_click_cancel(event, p)
+            )
+            pane.canvas_connections.append(cid)
+
+            # Drag gate - wire for ALL panes, pass pane parameter
+            cid = pane.canvas.mpl_connect(
+                "button_press_event",
+                lambda event, p=pane: self._gate_press(event, p)
+            )
+            pane.canvas_connections.append(cid)
+
+            cid = pane.canvas.mpl_connect(
+                "button_release_event",
+                lambda event, p=pane: self._gate_release(event, p)
+            )
+            pane.canvas_connections.append(cid)
 
             # Sync pane metadata to main class for backward compatibility
             if pane is self.active_pane:
@@ -359,7 +391,11 @@ class CanvasMixin:
                 return area
         return None
 
-    def _gate_press(self, event):
+    def _gate_press(self, event, pane):
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         # Remember where a potential drag started (time panels only; LMB)
         self._drag_active = False
         if event.button == 1 and event.inaxes is not None and self._is_time_axes(event.inaxes):
@@ -367,7 +403,11 @@ class CanvasMixin:
         else:
             self._press_event = None
 
-    def _gate_release(self, event):
+    def _gate_release(self, event, pane):
+        # Only process events on the active pane
+        if pane is not self.active_pane:
+            return
+
         # Drag/click cycle ended
         self._drag_active = False
         self._press_event = None
