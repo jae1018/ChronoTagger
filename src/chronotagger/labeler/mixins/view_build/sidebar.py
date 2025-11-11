@@ -149,6 +149,13 @@ class SidebarMixin:
             opts, text="Show interval overlays on panels", variable=self.overlays_var
         ).pack(anchor=tk.W)
 
+        # Point highlighting toggle (performance optimization)
+        self.highlight_points_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            opts, text="Highlight Points", variable=self.highlight_points_var,
+            command=self._on_highlight_points_toggle
+        ).pack(anchor=tk.W)
+
         # Status
         self.status_var = tk.StringVar(value="Ready")
         ttk.Label(parent, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(
@@ -293,3 +300,29 @@ class SidebarMixin:
             # Final geometry update
             self.sidebar_canvas.update_idletasks()
             self.sidebar_interior.update_idletasks()
+
+    def _on_highlight_points_toggle(self) -> None:
+        """
+        Handle Highlight Points checkbox toggle.
+
+        Updates the enable_point_highlighting state and refreshes the plot
+        to immediately show or hide point highlights.
+        """
+        # Update state from checkbox
+        if hasattr(self, 'highlight_points_var'):
+            self.enable_point_highlighting = self.highlight_points_var.get()
+
+        # If disabled, clear existing highlights immediately
+        if not self.enable_point_highlighting:
+            if hasattr(self, '_clear_selected_point_highlights'):
+                self._clear_selected_point_highlights()
+            if hasattr(self, '_clear_selected_interval_highlights'):
+                self._clear_selected_interval_highlights()
+
+            # Redraw canvas to remove highlights
+            if hasattr(self, 'canvas') and self.canvas is not None:
+                self.canvas.draw_idle()
+        else:
+            # If enabled, refresh plot to show highlights
+            if hasattr(self, '_update_plot'):
+                self._update_plot()
