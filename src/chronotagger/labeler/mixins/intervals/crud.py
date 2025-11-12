@@ -128,7 +128,7 @@ class IntervalCRUDMixin:
             if count > 0:
                 self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
                 self._update_plot()
-                self._maybe_autosave()
+                self._save_autosave()
             else:
                 # More informative message if policy produced emptiness
                 from tkinter import messagebox
@@ -168,7 +168,7 @@ class IntervalCRUDMixin:
             if count > 0:
                 self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
                 self._update_plot()
-                self._maybe_autosave()
+                self._save_autosave()
             else:
                 from tkinter import messagebox
                 messagebox.showwarning("No Selection", "Box contained no valid points/spans.")
@@ -195,7 +195,7 @@ class IntervalCRUDMixin:
 
         self.status_var.set(f"Added {label} interval")  # type: ignore[union-attr]
         self._update_plot()
-        self._maybe_autosave()
+        self._save_autosave()
 
     def _add_intervals_with_policy(
         self,
@@ -236,7 +236,7 @@ class IntervalCRUDMixin:
 
             self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
             self._update_plot()
-            self._maybe_autosave()
+            self._save_autosave()
         else:
             messagebox.showwarning(
                 "Nothing Added",
@@ -287,7 +287,7 @@ class IntervalCRUDMixin:
 
         self.status_var.set(f"Relabeled → {new_label}")  # type: ignore[union-attr]
         self._update_plot()
-        self._maybe_autosave()
+        self._save_autosave()
 
     # ---- DELETE operations ----
     def _delete_interval(self) -> None:
@@ -306,7 +306,7 @@ class IntervalCRUDMixin:
             self._clear_selected_interval_highlights()
         self.status_var.set("Deleted interval")  # type: ignore[union-attr]
         self._update_plot()
-        self._maybe_autosave()
+        self._save_autosave()
 
     # ---- CLEAR operations ----
     def _clear_preview_state(self) -> None:
@@ -479,7 +479,7 @@ class IntervalCRUDMixin:
 
             # Update UI
             self._update_plot()
-            self._maybe_autosave()
+            self._save_autosave()
 
         def on_cancel():
             """Close dialog without action."""

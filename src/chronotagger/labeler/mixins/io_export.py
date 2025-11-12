@@ -59,7 +59,7 @@ class IOExportMixin:
 
     # ---- GUI-connected ops ----
     def _save_session(self, path: Optional[str] = None) -> None:
-        target = Path(path) if path else self.autosave_path
+        target = Path(path) if path else None
         if target is None:
             chosen = filedialog.asksaveasfilename(
                 defaultextension=".json",
@@ -68,7 +68,6 @@ class IOExportMixin:
             if not chosen:
                 return
             target = Path(chosen)
-            self.autosave_path = target
 
         data = {
             "version": 1,
@@ -135,7 +134,6 @@ class IOExportMixin:
         self.step = pd.Timedelta(data["step"])
         self.intervals = [Interval.from_dict(d) for d in data["intervals"]]
 
-        self.autosave_path = Path(path)
         self.modified = False
 
         if self.class_combo is not None and self.current_class_var is not None:
@@ -729,9 +727,228 @@ class IOExportMixin:
         self.status_var.set(f"Exported to {path}")  # type: ignore[union-attr]
         messagebox.showinfo("Export Complete", f"Per-sample labels exported to {path}")
 
+    def _save_autosave(self) -> None:
+        """Save current state to autosave file with metadata."""
+        import pickle
+        from datetime import datetime
+
+        # Use instance autosave file path
+        autosave_path = self.autosave_file
+
+        # Calculate statistics
+        label_stats = {}
+        total_duration = 0
+        for interval in self.intervals:
+            label = interval.label
+            duration_hours = (interval.end - interval.start).total_seconds() / 3600
+
+            if label not in label_stats:
+                label_stats[label] = {'count': 0, 'duration_hours': 0}
+            label_stats[label]['count'] += 1
+            label_stats[label]['duration_hours'] += duration_hours
+            total_duration += duration_hours
+
+        # Calculate coverage percentage
+        data_duration = (self.data_end - self.data_start).total_seconds() / 3600
+        coverage_percent = (total_duration / data_duration * 100) if data_duration > 0 else 0
+
+        # Build autosave data structure
+        autosave_data = {
+            'metadata': {
+                'data_columns': list(self.df.columns),  # For matching validation
+                'autosave_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'total_intervals': len(self.intervals),
+                'coverage_percent': round(coverage_percent, 1),
+                'time_range': {
+                    'start': str(self.data_start),
+                    'end': str(self.data_end)
+                }
+            },
+            'intervals': self.intervals,  # List of Interval objects
+            'label_stats': label_stats
+        }
+
+        # Save to file
+        try:
+            with open(autosave_path, 'wb') as f:
+                pickle.dump(autosave_data, f)
+        except Exception as e:
+            print(f"Warning: Could not save autosave: {e}")
+
+    def _check_autosave(self):
+        """
+        Check if autosave exists and matches current data.
+
+        Returns:
+            dict or None: Autosave data if exists and matches, None otherwise
+        """
+        import pickle
+
+        # Use instance autosave file path
+        if not self.autosave_file.exists():
+            return None
+
+        try:
+            with open(self.autosave_file, 'rb') as f:
+                autosave_data = pickle.load(f)
+
+            # Validate: Check if data columns match
+            saved_columns = autosave_data['metadata'].get('data_columns', [])
+            current_columns = list(self.df.columns)
+
+            if saved_columns != current_columns:
+                print(f"Warning: Autosave columns don't match current data")
+                print(f"  Saved: {saved_columns}")
+                print(f"  Current: {current_columns}")
+                # Still return it, let user decide in dialog
+
+            return autosave_data
+
+        except Exception as e:
+            print(f"Warning: Could not load autosave: {e}")
+            return None
+
+    def _show_recovery_dialog(self, autosave_data):
+        """
+        Show recovery dialog with autosave information.
+
+        Args:
+            autosave_data: Dict containing autosave metadata and intervals
+
+        Returns:
+            str: User choice - 'recover', 'start_fresh', 'save_backup', or 'cancel'
+        """
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+        from datetime import datetime
+        import shutil
+
+        # Create modal dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Autosave Found")
+        dialog.geometry("500x450")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # Center on screen
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+
+        # Store result
+        result = {'choice': None}
+
+        # Header
+        header = ttk.Label(dialog, text="Autosave Found for This Data File",
+                           font=('Arial', 12, 'bold'))
+        header.pack(pady=(15, 10))
+
+        # Info frame
+        info_frame = tk.Frame(dialog, bg='#f0f0f0', relief='sunken', bd=1)
+        info_frame.pack(pady=10, padx=15, fill='both', expand=False)
+
+        metadata = autosave_data['metadata']
+        label_stats = autosave_data['label_stats']
+
+        # Data file (use autosave folder name)
+        data_file = self.autosave_folder.name if self.autosave_folder.name != '.' else 'Current directory'
+        info_text = f"Autosave Folder: {data_file}\n"
+        info_text += f"Autosave Date: {metadata['autosave_timestamp']}\n"
+        info_text += f"Coverage: {metadata['coverage_percent']}% of time range labeled\n\n"
+        info_text += "Intervals by Label:\n"
+
+        for label, stats in sorted(label_stats.items()):
+            count = stats['count']
+            hours = stats['duration_hours']
+            info_text += f"  {label}: {count} intervals ({hours:.1f} hours)\n"
+
+        total_intervals = metadata['total_intervals']
+        total_hours = sum(s['duration_hours'] for s in label_stats.values())
+        info_text += f"\nTotal: {total_intervals} intervals covering {total_hours:.1f} hours"
+
+        info_label = tk.Label(info_frame, text=info_text, justify='left',
+                              bg='#f0f0f0', font=('Courier', 9), padx=10, pady=10)
+        info_label.pack()
+
+        # Button callbacks
+        def on_recover():
+            result['choice'] = 'recover'
+            dialog.destroy()
+
+        def on_start_fresh():
+            # Confirm before discarding
+            confirm = messagebox.askyesno(
+                "Confirm Start Fresh",
+                f"Are you sure you want to start fresh?\n\n"
+                f"This will NOT load the autosave with {total_intervals} intervals.\n"
+                f"The autosave file will remain and can be recovered later.",
+                parent=dialog
+            )
+            if confirm:
+                result['choice'] = 'start_fresh'
+                dialog.destroy()
+
+        def on_save_backup():
+            # Save backup with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_filename = f'chronotagger_autosave_backup_{timestamp}.pkl'
+            backup_file = self.autosave_folder / backup_filename
+
+            try:
+                shutil.copy(self.autosave_file, backup_file)
+
+                messagebox.showinfo("Backup Saved",
+                                   f"Autosave backed up to:\n{backup_filename}",
+                                   parent=dialog)
+                result['choice'] = 'start_fresh'
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("Backup Failed",
+                                    f"Could not save backup:\n{e}",
+                                    parent=dialog)
+
+        def on_cancel():
+            result['choice'] = 'cancel'
+            dialog.destroy()
+
+        # Buttons frame
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=15)
+
+        # Buttons
+        recover_btn = ttk.Button(btn_frame, text="Recover Session", command=on_recover, width=18)
+        recover_btn.grid(row=0, column=0, padx=5, pady=5)
+
+        fresh_btn = ttk.Button(btn_frame, text="Start Fresh", command=on_start_fresh, width=18)
+        fresh_btn.grid(row=0, column=1, padx=5, pady=5)
+
+        backup_btn = ttk.Button(btn_frame, text="Save & Start Fresh", command=on_save_backup, width=18)
+        backup_btn.grid(row=1, column=0, padx=5, pady=5)
+
+        cancel_btn = ttk.Button(btn_frame, text="Cancel", command=on_cancel, width=18)
+        cancel_btn.grid(row=1, column=1, padx=5, pady=5)
+
+        # Make Recover button default (highlighted)
+        recover_btn.focus_set()
+
+        # Bind Escape to cancel
+        dialog.bind('<Escape>', lambda e: on_cancel())
+
+        # Bind Enter to recover (default action)
+        dialog.bind('<Return>', lambda e: on_recover())
+
+        # Wait for dialog to close
+        dialog.wait_window()
+
+        return result['choice']
+
     def _maybe_autosave(self) -> None:
-        if self.autosave_path and self.modified:
-            self._save_session(str(self.autosave_path))
+        """Legacy method for JSON session autosave. Now handled by _save_autosave()."""
+        # This method is deprecated - automatic saves now use _save_autosave()
+        # which saves to pickle format after every interval modification.
+        # Keeping this as a no-op for backward compatibility.
+        pass
 
     def _on_closing(self) -> None:
         if self.modified:

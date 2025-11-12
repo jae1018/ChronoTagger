@@ -469,7 +469,7 @@ class MouseEventsMixin:
             # Clear preview & refresh
             self.current_selection = None
             self._update_plot()
-            self._maybe_autosave()
+            self._save_autosave()
 
         # Reset drag state & cursor
         self._drag_mode = None

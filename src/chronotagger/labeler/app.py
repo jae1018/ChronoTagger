@@ -74,7 +74,7 @@ class TimeIntervalLabeler(
         step: pd.Timedelta = pd.Timedelta("15min"),
         start: Optional[pd.Timestamp] = None,
         end: Optional[pd.Timestamp] = None,
-        autosave_path: Optional[str] = None,
+        autosave_folder: str = ".",
         *,
         layout_spec: Optional[Dict[str, Any]] = None,
         panes: Optional[List[Dict[str, Any]]] = None,
@@ -175,8 +175,10 @@ class TimeIntervalLabeler(
         self.redo_stack: List[Command] = []
         self.max_undo: int = 20
 
-        # Persistence
-        self.autosave_path = Path(autosave_path) if autosave_path else None
+        # Persistence - Autosave configuration
+        self.autosave_folder = Path(autosave_folder)
+        self.autosave_folder.mkdir(parents=True, exist_ok=True)  # Create folder if it doesn't exist
+        self.autosave_file = self.autosave_folder / "chronotagger_autosave.pkl"
         self.modified: bool = False
 
         # GUI state
@@ -344,7 +346,41 @@ class TimeIntervalLabeler(
     # -------- Public entrypoint --------
 
     def run(self) -> None:
-        """Start the Tkinter main loop."""
+        """Start the Tkinter main loop with autosave recovery."""
+        # Build GUI first
         self._build_gui()
+
+        # Check for autosave BEFORE starting mainloop
+        autosave_data = self._check_autosave()
+
+        if autosave_data is not None:
+            choice = self._show_recovery_dialog(autosave_data)
+
+            if choice == 'recover':
+                # Load intervals from autosave
+                self.intervals = autosave_data['intervals']
+                # Sync intervals across all panes
+                self.sync_manager.sync_intervals_changed()
+                # Refresh UI to show loaded intervals
+                self._update_plot()
+                if hasattr(self, '_update_intervals_list'):
+                    self._update_intervals_list()
+                self.status_var.set(f"Recovered {len(self.intervals)} intervals from autosave")
+
+            elif choice == 'start_fresh':
+                # Don't load autosave, keep empty intervals
+                # Autosave file remains for potential future recovery
+                self.status_var.set("Starting fresh session (autosave not loaded)")
+
+            elif choice == 'save_backup':
+                # Already handled in dialog callback
+                self.status_var.set("Starting fresh session (backup saved)")
+
+            elif choice == 'cancel':
+                # User wants to exit
+                self.root.destroy()
+                return  # Exit without starting mainloop
+
+        # Update plot and start GUI event loop
         self._update_plot()
         self.root.mainloop()  # type: ignore[union-attr]
