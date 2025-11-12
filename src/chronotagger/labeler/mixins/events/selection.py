@@ -986,6 +986,10 @@ class SelectionMixin:
 
         Called automatically when preview selection changes.
         """
+        # Check if point highlighting is enabled (performance optimization)
+        if not getattr(self, 'enable_point_highlighting', True):
+            return
+
         # Clear any existing highlights first
         self._clear_selected_point_highlights()
 
@@ -1148,6 +1152,10 @@ class SelectionMixin:
         Similar to preview highlighting but uses a different color (blue vs red)
         and works on the selected interval rather than preview selection.
         """
+        # Check if point highlighting is enabled (performance optimization)
+        if not getattr(self, 'enable_point_highlighting', True):
+            return
+
         # Clear any existing interval highlights
         self._clear_selected_interval_highlights()
 

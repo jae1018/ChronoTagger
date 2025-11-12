@@ -312,6 +312,11 @@ class SidebarMixin:
         if hasattr(self, 'highlight_points_var'):
             self.enable_point_highlighting = self.highlight_points_var.get()
 
+        # Sync state to all panes (for multi-pane mode)
+        if hasattr(self, 'panes'):
+            for pane in self.panes:
+                pane.enable_point_highlighting = self.enable_point_highlighting
+
         # If disabled, clear existing highlights immediately
         if not self.enable_point_highlighting:
             if hasattr(self, '_clear_selected_point_highlights'):
@@ -320,9 +325,28 @@ class SidebarMixin:
                 self._clear_selected_interval_highlights()
 
             # Redraw canvas to remove highlights
-            if hasattr(self, 'canvas') and self.canvas is not None:
-                self.canvas.draw_idle()
+            canvas = self.active_pane.canvas if hasattr(self, 'active_pane') else getattr(self, 'canvas', None)
+            if canvas is not None:
+                canvas.draw_idle()
         else:
-            # If enabled, refresh plot to show highlights
-            if hasattr(self, '_update_plot'):
-                self._update_plot()
+            # If enabled, show highlights for current selection (if any)
+            # First check if there's an active selection/preview
+            has_preview = (
+                getattr(self, 'current_selection', None) is not None or
+                bool(getattr(self, 'current_spans', None))
+            )
+
+            if has_preview:
+                # Show highlights for active preview
+                if hasattr(self, '_show_selected_point_highlights'):
+                    self._show_selected_point_highlights(redraw=True)
+
+            # Check if there's a selected interval
+            if hasattr(self, 'selected_interval') and self.selected_interval is not None:
+                if hasattr(self, '_show_selected_interval_highlights'):
+                    self._show_selected_interval_highlights()
+
+            # Redraw canvas to show highlights (especially for interval highlights)
+            canvas = self.active_pane.canvas if hasattr(self, 'active_pane') else getattr(self, 'canvas', None)
+            if canvas is not None:
+                canvas.draw_idle()
