@@ -99,7 +99,7 @@ class SelectionMixin:
 
             # CRITICAL: Full-height selection doesn't use component filtering - clear stale values
             self._selected_component_labels = None
-            if hasattr(self, 'active_pane'):
+            if hasattr(self, 'active_pane') and self.active_pane is not None:
                 self.active_pane._selected_component_labels = None
 
             self.status_var.set(  # type: ignore[union-attr]
@@ -198,7 +198,7 @@ class SelectionMixin:
 
             # CRITICAL: Not-time axis selection doesn't use component filtering - clear stale values
             self._selected_component_labels = None
-            if hasattr(self, 'active_pane'):
+            if hasattr(self, 'active_pane') and self.active_pane is not None:
                 self.active_pane._selected_component_labels = None
 
             # UPDATE TIME OVERLAYS for multi-span preview with padded intervals
@@ -324,7 +324,7 @@ class SelectionMixin:
         # CRITICAL: Single-component selection - clear any component filtering
         # This ensures ALL components are highlighted on multi-component plots
         self._selected_component_labels = None
-        if hasattr(self, 'active_pane'):
+        if hasattr(self, 'active_pane') and self.active_pane is not None:
             self.active_pane._selected_component_labels = None
 
         # Single line or no line info - proceed with finalization
@@ -935,8 +935,14 @@ class SelectionMixin:
                 time_vals = [mdates.date2num(windowed_idx[idx]) for idx in indices
                             if 0 <= idx < len(windowed_idx)]
 
-                # Check if we have component selection active
-                selected_components = getattr(self, '_selected_component_labels', None)
+                # CRITICAL: Check component filter on correct object
+                # Priority: active_pane (if exists) > self
+                selected_components = None
+
+                if hasattr(self, 'active_pane') and self.active_pane is not None:
+                    selected_components = getattr(self.active_pane, '_selected_component_labels', None)
+                else:
+                    selected_components = getattr(self, '_selected_component_labels', None)
 
                 # For time axes, we need to determine which column is being plotted
                 # Filter by selected components if specified
@@ -946,16 +952,17 @@ class SelectionMixin:
                         if len(ys) != len(windowed_idx):  # Not main data artist
                             continue
 
-                        # Check if this line should be included based on component selection
-                        if selected_components:
+                        # If no filter (None), include ALL lines
+                        if selected_components is None:
+                            # No filtering - extract from this line
+                            pass
+                        else:
+                            # Apply component filtering
                             line_label = line.get_label()
-
-                            # DEBUG: Log filtering process
-                            print(f"[COMPONENT FILTER] Line label: '{line_label}', Selected: {selected_components}")
 
                             # Handle auto-generated labels (matplotlib creates these)
                             if line_label.startswith('_'):
-                                # Auto-labeled lines - include by default for backward compatibility
+                                # Include auto-labeled lines by default for backward compatibility
                                 pass
                             else:
                                 # Normalize labels for comparison (strip whitespace, case-insensitive)
@@ -965,10 +972,7 @@ class SelectionMixin:
                                 # Exact match required
                                 if line_label_normalized not in selected_labels_normalized:
                                     # This line is not in the selected components - skip it
-                                    print(f"[COMPONENT FILTER] Skipping '{line_label}' (not in {selected_components})")
                                     continue
-                                else:
-                                    print(f"[COMPONENT FILTER] Including '{line_label}'")
 
                         y_vals_for_line = [float(ys[idx]) for idx in indices
                                           if 0 <= idx < len(ys)]
@@ -978,9 +982,8 @@ class SelectionMixin:
                         x_vals.extend(x_vals_for_line)
                         y_vals.extend(y_vals_for_line)
 
-                        # If no component selection, take only first line (backward compatible)
-                        if not selected_components:
-                            break
+                        # FIXED: Process ALL lines when no filter, not just first one
+                        # This ensures all components are highlighted on multi-component plots
 
                     except Exception:
                         continue
