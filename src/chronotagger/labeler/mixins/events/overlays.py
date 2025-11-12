@@ -713,17 +713,53 @@ class OverlaysMixin:
                 time_vals = [mdates.date2num(windowed_idx[idx]) for idx in indices
                             if 0 <= idx < len(windowed_idx)]
 
+                # Check if we have component selection active
+                selected_components = getattr(self, '_selected_component_labels', None)
+
                 # For time axes, we need to determine which column is being plotted
-                # This is trickier - for now, extract from the first legitimate line artist
-                # that has the right number of data points
+                # Filter by selected components if specified
                 for line in ax.lines:
                     try:
                         ys = np.asarray(line.get_ydata(orig=False))
-                        if len(ys) == len(windowed_idx):  # Main data artist
-                            y_vals = [float(ys[idx]) for idx in indices
-                                     if 0 <= idx < len(ys)]
-                            x_vals = time_vals[:len(y_vals)]  # Match lengths
+                        if len(ys) != len(windowed_idx):  # Not main data artist
+                            continue
+
+                        # Check if this line should be included based on component selection
+                        if selected_components:
+                            line_label = line.get_label()
+
+                            # DEBUG: Log filtering process
+                            print(f"[COMPONENT FILTER] Line label: '{line_label}', Selected: {selected_components}")
+
+                            # Handle auto-generated labels (matplotlib creates these)
+                            if line_label.startswith('_'):
+                                # Auto-labeled lines - include by default for backward compatibility
+                                pass
+                            else:
+                                # Normalize labels for comparison (strip whitespace, case-insensitive)
+                                line_label_normalized = line_label.strip().upper()
+                                selected_labels_normalized = [lbl.strip().upper() for lbl in selected_components]
+
+                                # Exact match required
+                                if line_label_normalized not in selected_labels_normalized:
+                                    # This line is not in the selected components - skip it
+                                    print(f"[COMPONENT FILTER] Skipping '{line_label}' (not in {selected_components})")
+                                    continue
+                                else:
+                                    print(f"[COMPONENT FILTER] Including '{line_label}'")
+
+                        y_vals_for_line = [float(ys[idx]) for idx in indices
+                                          if 0 <= idx < len(ys)]
+                        x_vals_for_line = time_vals[:len(y_vals_for_line)]  # Match lengths
+
+                        # Append these values
+                        x_vals.extend(x_vals_for_line)
+                        y_vals.extend(y_vals_for_line)
+
+                        # If no component selection, take only first line (backward compatible)
+                        if not selected_components:
                             break
+
                     except Exception:
                         continue
 
