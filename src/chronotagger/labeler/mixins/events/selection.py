@@ -717,6 +717,10 @@ class SelectionMixin:
         clamps the rectangle corner to the axes edges so users can easily
         select all the way to corners without pixel-perfect precision.
 
+        ENHANCED: Now detects mouse outside axes in ANY direction (horizontal
+        or vertical) using screen coordinate bounding box checks.
+        FIXED: Properly handles multi-pane and multi-axes setups.
+
         Args:
             event: matplotlib mouse motion event
         """
@@ -725,17 +729,70 @@ class SelectionMixin:
         if drag_axes is None:
             return
 
-        # Check if this axes has a rectangle selector
-        rect_selector = self.rect_selectors.get(self._find_axes_key(drag_axes))
-        if rect_selector is None or not rect_selector.active:
+        # CRITICAL FIX: Find which pane this drag belongs to
+        # Selectors are stored per-pane, not globally
+        drag_pane = None
+        drag_key = None
+
+        # Check active pane first (most common case)
+        if hasattr(self, 'active_pane'):
+            pane = self.active_pane
+            if hasattr(pane, 'user_axes'):
+                for key, ax in pane.user_axes.items():
+                    if ax is drag_axes:
+                        drag_pane = pane
+                        drag_key = key
+                        break
+
+        # If not found on active pane, check all panes
+        if drag_pane is None and hasattr(self, 'panes'):
+            for pane in self.panes:
+                if hasattr(pane, 'user_axes'):
+                    for key, ax in pane.user_axes.items():
+                        if ax is drag_axes:
+                            drag_pane = pane
+                            drag_key = key
+                            break
+                    if drag_pane is not None:
+                        break
+
+        # If we couldn't find the pane/key, can't proceed
+        if drag_pane is None or drag_key is None:
             return
 
-        # If mouse is still inside the original axes, do nothing
-        # (let RectangleSelector handle it normally)
-        if event.inaxes == drag_axes:
+        # Get the rectangle selector for this specific pane and axes
+        if not hasattr(drag_pane, 'rect_selectors'):
             return
 
-        # Mouse left the axes during drag - clamp to edges
+        rect_selector = drag_pane.rect_selectors.get(drag_key)
+        if rect_selector is None:
+            return
+
+        # CRITICAL FIX: Ensure the selector is active
+        # Sometimes selectors become inactive during drag - reactivate them
+        if not rect_selector.active:
+            rect_selector.set_active(True)
+
+        # ENHANCED: Check if mouse is outside axes using bounding box
+        # This catches vertical movement outside axes that event.inaxes might miss
+        mouse_outside_axes = False
+
+        try:
+            bbox = drag_axes.bbox  # Axes bounding box in screen coordinates
+
+            # Check if mouse is outside axes horizontally OR vertically
+            if (event.x < bbox.x0 or event.x > bbox.x1 or
+                event.y < bbox.y0 or event.y > bbox.y1):
+                mouse_outside_axes = True
+        except Exception:
+            # Fallback to old check if bbox access fails
+            mouse_outside_axes = (event.inaxes != drag_axes)
+
+        # If mouse is still fully inside axes, let RectangleSelector handle it normally
+        if not mouse_outside_axes and event.inaxes == drag_axes:
+            return
+
+        # Mouse is outside axes (horizontally or vertically) - apply clamping
         self._clamp_rectangle_to_axes(event, drag_axes, rect_selector)
 
     def _clamp_rectangle_to_axes(self, event, axes, rect_selector) -> None:

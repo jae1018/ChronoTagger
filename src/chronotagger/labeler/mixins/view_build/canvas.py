@@ -347,6 +347,7 @@ class CanvasMixin:
             # TODO: May need to wire for all panes if edge clamping doesn't work on pane switch
             if pane is self.active_pane:
                 self._setup_rectangle_edge_clamping()
+                self._setup_zoom_selector_edge_clamping()
 
             # Strip interactions - wire for ALL panes, pass pane parameter
             cid = pane.canvas.mpl_connect(
@@ -502,6 +503,33 @@ class CanvasMixin:
         # matplotlib events only fire when mouse is over axes, missing the gray areas
         tk_widget = self.canvas.get_tk_widget()
         tk_widget.bind('<Motion>', self._on_tk_canvas_motion, add='+')
+
+    def _setup_zoom_selector_edge_clamping(self) -> None:
+        """
+        Wire up edge-clamping behavior for zoom selectors (right-button).
+
+        Similar to rectangle selector clamping, but for the zoom feature.
+        Enables zoom box to extend to axes edges when mouse leaves axes.
+        """
+        # Connect figure-level motion handler for zoom clamping
+        if not hasattr(self, '_zoom_clamp_motion_cid') or self._zoom_clamp_motion_cid is None:
+            self._zoom_clamp_motion_cid = self.canvas.mpl_connect(
+                'motion_notify_event',
+                self._on_zoom_selector_motion
+            )
+
+        # Connect figure-level press/release for zoom state tracking
+        if not hasattr(self, '_zoom_clamp_press_cid') or self._zoom_clamp_press_cid is None:
+            self._zoom_clamp_press_cid = self.canvas.mpl_connect(
+                'button_press_event',
+                self._on_zoom_selector_press
+            )
+
+        if not hasattr(self, '_zoom_clamp_release_cid') or self._zoom_clamp_release_cid is None:
+            self._zoom_clamp_release_cid = self.canvas.mpl_connect(
+                'button_release_event',
+                self._on_zoom_selector_release
+            )
 
     def _on_tk_canvas_motion(self, tk_event) -> None:
         """

@@ -556,6 +556,9 @@ class OverlaysMixin:
         coordinates, clamps to axes limits, and manually updates the
         rectangle selector extents using fast blitting.
 
+        ENHANCED: Aggressive edge snapping when mouse is outside axes bounds.
+        Detects which edge(s) the mouse is beyond and snaps to those edges.
+
         Args:
             event: matplotlib mouse event
             axes: The axes where the drag started
@@ -584,6 +587,31 @@ class OverlaysMixin:
 
             if x_start is None or y_start is None:
                 return
+
+            # ENHANCED: Detect which edges mouse is outside and snap aggressively
+            # This ensures vertical (Y-axis) clamping works as expected
+            try:
+                bbox = axes.bbox  # Axes bounding box in screen coordinates
+
+                # If mouse is above axes, force top edge
+                if event.y > bbox.y1:
+                    y_clamped = ymax
+
+                # If mouse is below axes, force bottom edge
+                elif event.y < bbox.y0:
+                    y_clamped = ymin
+
+                # If mouse is right of axes, force right edge
+                if event.x > bbox.x1:
+                    x_clamped = xmax
+
+                # If mouse is left of axes, force left edge
+                elif event.x < bbox.x0:
+                    x_clamped = xmin
+
+            except Exception:
+                # If edge detection fails, use the clamped values from above
+                pass
 
             # Calculate rectangle extents
             left = min(x_start, x_clamped)

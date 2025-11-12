@@ -102,15 +102,22 @@ class MouseEventsMixin:
         if btn != 1:
             return
 
-        # ---- ignore if this mouse cycle was a drag, or not on a time/strip axis
+        # ---- ignore if this mouse cycle was a drag
         if getattr(self, "_drag_active", False):
             return
-        if event.inaxes is None:
-            return
-        # Only allow two-click selection on time-series axes (NOT on strip)
+
+        # Check if click is on allowed time axes
         _allowed_axes = {self.user_axes[k] for k in self._time_axis_keys}
-        if event.inaxes not in _allowed_axes:
-            return
+        on_time_axes = event.inaxes in _allowed_axes
+
+        # ENHANCED: Allow clicks outside axes ONLY if we're finalizing active two-click
+        # This enables completing selection by clicking anywhere in the figure after
+        # the first click armed the selection inside a time axis
+        if not on_time_axes:
+            # First click must be on time axes to arm the selection
+            if not getattr(self, "_two_click_active", False):
+                return  # Not armed yet - require being over time axes
+            # Otherwise continue - we're finalizing an active selection from outside axes
 
         x_any = self._x_from_anywhere(event)
         if x_any is None:
@@ -221,6 +228,28 @@ class MouseEventsMixin:
         if primary_ax is not None:
             lo, hi = sorted([primary_ax.viewLim.x0, primary_ax.viewLim.x1])
             x_any = min(max(float(x_any), lo), hi)
+
+            # ENHANCED: If mouse left the time axes, clamp more aggressively to edges
+            # This ensures selection extends to edges smoothly
+            time_axes = {self.user_axes[k] for k in (self._time_axis_keys or [])}
+            if event.inaxes not in time_axes:
+                # Mouse is outside time axes - user wants to select to edge
+                # Check which edge they're near based on screen position
+                try:
+                    # Get axis bounds in screen coordinates
+                    bbox = primary_ax.get_window_extent()
+                    mouse_x = event.x  # Screen X coordinate
+
+                    # If mouse is left of axis, snap to left edge
+                    if mouse_x < bbox.x0:
+                        x_any = lo
+                    # If mouse is right of axis, snap to right edge
+                    elif mouse_x > bbox.x1:
+                        x_any = hi
+                    # Otherwise use the clamped value we already calculated
+                except Exception:
+                    # If screen coord transform fails, keep using clamped value
+                    pass
 
         lo_f, hi_f = sorted([float(self._two_click_t0), float(x_any)])
         s_ts = pd.Timestamp(mdates.num2date(lo_f)).tz_localize(None)
