@@ -826,7 +826,7 @@ class IOExportMixin:
         # Create modal dialog
         dialog = tk.Toplevel(self.root)
         dialog.title("Autosave Found")
-        dialog.geometry("500x450")
+        dialog.geometry("550x500")
         dialog.transient(self.root)
         dialog.grab_set()
 
@@ -836,40 +836,114 @@ class IOExportMixin:
         y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
         dialog.geometry(f"+{x}+{y}")
 
+        # Make dialog non-resizable for consistent appearance
+        dialog.resizable(False, False)
+
         # Store result
         result = {'choice': None}
 
-        # Header
-        header = ttk.Label(dialog, text="Autosave Found for This Data File",
-                           font=('Arial', 12, 'bold'))
-        header.pack(pady=(15, 10))
+        # Main container with padding
+        main_frame = ttk.Frame(dialog, padding="20")
+        main_frame.pack(fill='both', expand=True)
 
-        # Info frame
-        info_frame = tk.Frame(dialog, bg='#f0f0f0', relief='sunken', bd=1)
-        info_frame.pack(pady=10, padx=15, fill='both', expand=False)
+        # Header with icon and title
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill='x', pady=(0, 15))
+
+        # Title
+        title_label = ttk.Label(
+            header_frame,
+            text="Autosave Found for This Data File",
+            font=('Segoe UI', 12, 'bold')
+        )
+        title_label.pack()
+
+        # Info container with light background
+        info_frame = ttk.LabelFrame(main_frame, text="Session Information", padding="15")
+        info_frame.pack(fill='both', expand=True, pady=(0, 15))
 
         metadata = autosave_data['metadata']
         label_stats = autosave_data['label_stats']
 
-        # Data file (use autosave folder name)
-        data_file = self.autosave_folder.name if self.autosave_folder.name != '.' else 'Current directory'
-        info_text = f"Autosave Folder: {data_file}\n"
-        info_text += f"Autosave Date: {metadata['autosave_timestamp']}\n"
-        info_text += f"Coverage: {metadata['coverage_percent']}% of time range labeled\n\n"
-        info_text += "Intervals by Label:\n"
+        # Autosave folder
+        folder_label = ttk.Label(
+            info_frame,
+            text=f"Autosave Folder: {self.autosave_folder}",
+            font=('Segoe UI', 9)
+        )
+        folder_label.pack(anchor='w', pady=(0, 5))
 
+        # Autosave date
+        date_label = ttk.Label(
+            info_frame,
+            text=f"Autosave Date: {metadata['autosave_timestamp']}",
+            font=('Segoe UI', 9)
+        )
+        date_label.pack(anchor='w', pady=(0, 5))
+
+        # Coverage
+        coverage_label = ttk.Label(
+            info_frame,
+            text=f"Coverage: {metadata['coverage_percent']}% of time range labeled",
+            font=('Segoe UI', 9)
+        )
+        coverage_label.pack(anchor='w', pady=(0, 10))
+
+        # Separator
+        ttk.Separator(info_frame, orient='horizontal').pack(fill='x', pady=(0, 10))
+
+        # Intervals by label header
+        intervals_header = ttk.Label(
+            info_frame,
+            text="Intervals by Label:",
+            font=('Segoe UI', 9, 'bold')
+        )
+        intervals_header.pack(anchor='w', pady=(0, 5))
+
+        # Create frame for interval list with padding
+        intervals_container = ttk.Frame(info_frame)
+        intervals_container.pack(fill='both', expand=True, pady=(0, 10))
+
+        # Display each label's stats
         for label, stats in sorted(label_stats.items()):
             count = stats['count']
             hours = stats['duration_hours']
-            info_text += f"  {label}: {count} intervals ({hours:.1f} hours)\n"
 
+            interval_frame = ttk.Frame(intervals_container)
+            interval_frame.pack(fill='x', pady=2)
+
+            # Label name (left-aligned)
+            label_text = ttk.Label(
+                interval_frame,
+                text=f"  {label}:",
+                font=('Segoe UI', 9),
+                width=20,
+                anchor='w'
+            )
+            label_text.pack(side='left')
+
+            # Stats (right side)
+            stats_text = ttk.Label(
+                interval_frame,
+                text=f"{count} intervals ({hours:.1f} hours)",
+                font=('Segoe UI', 9),
+                foreground='#666666'
+            )
+            stats_text.pack(side='left')
+
+        # Separator
+        ttk.Separator(info_frame, orient='horizontal').pack(fill='x', pady=(5, 10))
+
+        # Total summary
         total_intervals = metadata['total_intervals']
         total_hours = sum(s['duration_hours'] for s in label_stats.values())
-        info_text += f"\nTotal: {total_intervals} intervals covering {total_hours:.1f} hours"
 
-        info_label = tk.Label(info_frame, text=info_text, justify='left',
-                              bg='#f0f0f0', font=('Courier', 9), padx=10, pady=10)
-        info_label.pack()
+        total_label = ttk.Label(
+            info_frame,
+            text=f"Total: {total_intervals} intervals covering {total_hours:.1f} hours",
+            font=('Segoe UI', 9, 'bold')
+        )
+        total_label.pack(anchor='w')
 
         # Button callbacks
         def on_recover():
@@ -877,7 +951,6 @@ class IOExportMixin:
             dialog.destroy()
 
         def on_start_fresh():
-            # Confirm before discarding
             confirm = messagebox.askyesno(
                 "Confirm Start Fresh",
                 f"Are you sure you want to start fresh?\n\n"
@@ -890,52 +963,80 @@ class IOExportMixin:
                 dialog.destroy()
 
         def on_save_backup():
-            # Save backup with timestamp
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_filename = f'chronotagger_autosave_backup_{timestamp}.pkl'
             backup_file = self.autosave_folder / backup_filename
 
             try:
                 shutil.copy(self.autosave_file, backup_file)
-
-                messagebox.showinfo("Backup Saved",
-                                   f"Autosave backed up to:\n{backup_filename}",
-                                   parent=dialog)
+                messagebox.showinfo(
+                    "Backup Saved",
+                    f"Autosave backed up to:\n{backup_filename}",
+                    parent=dialog
+                )
                 result['choice'] = 'start_fresh'
                 dialog.destroy()
             except Exception as e:
-                messagebox.showerror("Backup Failed",
-                                    f"Could not save backup:\n{e}",
-                                    parent=dialog)
+                messagebox.showerror(
+                    "Backup Failed",
+                    f"Could not save backup:\n{e}",
+                    parent=dialog
+                )
 
         def on_cancel():
             result['choice'] = 'cancel'
             dialog.destroy()
 
         # Buttons frame
-        btn_frame = tk.Frame(dialog)
-        btn_frame.pack(pady=15)
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill='x', pady=(10, 0))
 
-        # Buttons
-        recover_btn = ttk.Button(btn_frame, text="Recover Session", command=on_recover, width=18)
-        recover_btn.grid(row=0, column=0, padx=5, pady=5)
+        # Create two rows of buttons
+        top_button_frame = ttk.Frame(button_frame)
+        top_button_frame.pack(fill='x', pady=(0, 5))
 
-        fresh_btn = ttk.Button(btn_frame, text="Start Fresh", command=on_start_fresh, width=18)
-        fresh_btn.grid(row=0, column=1, padx=5, pady=5)
+        bottom_button_frame = ttk.Frame(button_frame)
+        bottom_button_frame.pack(fill='x')
 
-        backup_btn = ttk.Button(btn_frame, text="Save & Start Fresh", command=on_save_backup, width=18)
-        backup_btn.grid(row=1, column=0, padx=5, pady=5)
+        # Top row buttons
+        recover_btn = ttk.Button(
+            top_button_frame,
+            text="Recover Session",
+            command=on_recover,
+            width=25
+        )
+        recover_btn.pack(side='left', expand=True, padx=(0, 5))
 
-        cancel_btn = ttk.Button(btn_frame, text="Cancel", command=on_cancel, width=18)
-        cancel_btn.grid(row=1, column=1, padx=5, pady=5)
+        fresh_btn = ttk.Button(
+            top_button_frame,
+            text="Start Fresh",
+            command=on_start_fresh,
+            width=25
+        )
+        fresh_btn.pack(side='left', expand=True, padx=(5, 0))
+
+        # Bottom row buttons
+        backup_btn = ttk.Button(
+            bottom_button_frame,
+            text="Save & Start Fresh",
+            command=on_save_backup,
+            width=25
+        )
+        backup_btn.pack(side='left', expand=True, padx=(0, 5))
+
+        cancel_btn = ttk.Button(
+            bottom_button_frame,
+            text="Cancel",
+            command=on_cancel,
+            width=25
+        )
+        cancel_btn.pack(side='left', expand=True, padx=(5, 0))
 
         # Make Recover button default (highlighted)
         recover_btn.focus_set()
 
-        # Bind Escape to cancel
+        # Bind keyboard shortcuts
         dialog.bind('<Escape>', lambda e: on_cancel())
-
-        # Bind Enter to recover (default action)
         dialog.bind('<Return>', lambda e: on_recover())
 
         # Wait for dialog to close
