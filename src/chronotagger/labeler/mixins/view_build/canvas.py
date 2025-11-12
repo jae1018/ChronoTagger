@@ -34,6 +34,7 @@ class CanvasMixin:
     - _on_time_motion(event) - Callback for time axis motion
     - _init_time_overlays() - Method to initialize time overlays (if available)
     - _on_rectangle_select(eclick, erelease) - Callback for rectangle selection
+    - _on_zoom_box_complete(eclick, erelease, pane) - Callback for zoom box selection
     - _on_strip_click(event, pane) - Callback for strip clicks (pick events)
     - _on_strip_press(event) - Callback for strip press events
     - _on_strip_motion(event) - Callback for strip motion events
@@ -56,6 +57,7 @@ class CanvasMixin:
     - _time_click_cid: int - Connection ID for time click events
     - _time_motion_cid: int - Connection ID for time motion events
     - rect_selectors: dict[str, RectangleSelector] - Rectangle selectors for each axis
+    - zoom_selectors: dict[str, RectangleSelector] - Zoom selectors for time axes
     - pick_cid: int - Connection ID for pick events
     - _press_cid: int - Connection ID for press events
     - _motion_cid: int - Connection ID for motion events
@@ -314,6 +316,32 @@ class CanvasMixin:
                     ),
                 )
                 pane.rect_selectors[k] = rs
+
+            # Zoom selectors on TIME axes only (right mouse button)
+            # This allows quick zoom to time range via right-click drag
+            pane.zoom_selectors = {}
+            for k in sorted(pane.user_axes.keys()):
+                # Only add zoom selector to time axes (not position plots, not strip)
+                if pane.axes_meta.get(k, {}).get('role') == 'time':
+                    ax = pane.user_axes[k]
+                    zs = RectangleSelector(
+                        ax,
+                        onselect=lambda eclick, erelease, p=pane: self._on_zoom_box_complete(eclick, erelease, p),
+                        useblit=True,
+                        button=[3],  # RIGHT mouse button only
+                        minspanx=0,  # No minimum - allow any zoom range
+                        minspany=0,
+                        spancoords="data",
+                        interactive=False,
+                        drag_from_anywhere=False,
+                        props=dict(
+                            facecolor="cyan",    # Distinct from selection (yellow)
+                            edgecolor="darkgreen",
+                            alpha=0.25,
+                            linewidth=2,
+                        ),
+                    )
+                    pane.zoom_selectors[k] = zs
 
             # Wire up edge-clamping for rectangle selectors (active pane only for now)
             # TODO: May need to wire for all panes if edge clamping doesn't work on pane switch

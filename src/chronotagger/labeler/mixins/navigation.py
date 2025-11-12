@@ -138,17 +138,17 @@ class NavigationMixin:
         """
         current_window = self.t1 - self.t0
         new_window = current_window / 2
-        
+
         # Clamp to min window
         new_window = max(new_window, self.min_window)
-        
+
         # Try to center on current window
         center = self.t0 + current_window / 2
         half = new_window / 2
-        
+
         new_t0 = center - half
         new_t1 = center + half
-        
+
         # Clamp to data bounds while preserving window size
         if new_t0 < self.data_start:
             new_t0 = self.data_start
@@ -156,9 +156,82 @@ class NavigationMixin:
         if new_t1 > self.data_end:
             new_t1 = self.data_end
             new_t0 = new_t1 - new_window
-        
+
         # Apply
         self.t0, self.t1 = new_t0, new_t1
         self.window = self.t1 - self.t0
         self._time_range_dirty = True
         self._sync_entries_and_plot()
+
+    def _on_zoom_box_complete(self, eclick, erelease, pane) -> None:
+        """
+        Handle right-click drag zoom on time axes.
+
+        Distinguishes between:
+        - Short drag (< 10 pixels) = Cancel selection (existing behavior)
+        - Long drag (>= 10 pixels) = Zoom to time range
+
+        Args:
+            eclick: Mouse click event at selection start
+            erelease: Mouse release event at selection end
+            pane: The TabPane where the zoom occurred
+        """
+        # Only process on active pane
+        if pane is not self.active_pane:
+            return
+
+        # Check if this was a click vs drag (pixel-based threshold)
+        dx_pixels = abs(erelease.x - eclick.x)
+
+        if dx_pixels < 10:
+            # Too small - treat as cancel click (existing behavior)
+            if hasattr(self, '_cancel_active_selection'):
+                self._cancel_active_selection()
+            return
+
+        # Extract time bounds from drag
+        if eclick.xdata is None or erelease.xdata is None:
+            return
+
+        x0, x1 = float(eclick.xdata), float(erelease.xdata)
+        x_lo, x_hi = sorted([x0, x1])
+
+        # Convert matplotlib dates to timestamps
+        import matplotlib.dates as mdates
+        t_start = pd.Timestamp(mdates.num2date(x_lo)).tz_localize(None)
+        t_end = pd.Timestamp(mdates.num2date(x_hi)).tz_localize(None)
+
+        # Clamp to data bounds
+        t_start = max(t_start, self.data_start)
+        t_end = min(t_end, self.data_end)
+
+        # Ensure start < end
+        if t_start >= t_end:
+            return  # Invalid range, ignore
+
+        # Update time window
+        self.t0 = t_start
+        self.t1 = t_end
+        self.window = self.t1 - self.t0
+        self._time_range_dirty = True
+
+        # Update the time range UI fields to reflect new window
+        self._update_time_range_fields()
+
+        # Redraw plot with new time range
+        self._update_plot()
+
+        # Update status
+        if hasattr(self, 'status_var') and self.status_var is not None:
+            self.status_var.set(
+                f"Zoomed to: {t_start.strftime('%H:%M:%S')} → {t_end.strftime('%H:%M:%S')}"
+            )
+
+    def _update_time_range_fields(self) -> None:
+        """Update Start/End text fields after programmatic time change."""
+        if hasattr(self, 'start_time_entry') and self.start_time_entry is not None:
+            self.start_time_entry.delete(0, tk.END)
+            self.start_time_entry.insert(0, str(self.t0))
+        if hasattr(self, 'end_time_entry') and self.end_time_entry is not None:
+            self.end_time_entry.delete(0, tk.END)
+            self.end_time_entry.insert(0, str(self.t1))
