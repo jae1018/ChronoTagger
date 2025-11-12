@@ -230,7 +230,12 @@ class SidebarMixin:
 
         The toggle button is now in the top bar and always visible.
         When collapsed, the entire sidebar is hidden.
+
+        Handles both single-pane mode (plot_frame) and multi-pane mode (notebook).
         """
+        # Determine which widget to manage (plot_frame or notebook)
+        content_widget = getattr(self, 'plot_frame', None) or getattr(self, 'notebook', None)
+
         if self.sidebar_collapsed:
             # Expand sidebar
             self.sidebar_collapsed = False
@@ -238,23 +243,26 @@ class SidebarMixin:
             # Update button appearance
             self.sidebar_toggle_btn.configure(text="Hide Panel ▶")
 
-            # To ensure proper layout, temporarily unpack plot frame
-            # then repack sidebar and plot frame in correct order
-            self.plot_frame.pack_forget()
+            # To ensure proper layout, temporarily unpack content widget
+            # then repack sidebar and content widget in correct order
+            if content_widget:
+                content_widget.pack_forget()
 
             # Pack sidebar first (right side)
             self.sidebar_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
             self.sidebar_frame.pack_propagate(False)
 
-            # Then pack plot frame (left side, fills remaining space)
-            self.plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            # Then pack content widget (left side, fills remaining space)
+            if content_widget:
+                content_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
             # Restore normal width
             self.sidebar_frame.configure(width=self.sidebar_expanded_width)
 
             # Force immediate geometry update
             self.sidebar_frame.update_idletasks()
-            self.plot_frame.update_idletasks()
+            if content_widget:
+                content_widget.update_idletasks()
 
             # Force layout updates and refresh
             self.root.after_idle(self._refresh_sidebar_layout)
