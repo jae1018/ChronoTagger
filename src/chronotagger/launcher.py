@@ -5,6 +5,8 @@ ChronoTagger application launcher.
 Provides entry point for both command-line and bundled app usage.
 """
 import sys
+import matplotlib
+matplotlib.use('TkAgg')  # Force Tkinter-compatible backend for better performance
 
 
 def main():
