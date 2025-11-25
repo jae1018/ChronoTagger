@@ -37,13 +37,13 @@ class QuickStartWizard:
         # Create root window
         self.root = tk.Tk()
         self.root.title("ChronoTagger Quick Start")
-        self.root.geometry("600x400")
+        self.root.geometry("700x600")  # Larger for file dialog
 
         # Center window on screen
         self._center_window()
 
-        # For Phase 1: Just show welcome message
-        self._show_welcome()
+        # Phase 2: Start with file loading
+        self._show_file_loader()
 
         # Start Tkinter main loop
         self.root.mainloop()
@@ -57,72 +57,46 @@ class QuickStartWizard:
         y = (self.root.winfo_screenheight() // 2) - (height // 2)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
 
-    def _show_welcome(self):
-        """
-        Show welcome screen (Phase 1 stub).
+    def _show_file_loader(self):
+        """Show file loading dialog."""
+        from chronotagger.quickstart.file_loader import FileLoaderDialog
 
-        In future phases, this will be replaced with actual wizard UI.
-        """
-        import tkinter.ttk as ttk
+        file_dialog = FileLoaderDialog(self.root)
+        df = file_dialog.run()
 
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding="40")
-        main_frame.pack(fill='both', expand=True)
+        if df is None:
+            # User cancelled
+            self._on_cancel()
+            return
 
-        # Title
-        title = ttk.Label(
-            main_frame,
-            text="ChronoTagger Quick Start",
-            font=('Arial', 16, 'bold')
+        # Store loaded DataFrame
+        self.df = df
+
+        # Proceed to Phase 3 (stub for now)
+        self._show_column_selector()
+
+    def _show_column_selector(self):
+        """Stub for Phase 3 - Column selection."""
+        messagebox.showinfo(
+            "Phase 3 Not Implemented",
+            f"Data loaded successfully!\n\n"
+            f"Rows: {len(self.df)}\n"
+            f"Columns: {list(self.df.columns)}\n\n"
+            f"Column selection (Phase 3) not yet implemented.",
+            parent=self.root
         )
-        title.pack(pady=(0, 20))
-
-        # Welcome message
-        message = ttk.Label(
-            main_frame,
-            text=(
-                "Welcome to ChronoTagger Quick Start!\n\n"
-                "Phase 1: Foundation is complete.\n"
-                "The wizard will guide you through loading data\n"
-                "and configuring plots in future phases.\n\n"
-                "For now, this is a placeholder to verify\n"
-                "the entry point works correctly."
-            ),
-            justify='center',
-            font=('Arial', 11)
-        )
-        message.pack(pady=20)
-
-        # Info about programmatic usage
-        info = ttk.Label(
-            main_frame,
-            text=(
-                "To use ChronoTagger programmatically:\n"
-                "from chronotagger import TimeIntervalLabeler\n"
-                "app = TimeIntervalLabeler(df, plot_fn, labels)\n"
-                "app.run()"
-            ),
-            justify='center',
-            font=('Courier', 9),
-            foreground='gray'
-        )
-        info.pack(pady=20)
-
-        # Close button
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(pady=20)
-
-        close_button = ttk.Button(
-            button_frame,
-            text="Close",
-            command=self._on_close
-        )
-        close_button.pack()
-
-    def _on_close(self):
-        """Handle close button click."""
         self.root.destroy()
-        sys.exit(0)
+
+    def _on_cancel(self):
+        """Handle cancellation."""
+        result = messagebox.askyesno(
+            "Exit Wizard",
+            "Exit the wizard?",
+            parent=self.root
+        )
+        if result:
+            self.root.destroy()
+            sys.exit(0)
 
 
 def run():
