@@ -127,6 +127,10 @@ class FileLoaderDialog:
         hsb = ttk.Scrollbar(tree_frame, orient="horizontal")
         hsb.pack(side='bottom', fill='x')
 
+        # Configure Treeview style for better visibility on macOS
+        style = ttk.Style()
+        style.configure("Treeview.Heading", background="#e0e0e0", foreground="black", relief="raised")
+
         # Treeview
         self.tree = ttk.Treeview(
             tree_frame,
