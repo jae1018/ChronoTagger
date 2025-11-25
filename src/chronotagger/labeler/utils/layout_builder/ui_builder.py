@@ -73,7 +73,7 @@ class UIBuilderMixin:
             command=self._on_grid_size_changed
         ).pack(side=tk.LEFT, padx=(0, 15))
 
-        tk.Button(controls, text="Clear All", command=self._clear_all_panels).pack(side=tk.RIGHT)
+        ttk.Button(controls, text="Clear All", command=self._clear_all_panels).pack(side=tk.RIGHT)
 
         # Instructions
         instructions = ttk.Label(
@@ -150,20 +150,20 @@ class UIBuilderMixin:
         edit_frame = ttk.LabelFrame(right, text="Edit Selected Panel", padding=10)
         edit_frame.pack(fill=tk.X, pady=(0, 10))
 
-        tk.Button(edit_frame, text="Update Panel", command=self._update_selected_panel).pack(fill=tk.X, pady=(0, 5))
-        tk.Button(edit_frame, text="Delete Panel", command=self._delete_selected_panel).pack(fill=tk.X)
+        ttk.Button(edit_frame, text="Update Panel", command=self._update_selected_panel).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(edit_frame, text="Delete Panel", command=self._delete_selected_panel).pack(fill=tk.X)
 
         # Bottom buttons
         bottom_frame = ttk.Frame(right)
         bottom_frame.pack(fill=tk.X, side=tk.BOTTOM)
 
-        tk.Button(bottom_frame, text="Preview", command=self._show_preview, width=12).pack(
+        ttk.Button(bottom_frame, text="Preview", command=self._show_preview, width=12).pack(
             side=tk.LEFT, padx=2
         )
-        tk.Button(bottom_frame, text="Done", command=self._on_done, width=12).pack(
+        ttk.Button(bottom_frame, text="Done", command=self._on_done, width=12).pack(
             side=tk.RIGHT, padx=2
         )
-        tk.Button(bottom_frame, text="Cancel", command=self._on_cancel, width=12).pack(
+        ttk.Button(bottom_frame, text="Cancel", command=self._on_cancel, width=12).pack(
             side=tk.RIGHT, padx=2
         )
 

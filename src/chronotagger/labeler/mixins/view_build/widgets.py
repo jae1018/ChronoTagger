@@ -19,7 +19,7 @@ class WidgetsMixin:
 
     This mixin expects the following attributes/methods to be available on self:
     - root: tk.Tk - The main tkinter root window
-    - sidebar_toggle_btn: tk.Button - The sidebar toggle button (for tooltip updates)
+    - sidebar_toggle_btn: ttk.Button - The sidebar toggle button (for tooltip updates)
 
     Methods provided:
     - _create_tooltip(widget, text) - Create a simple tooltip for a widget

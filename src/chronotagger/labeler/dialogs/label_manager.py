@@ -31,8 +31,8 @@ class _ReassignDialog(tk.Toplevel):
 
         btns = ttk.Frame(self)
         btns.pack(padx=10, pady=(5, 10), fill=tk.X)
-        tk.Button(btns, text="Cancel", command=self._cancel).pack(side=tk.RIGHT, padx=5)
-        tk.Button(btns, text="OK", command=self._ok).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Cancel", command=self._cancel).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btns, text="OK", command=self._ok).pack(side=tk.RIGHT)
 
         self.transient(parent)
         self.grab_set()
@@ -106,19 +106,19 @@ class LabelManagerDialog(tk.Toplevel):
         sb.grid(row=0, column=1, rowspan=6, sticky="ns", padx=(4, 0))
 
         # Buttons
-        tk.Button(main, text="Add…", command=self._on_add).grid(row=0, column=2, sticky="ew", padx=(12, 0), pady=(0, 4))
-        tk.Button(main, text="Rename…", command=self._on_rename).grid(row=1, column=2, sticky="ew", padx=(12, 0), pady=4)
-        tk.Button(main, text="Change color…", command=self._on_color).grid(row=2, column=2, sticky="ew", padx=(12, 0), pady=4)
-        tk.Button(main, text="Move up", command=lambda: self._move(-1)).grid(row=3, column=2, sticky="ew", padx=(12, 0), pady=4)
-        tk.Button(main, text="Move down", command=lambda: self._move(+1)).grid(row=4, column=2, sticky="ew", padx=(12, 0), pady=4)
-        tk.Button(main, text="Delete…", command=self._on_delete).grid(row=5, column=2, sticky="ew", padx=(12, 0), pady=(4, 0))
+        ttk.Button(main, text="Add…", command=self._on_add).grid(row=0, column=2, sticky="ew", padx=(12, 0), pady=(0, 4))
+        ttk.Button(main, text="Rename…", command=self._on_rename).grid(row=1, column=2, sticky="ew", padx=(12, 0), pady=4)
+        ttk.Button(main, text="Change color…", command=self._on_color).grid(row=2, column=2, sticky="ew", padx=(12, 0), pady=4)
+        ttk.Button(main, text="Move up", command=lambda: self._move(-1)).grid(row=3, column=2, sticky="ew", padx=(12, 0), pady=4)
+        ttk.Button(main, text="Move down", command=lambda: self._move(+1)).grid(row=4, column=2, sticky="ew", padx=(12, 0), pady=4)
+        ttk.Button(main, text="Delete…", command=self._on_delete).grid(row=5, column=2, sticky="ew", padx=(12, 0), pady=(4, 0))
 
         # Footer
         footer = ttk.Frame(main)
         footer.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         footer.columnconfigure(0, weight=1)
-        tk.Button(footer, text="Cancel", command=self._on_cancel).pack(side=tk.RIGHT, padx=5)
-        tk.Button(footer, text="OK", command=self._on_ok).pack(side=tk.RIGHT)
+        ttk.Button(footer, text="Cancel", command=self._on_cancel).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(footer, text="OK", command=self._on_ok).pack(side=tk.RIGHT)
 
         main.columnconfigure(0, weight=1)
         self._refresh_tree()

@@ -133,7 +133,7 @@ class PreviewMixin:
         button_frame = ttk.Frame(self.preview_window)
         button_frame.pack(fill=tk.X, pady=(0, 10))
 
-        tk.Button(
+        ttk.Button(
             button_frame,
             text="Close",
             command=self.preview_window.destroy,

@@ -156,13 +156,13 @@ class OverlapResolutionDialog(tk.Toplevel):
         btns = ttk.Frame(main)
         btns.grid(row=row, column=0, sticky="e")
         
-        tk.Button(
+        ttk.Button(
             btns, 
             text="Cancel", 
             command=self._on_cancel
         ).pack(side=tk.RIGHT, padx=(8, 0))
         
-        self._confirm_btn = tk.Button(
+        self._confirm_btn = ttk.Button(
             btns,
             text="Confirm",
             command=self._on_confirm,

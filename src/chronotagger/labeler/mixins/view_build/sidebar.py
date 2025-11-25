@@ -27,7 +27,7 @@ class SidebarMixin:
     - sidebar_frame: ttk.Frame - The parent frame for the sidebar
     - plot_frame: ttk.Frame - The plot frame (for layout management)
     - root: tk.Tk - The main tkinter root window
-    - sidebar_toggle_btn: tk.Button - The sidebar toggle button
+    - sidebar_toggle_btn: ttk.Button - The sidebar toggle button
     - _on_interval_tree_select(event) - Callback for interval tree selection
     - _update_tooltip_text(text) - Method to update tooltip text
 

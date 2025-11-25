@@ -55,7 +55,7 @@ class ControlsMixin:
     - step_entry: ttk.Entry - Entry for step size
     - current_class_var: tk.StringVar - StringVar for current class selection
     - class_combo: ttk.Combobox - Combobox for class selection
-    - sidebar_toggle_btn: tk.Button - Button for toggling sidebar
+    - sidebar_toggle_btn: ttk.Button - Button for toggling sidebar
     """
 
     def _build_top_controls(self, parent: ttk.Frame) -> None:
@@ -74,7 +74,7 @@ class ControlsMixin:
         self.start_time_entry = ttk.Entry(rng, width=22)
         self.start_time_entry.insert(0, str(self.t0))
         self.start_time_entry.grid(row=0, column=1, padx=(0, 6), pady=2, sticky="ew")
-        tk.Button(rng, text="Update Window", command=self._update_time_window)\
+        ttk.Button(rng, text="Update Window", command=self._update_time_window)\
             .grid(row=0, column=2, padx=(8, 2), pady=2)
 
         # Row 1: End + ×2/÷2 buttons
@@ -86,8 +86,8 @@ class ControlsMixin:
         # ×2/÷2 buttons in a small frame
         win_btn_frame = ttk.Frame(rng)
         win_btn_frame.grid(row=1, column=2, padx=(8, 2), pady=2)
-        tk.Button(win_btn_frame, text="×2", width=4, command=self._double_time_window).pack(side=tk.LEFT, padx=2)
-        tk.Button(win_btn_frame, text="÷2", width=4, command=self._halve_time_window).pack(side=tk.LEFT, padx=2)
+        ttk.Button(win_btn_frame, text="×2", width=4, command=self._double_time_window).pack(side=tk.LEFT, padx=2)
+        ttk.Button(win_btn_frame, text="÷2", width=4, command=self._halve_time_window).pack(side=tk.LEFT, padx=2)
 
         # ── Navigation (centered) ─────────────────────────────────────────────────
         nav = ttk.LabelFrame(parent, text="Navigation", padding=5)
@@ -105,8 +105,8 @@ class ControlsMixin:
         # Row 0: Previous and Next buttons (aligned with other sections' top rows)
         prev_next_frame = ttk.Frame(nav_grid)
         prev_next_frame.grid(row=0, column=1, pady=2)
-        tk.Button(prev_next_frame, text="<- Prev", command=self._prev_window).pack(side=tk.LEFT, padx=4)
-        tk.Button(prev_next_frame, text="Next ->", command=self._next_window).pack(side=tk.LEFT, padx=4)
+        ttk.Button(prev_next_frame, text="<- Prev", command=self._prev_window).pack(side=tk.LEFT, padx=4)
+        ttk.Button(prev_next_frame, text="Next ->", command=self._next_window).pack(side=tk.LEFT, padx=4)
 
         # Row 1: Step controls (aligned with other sections' bottom rows)
         step_frame = ttk.Frame(nav_grid)
@@ -116,8 +116,8 @@ class ControlsMixin:
         self.step_entry.insert(0, str(self.step))
         self.step_entry.pack(side=tk.LEFT)
         self.step_entry.bind("<Return>", lambda _: self._apply_step_entry())
-        tk.Button(step_frame, text="x2", width=4, command=self._double_step).pack(side=tk.LEFT, padx=4)
-        tk.Button(step_frame, text="/2", width=4, command=self._halve_step).pack(side=tk.LEFT, padx=2)
+        ttk.Button(step_frame, text="x2", width=4, command=self._double_step).pack(side=tk.LEFT, padx=4)
+        ttk.Button(step_frame, text="/2", width=4, command=self._halve_step).pack(side=tk.LEFT, padx=2)
 
         # ── Label Actions (2x5 grid) ──────────────────────────────────────────────
         label_actions = ttk.LabelFrame(parent, text="Label Actions", padding=5)
@@ -132,23 +132,23 @@ class ControlsMixin:
             grid_frame.columnconfigure(i, weight=1)
 
         # Row 1: [Re-label, Add, Undo, Manage..., Fill Gaps...]
-        tk.Button(
+        ttk.Button(
             grid_frame, text="Re-label", command=self._relabel_interval
         ).grid(row=0, column=0, sticky="ew", padx=1, pady=2)
 
-        tk.Button(
+        ttk.Button(
             grid_frame, text="Add", command=self._add_interval
         ).grid(row=0, column=1, sticky="ew", padx=1, pady=2)
 
-        tk.Button(
+        ttk.Button(
             grid_frame, text="Undo", command=self._undo
         ).grid(row=0, column=2, sticky="ew", padx=1, pady=2)
 
-        tk.Button(
+        ttk.Button(
             grid_frame, text="Manage...", command=self._open_label_manager
         ).grid(row=0, column=3, sticky="ew", padx=1, pady=2)
 
-        tk.Button(
+        ttk.Button(
             grid_frame, text="Fill Gaps...", command=self._open_label_unassigned_dialog
         ).grid(row=0, column=4, sticky="ew", padx=1, pady=2)
 
@@ -163,19 +163,19 @@ class ControlsMixin:
         )
         self.class_combo.grid(row=1, column=0, sticky="ew", padx=1, pady=2)
 
-        tk.Button(
+        ttk.Button(
             grid_frame, text="Delete", command=self._delete_interval
         ).grid(row=1, column=1, sticky="ew", padx=1, pady=2)
 
-        tk.Button(
+        ttk.Button(
             grid_frame, text="Redo", command=self._redo
         ).grid(row=1, column=2, sticky="ew", padx=1, pady=2)
 
-        tk.Button(
+        ttk.Button(
             grid_frame, text="By-Rule...", command=self._open_label_by_rule_dialog
         ).grid(row=1, column=3, sticky="ew", padx=1, pady=2)
 
-        tk.Button(
+        ttk.Button(
             grid_frame, text="Clear...", command=self._open_clear_intervals_dialog
         ).grid(row=1, column=4, sticky="ew", padx=1, pady=2)
 
@@ -195,16 +195,16 @@ class ControlsMixin:
         io_grid.columnconfigure(1, weight=1)
 
         # Row 0: Save Session | Load Session
-        tk.Button(
+        ttk.Button(
             io_grid, text="Save Session", command=self._save_session
         ).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
 
-        tk.Button(
+        ttk.Button(
             io_grid, text="Load Session", command=self._load_session
         ).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
 
         # Row 1: Export Labels... | (empty)
-        tk.Button(
+        ttk.Button(
             io_grid, text="Export Labels...", command=self._export_labels_dialog
         ).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
 
@@ -219,12 +219,12 @@ class ControlsMixin:
         help_grid.pack()
 
         # Row 0: Help button (aligned with top row of other grids)
-        tk.Button(
+        ttk.Button(
             help_grid, text="Help (F1)", command=self._open_help_dialog
         ).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
 
         # Row 1: Reset Scale button (aligned with bottom row of other grids)
-        tk.Button(
+        ttk.Button(
             help_grid, text="Reset Scale", command=self._reset_all_yscales
         ).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
 
@@ -240,7 +240,7 @@ class ControlsMixin:
         toggle_grid.pack()
 
         # Row 0: Sidebar toggle button (aligned with top row)
-        self.sidebar_toggle_btn = tk.Button(
+        self.sidebar_toggle_btn = ttk.Button(
             toggle_grid,
             text="Hide Panel ▶",
             command=self._toggle_sidebar,
