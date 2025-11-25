@@ -26,6 +26,8 @@ class QuickStartWizard:
         """Initialize wizard state."""
         self.root: Optional[tk.Tk] = None
         self.df = None
+        self.selected_columns = None
+        self.layout_type = None
         self.plot_config = None
 
     def run(self):
@@ -76,13 +78,33 @@ class QuickStartWizard:
         self._show_column_selector()
 
     def _show_column_selector(self):
-        """Stub for Phase 3 - Column selection."""
+        """Show column selection dialog."""
+        from chronotagger.quickstart.column_selector import ColumnSelectorDialog
+
+        col_dialog = ColumnSelectorDialog(self.root, self.df)
+        selection = col_dialog.run()
+
+        if selection is None:
+            # User cancelled
+            self._on_cancel()
+            return
+
+        # Store selection
+        self.selected_columns = selection['columns']
+        self.layout_type = selection['layout_type']
+
+        # Proceed to Phase 4 (launch labeler)
+        self._launch_labeler()
+
+    def _launch_labeler(self):
+        """Launch TimeIntervalLabeler (Phase 4 stub)."""
         messagebox.showinfo(
-            "Phase 3 Not Implemented",
-            f"Data loaded successfully!\n\n"
-            f"Rows: {len(self.df)}\n"
-            f"Columns: {list(self.df.columns)}\n\n"
-            f"Column selection (Phase 3) not yet implemented.",
+            "Phase 4 Not Implemented",
+            f"Ready to launch labeler!\n\n"
+            f"Data: {len(self.df)} rows\n"
+            f"Columns: {', '.join(self.selected_columns)}\n"
+            f"Layout: {self.layout_type}\n\n"
+            f"Labeler launch (Phase 4) not yet implemented.",
             parent=self.root
         )
         self.root.destroy()
