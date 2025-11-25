@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["pandas", "numpy", "matplotlib", "pyarrow"]  # pyarrow for parquet
 
+[project.scripts]
+chronotagger = "chronotagger.launcher:main"
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
