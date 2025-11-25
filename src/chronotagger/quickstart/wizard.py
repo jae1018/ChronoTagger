@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import messagebox
 import sys
 from typing import Optional
+import pandas as pd
 
 
 class QuickStartWizard:
@@ -97,17 +98,54 @@ class QuickStartWizard:
         self._launch_labeler()
 
     def _launch_labeler(self):
-        """Launch TimeIntervalLabeler (Phase 4 stub)."""
-        messagebox.showinfo(
-            "Phase 4 Not Implemented",
-            f"Ready to launch labeler!\n\n"
-            f"Data: {len(self.df)} rows\n"
-            f"Columns: {', '.join(self.selected_columns)}\n"
-            f"Layout: {self.layout_type}\n\n"
-            f"Labeler launch (Phase 4) not yet implemented.",
-            parent=self.root
+        """Launch TimeIntervalLabeler with configured data and plots."""
+        from chronotagger import TimeIntervalLabeler
+        from chronotagger.quickstart.plot_builder import (
+            build_plot_function,
+            build_layout_spec,
+            validate_plot_inputs
         )
-        self.root.destroy()
+
+        try:
+            # Validate inputs
+            validate_plot_inputs(self.df, self.selected_columns)
+
+            # Build plot function and layout
+            plot_fn = build_plot_function(self.selected_columns)
+            layout_spec = build_layout_spec(self.selected_columns, self.layout_type)
+
+            # Calculate a reasonable default window (10% of data range)
+            time_range = self.df.index[-1] - self.df.index[0]
+            default_window = time_range * 0.1
+
+            # Create TimeIntervalLabeler
+            labeler = TimeIntervalLabeler(
+                df=self.df,
+                plot_fn=plot_fn,
+                layout_spec=layout_spec,
+                window=default_window
+            )
+
+            # Hide wizard window
+            self.root.withdraw()
+
+            # Run labeler (this blocks until labeler window is closed)
+            labeler.run()
+
+            # When labeler closes, destroy wizard
+            self.root.destroy()
+
+        except Exception as e:
+            # Show error and return to wizard
+            self.root.deiconify()  # Show wizard again
+            messagebox.showerror(
+                "Error Launching Labeler",
+                f"Failed to launch TimeIntervalLabeler:\n\n{str(e)}\n\n"
+                f"Please check your selections and try again.",
+                parent=self.root
+            )
+            # Return to column selector to try again
+            self._show_column_selector()
 
     def _on_cancel(self):
         """Handle cancellation."""

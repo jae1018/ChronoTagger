@@ -310,8 +310,8 @@ class IOExportMixin:
             except Exception as e:
                 messagebox.showerror("Export Failed", f"{e}")
     
-        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side=tk.RIGHT, padx=(5, 0))
-        ttk.Button(btns, text="Export", command=do_export_and_close).pack(side=tk.RIGHT)
+        tk.Button(btns, text="Cancel", command=dlg.destroy).pack(side=tk.RIGHT, padx=(5, 0))
+        tk.Button(btns, text="Export", command=do_export_and_close).pack(side=tk.RIGHT)
         
         # --- Preview Update Functions ---
         def update_preview():
@@ -1029,7 +1029,7 @@ class IOExportMixin:
         bottom_button_frame.pack(fill='x')
 
         # Top row buttons
-        recover_btn = ttk.Button(
+        recover_btn = tk.Button(
             top_button_frame,
             text="Recover Session",
             command=on_recover,
@@ -1037,7 +1037,7 @@ class IOExportMixin:
         )
         recover_btn.pack(side='left', expand=True, padx=(0, 5))
 
-        fresh_btn = ttk.Button(
+        fresh_btn = tk.Button(
             top_button_frame,
             text="Start Fresh",
             command=on_start_fresh,
@@ -1046,7 +1046,7 @@ class IOExportMixin:
         fresh_btn.pack(side='left', expand=True, padx=(5, 0))
 
         # Bottom row buttons
-        backup_btn = ttk.Button(
+        backup_btn = tk.Button(
             bottom_button_frame,
             text="Save & Start Fresh",
             command=on_save_backup,
@@ -1054,7 +1054,7 @@ class IOExportMixin:
         )
         backup_btn.pack(side='left', expand=True, padx=(0, 5))
 
-        cancel_btn = ttk.Button(
+        cancel_btn = tk.Button(
             bottom_button_frame,
             text="Cancel",
             command=on_cancel,
