@@ -486,7 +486,7 @@ class IntervalCRUDMixin:
             dialog.destroy()
 
         # Yes button (styled as warning)
-        yes_button = ttk.Button(
+        yes_button = tk.Button(
             button_frame,
             text="Yes, Clear",
             command=on_confirm,
@@ -495,7 +495,7 @@ class IntervalCRUDMixin:
         yes_button.pack(side=tk.LEFT, padx=5)
 
         # Cancel button
-        cancel_button = ttk.Button(
+        cancel_button = tk.Button(
             button_frame,
             text="Cancel",
             command=on_cancel,
@@ -837,7 +837,7 @@ class IntervalCRUDMixin:
             dialog.destroy()
 
         # Next button
-        next_button = ttk.Button(
+        next_button = tk.Button(
             button_frame,
             text="Next",
             command=on_next,
@@ -846,7 +846,7 @@ class IntervalCRUDMixin:
         next_button.pack(side=tk.LEFT, padx=5)
 
         # Cancel button
-        cancel_button = ttk.Button(
+        cancel_button = tk.Button(
             button_frame,
             text="Cancel",
             command=on_cancel,

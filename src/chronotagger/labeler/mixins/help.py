@@ -91,7 +91,7 @@ class HelpMixin:
             text="Tip: press F1 any time to open this dialog.",
             foreground="#666",
         ).grid(row=0, column=0, sticky="w")
-        ttk.Button(footer, text="Close", command=win.destroy).grid(row=0, column=1, sticky="e")
+        tk.Button(footer, text="Close", command=win.destroy).grid(row=0, column=1, sticky="e")
 
         # Close on Esc / window X
         win.bind("<Escape>", lambda e: win.destroy())

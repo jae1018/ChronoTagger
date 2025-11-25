@@ -213,7 +213,7 @@ class IntervalGapsMixin:
             dialog.destroy()
 
         # OK button
-        ok_button = ttk.Button(
+        ok_button = tk.Button(
             button_frame,
             text="OK",
             command=on_ok,
@@ -222,7 +222,7 @@ class IntervalGapsMixin:
         ok_button.pack(side=tk.LEFT, padx=8)
 
         # Cancel button
-        cancel_button = ttk.Button(
+        cancel_button = tk.Button(
             button_frame,
             text="Cancel",
             command=on_cancel,

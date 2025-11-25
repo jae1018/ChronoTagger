@@ -131,7 +131,7 @@ class ConditionRow:
         if on_remove is not None:
             btn_row = ttk.Frame(inner)
             btn_row.pack(fill="x", pady=(4, 0))
-            self.remove_btn = ttk.Button(
+            self.remove_btn = tk.Button(
                 btn_row,
                 text="− Remove",
                 command=on_remove,
@@ -316,7 +316,7 @@ class LabelByRuleDialog(tk.Toplevel):
         # Add Condition button
         add_btn_frame = ttk.Frame(conditions_frame)
         add_btn_frame.pack(fill="x", pady=(6, 0))
-        self._add_btn = ttk.Button(
+        self._add_btn = tk.Button(
             add_btn_frame,
             text="+ Add Condition",
             command=self._add_condition_row
@@ -396,13 +396,13 @@ class LabelByRuleDialog(tk.Toplevel):
         btns = ttk.Frame(main)
         btns.grid(row=row, column=0, columnspan=2, sticky="e", padx=10, pady=(10, 0))
         
-        self._preview_btn = ttk.Button(btns, text="Preview", command=self._on_preview)
+        self._preview_btn = tk.Button(btns, text="Preview", command=self._on_preview)
         self._preview_btn.pack(side=tk.LEFT, padx=4)
         
-        ttk.Button(btns, text="Clear preview", command=self._on_clear).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btns, text="Cancel", command=self._on_cancel).pack(side=tk.RIGHT, padx=4)
+        tk.Button(btns, text="Clear preview", command=self._on_clear).pack(side=tk.LEFT, padx=4)
+        tk.Button(btns, text="Cancel", command=self._on_cancel).pack(side=tk.RIGHT, padx=4)
         
-        self._ok_btn = ttk.Button(btns, text="OK", command=self._on_ok)
+        self._ok_btn = tk.Button(btns, text="OK", command=self._on_ok)
         self._ok_btn.pack(side=tk.RIGHT, padx=4)
         
         # Require a preview before allowing OK

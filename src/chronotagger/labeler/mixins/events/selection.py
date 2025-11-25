@@ -1751,7 +1751,7 @@ class SelectionMixin:
             point_count = len(timestamps)
             btn_text = f"{component_label}\n({point_count} pts)"
 
-            btn = ttk.Button(
+            btn = tk.Button(
                 btn_frame,
                 text=btn_text,
                 width=12,
@@ -1796,7 +1796,7 @@ class SelectionMixin:
         else:
             unique_count = 0
 
-        all_btn = ttk.Button(
+        all_btn = tk.Button(
             dialog,
             text=f"All Components ({unique_count} pts)",
             width=30,
@@ -1805,7 +1805,7 @@ class SelectionMixin:
         all_btn.pack(pady=5)
 
         # Cancel button
-        cancel_btn = ttk.Button(
+        cancel_btn = tk.Button(
             dialog,
             text="Cancel",
             width=30,
