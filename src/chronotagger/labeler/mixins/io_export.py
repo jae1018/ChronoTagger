@@ -728,8 +728,7 @@ class IOExportMixin:
         messagebox.showinfo("Export Complete", f"Per-sample labels exported to {path}")
 
     def _save_autosave(self) -> None:
-        """Save current state to autosave file with metadata."""
-        import pickle
+        """Save current state to autosave file with metadata (JSON format for security)."""
         from datetime import datetime
 
         # Use instance autosave file path
@@ -760,53 +759,84 @@ class IOExportMixin:
                 'total_intervals': len(self.intervals),
                 'coverage_percent': round(coverage_percent, 1),
                 'time_range': {
-                    'start': str(self.data_start),
-                    'end': str(self.data_end)
+                    'start': self.data_start.isoformat(),  # Convert Timestamp to ISO string
+                    'end': self.data_end.isoformat()       # Convert Timestamp to ISO string
                 }
             },
-            'intervals': self.intervals,  # List of Interval objects
+            'intervals': [iv.to_dict() for iv in self.intervals],  # Convert Interval objects to dicts
             'label_stats': label_stats
         }
 
-        # Save to file
+        # Save to file (JSON format)
         try:
-            with open(autosave_path, 'wb') as f:
-                pickle.dump(autosave_data, f)
+            with open(autosave_path, 'w', encoding='utf-8') as f:
+                json.dump(autosave_data, f, indent=2)
         except Exception as e:
             print(f"Warning: Could not save autosave: {e}")
 
     def _check_autosave(self):
         """
         Check if autosave exists and matches current data.
+        Supports both JSON (new, secure) and pickle (legacy) formats.
 
         Returns:
             dict or None: Autosave data if exists and matches, None otherwise
         """
-        import pickle
+        from chronotagger.core.models import Interval
 
-        # Use instance autosave file path
-        if not self.autosave_file.exists():
-            return None
+        # Try JSON format first (new, secure format)
+        json_path = self.autosave_folder / "chronotagger_autosave.json"
+        if json_path.exists():
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    autosave_data = json.load(f)
 
-        try:
-            with open(self.autosave_file, 'rb') as f:
-                autosave_data = pickle.load(f)
+                # Convert interval dicts back to Interval objects
+                autosave_data['intervals'] = [
+                    Interval.from_dict(d) for d in autosave_data['intervals']
+                ]
 
-            # Validate: Check if data columns match
-            saved_columns = autosave_data['metadata'].get('data_columns', [])
-            current_columns = list(self.df.columns)
+                # Validate: Check if data columns match
+                saved_columns = autosave_data['metadata'].get('data_columns', [])
+                current_columns = list(self.df.columns)
 
-            if saved_columns != current_columns:
-                print(f"Warning: Autosave columns don't match current data")
-                print(f"  Saved: {saved_columns}")
-                print(f"  Current: {current_columns}")
-                # Still return it, let user decide in dialog
+                if saved_columns != current_columns:
+                    print(f"Warning: Autosave columns don't match current data")
+                    print(f"  Saved: {saved_columns}")
+                    print(f"  Current: {current_columns}")
+                    # Still return it, let user decide in dialog
 
-            return autosave_data
+                return autosave_data
 
-        except Exception as e:
-            print(f"Warning: Could not load autosave: {e}")
-            return None
+            except Exception as e:
+                print(f"Warning: Could not load JSON autosave: {e}")
+
+        # Fall back to pickle format (legacy, for backward compatibility)
+        pkl_path = self.autosave_folder / "chronotagger_autosave.pkl"
+        if pkl_path.exists():
+            print("⚠️  Warning: Loading legacy pickle autosave (insecure format)")
+            print("    Will automatically convert to JSON on next save.")
+
+            try:
+                import pickle
+                with open(pkl_path, 'rb') as f:
+                    autosave_data = pickle.load(f)
+
+                # Validate: Check if data columns match
+                saved_columns = autosave_data['metadata'].get('data_columns', [])
+                current_columns = list(self.df.columns)
+
+                if saved_columns != current_columns:
+                    print(f"Warning: Autosave columns don't match current data")
+                    print(f"  Saved: {saved_columns}")
+                    print(f"  Current: {current_columns}")
+
+                return autosave_data
+
+            except Exception as e:
+                print(f"Warning: Could not load pickle autosave: {e}")
+
+        return None
 
     def _show_recovery_dialog(self, autosave_data):
         """
@@ -964,7 +994,7 @@ class IOExportMixin:
 
         def on_save_backup():
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_filename = f'chronotagger_autosave_backup_{timestamp}.pkl'
+            backup_filename = f'chronotagger_autosave_backup_{timestamp}.json'
             backup_file = self.autosave_folder / backup_filename
 
             try:

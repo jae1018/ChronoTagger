@@ -178,7 +178,7 @@ class TimeIntervalLabeler(
         # Persistence - Autosave configuration
         self.autosave_folder = Path(autosave_folder)
         self.autosave_folder.mkdir(parents=True, exist_ok=True)  # Create folder if it doesn't exist
-        self.autosave_file = self.autosave_folder / "chronotagger_autosave.pkl"
+        self.autosave_file = self.autosave_folder / "chronotagger_autosave.json"
         self.modified: bool = False
 
         # GUI state
