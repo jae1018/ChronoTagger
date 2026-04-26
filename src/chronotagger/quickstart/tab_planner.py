@@ -397,17 +397,44 @@ class TabPlannerDialog:
                     f"'{title}' has no columns selected. "
                     f"Please pick at least one column.",
                 )
-            if (
-                tab.layout_var.get() == "custom_grid"
-                and tab.layout_spec is None
-            ):
-                return (
-                    False,
-                    f"'{title}' has Custom Grid selected but no layout "
-                    f"has been designed yet. Click 'Design Layout...' "
-                    f"on that tab.",
+            if tab.layout_var.get() == "custom_grid":
+                if tab.layout_spec is None:
+                    return (
+                        False,
+                        f"'{title}' has Custom Grid selected but no layout "
+                        f"has been designed yet. Click 'Design Layout...' "
+                        f"on that tab.",
+                    )
+                # The layout was designed against a previous column
+                # selection.  Make sure every column the layout still
+                # references is still selected -- otherwise the labeler
+                # would render "Column X not found" panels.
+                referenced = self._columns_referenced_by_plot_config(
+                    tab.plot_config or {}
                 )
+                missing = sorted(referenced - set(selected))
+                if missing:
+                    return (
+                        False,
+                        f"'{title}' has a custom layout that references "
+                        f"columns no longer selected: {', '.join(missing)}. "
+                        f"Re-design the layout (click 'Design Layout...') "
+                        f"or restore the missing columns.",
+                    )
         return True, ""
+
+    @staticmethod
+    def _columns_referenced_by_plot_config(plot_config: Dict[str, Any]) -> set:
+        """Collect every dataframe column name a custom plot_config uses."""
+        cols: set = set()
+        for panel in plot_config.values():
+            if not isinstance(panel, dict):
+                continue
+            for key in ("x_column", "y_column"):
+                col = panel.get(key)
+                if isinstance(col, str) and col:
+                    cols.add(col)
+        return cols
 
     def _on_continue(self):
         ok, msg = self._validate()

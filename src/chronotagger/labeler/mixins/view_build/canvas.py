@@ -48,7 +48,7 @@ class CanvasMixin:
     - fig: plt.Figure - The matplotlib figure
     - user_axes: dict[str, plt.Axes] - Dictionary of user-defined axes
     - axes_meta: dict[str, dict] - Metadata for each axis (role, row, col, etc.)
-    - _time_axis_keys: set[str] - Set of keys for time axes
+    - _time_axis_keys: list[str] - Keys for time axes (insertion-ordered)
     - _primary_time_key: str - Key of the primary time axis
     - strip_ax: plt.Axes - The labels strip axis
     - canvas: FigureCanvasTkAgg - The tkinter canvas widget

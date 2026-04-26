@@ -214,6 +214,15 @@ class IntervalCRUDMixin:
         if hasattr(self, "current_spans"):
             self.current_spans.clear()
         self.current_selection = None
+        # Clear any per-axis component filter the user set via the
+        # component-selection dialog -- otherwise it would silently apply
+        # to the next selection's highlight rendering.
+        if hasattr(self, "_selected_component_labels"):
+            self._selected_component_labels = None
+        if hasattr(self, "active_pane") and hasattr(
+            self.active_pane, "_selected_component_labels"
+        ):
+            self.active_pane._selected_component_labels = None
         if hasattr(self, '_clear_selected_point_highlights'):
             self._clear_selected_point_highlights()
         self._update_plot()

@@ -140,11 +140,20 @@ class MouseEventsMixin:
 
             t0 = pd.Timestamp(mdates.num2date(self._two_click_t0)).tz_localize(None)
 
-            # CRITICAL: Clear box selection state so highlighting works properly
+            # CRITICAL: Clear box-select / rule-preview state so the new
+            # two-click selection's highlights are computed from scratch
+            # (rather than blending with the previous box's spans or a
+            # leftover component filter).
             if hasattr(self, 'current_spans'):
                 self.current_spans.clear()
             if hasattr(self, '_commit_spans'):
                 self._commit_spans.clear()
+            if hasattr(self, "_selected_component_labels"):
+                self._selected_component_labels = None
+            if hasattr(self, "active_pane") and hasattr(
+                self.active_pane, "_selected_component_labels"
+            ):
+                self.active_pane._selected_component_labels = None
 
             self.current_selection = (t0, t0)
             # draw strip sliver

@@ -15,7 +15,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple, Any
 
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.widgets import RectangleSelector
 
 # ABSOLUTE imports from core (moved here)
