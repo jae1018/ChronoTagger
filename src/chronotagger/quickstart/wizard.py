@@ -153,6 +153,11 @@ class QuickStartWizard:
             time_range = self.df.index[-1] - self.df.index[0]
             default_window = time_range * 0.1
 
+            # Pass parent=self.root so the labeler mounts itself as a
+            # tk.Toplevel under the wizard's Tk root, instead of creating a
+            # second tk.Tk() (which would land tk.StringVar/IntVar/BooleanVar
+            # in a different Tcl interpreter and silently break textvariable
+            # links throughout the labeler).
             if len(pane_configs) == 1:
                 # Single-pane API (preserves the historical surface for
                 # users who only configured one tab)
@@ -162,6 +167,7 @@ class QuickStartWizard:
                     plot_fn=only["plot_fn"],
                     layout_spec=only["layout_spec"],
                     window=default_window,
+                    parent=self.root,
                 )
             else:
                 # Multi-pane API
@@ -169,15 +175,17 @@ class QuickStartWizard:
                     df=self.df,
                     panes=pane_configs,
                     window=default_window,
+                    parent=self.root,
                 )
 
-            # Hide wizard window
+            # Hide wizard window while labeler is up; the labeler's
+            # Toplevel runs under the wizard's existing mainloop and
+            # blocks via wait_window() until the user closes it.
             self.root.withdraw()
-
-            # Run labeler (this blocks until labeler window is closed)
             labeler.run()
 
-            # When labeler closes, destroy wizard
+            # Labeler closed -- tear down the wizard root to exit
+            # mainloop and return from QuickStartWizard.run().
             self.root.destroy()
 
         except Exception as e:
