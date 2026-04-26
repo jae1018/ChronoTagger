@@ -130,16 +130,16 @@ class QuickStartWizard:
                     self._show_column_selector()
                     return
 
-                # Normalize: ensure the Labels strip spans every column.
-                # The dialog emits labels at col=0 with no colspan (i.e., 1),
-                # which leaves the remaining cells in the labels row empty
-                # and the labels strip visibly narrower than the time panels.
-                ncols = int(layout_spec.get("ncols", 1))
-                for area in layout_spec.get("areas", []):
-                    if str(area.get("role", "")).lower() == "labels":
-                        area["col"] = 0
-                        area["colspan"] = ncols
-                        break
+                # Coerce all time and labels panels to share the same
+                # column extent (taken from the first time panel). The
+                # designer doesn't enforce this constraint up-front, so
+                # we normalize after the fact -- otherwise mismatched
+                # panels can leave time-series misaligned with each
+                # other and the labels strip rendering visibly narrower.
+                from chronotagger.quickstart.plot_builder import (
+                    normalize_time_columns,
+                )
+                normalize_time_columns(layout_spec)
 
                 plot_fn = generate_plot_fn(plot_config)
             else:

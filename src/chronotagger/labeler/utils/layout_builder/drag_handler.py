@@ -234,6 +234,9 @@ class DragHandlerMixin:
         self.selected_panel = None
         self.panel_listbox.selection_clear(0, tk.END)
 
+        # Keep the auto-managed Labels strip aligned with the first time panel
+        self._update_labels_panel()
+
         # Redraw and update list
         self._redraw_grid()
         self._update_panel_list()

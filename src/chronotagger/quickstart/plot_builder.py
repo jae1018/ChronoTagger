@@ -115,6 +115,51 @@ def build_layout_spec(selected_columns: List[str], layout_type: str) -> Dict[str
         )
 
 
+def normalize_time_columns(layout_spec: Dict[str, Any]) -> None:
+    """
+    Coerce every 'time' and 'labels' area in layout_spec to share the same
+    column extent as the FIRST 'time' area found. Modifies layout_spec in
+    place. No-op if layout_spec has no 'time' areas.
+
+    Within a single pane, the user expects time-series panels and the
+    labels strip to be horizontally aligned. The interactive layout
+    designer doesn't enforce this constraint as the user designs, so we
+    coerce after the fact: whatever the user picked for the first time
+    panel's col/colspan becomes the target, and every other time/labels
+    area is moved/resized to match.
+
+    Cross-plot ('not-time') areas are left alone -- those are typically
+    side panels with their own column layout.
+
+    Args:
+        layout_spec: A layout_spec dict (as produced by build_layout()) with
+            an 'areas' list. Each area must have at minimum 'role' and 'col';
+            'colspan' defaults to 1 if absent.
+    """
+    areas = layout_spec.get("areas", [])
+    if not areas:
+        return
+
+    # Pick the first 'time' area's column extent as the target
+    target_col = None
+    target_colspan = None
+    for area in areas:
+        if str(area.get("role", "")).lower() == "time":
+            target_col = int(area.get("col", 0))
+            target_colspan = int(area.get("colspan", 1))
+            break
+
+    if target_col is None:
+        return  # No time panels to normalize against
+
+    # Apply the target to every 'time' and 'labels' area
+    for area in areas:
+        role = str(area.get("role", "")).lower()
+        if role in ("time", "labels"):
+            area["col"] = target_col
+            area["colspan"] = target_colspan
+
+
 def validate_plot_inputs(df: pd.DataFrame, selected_columns: List[str]) -> None:
     """
     Validate that selected columns exist in DataFrame.
