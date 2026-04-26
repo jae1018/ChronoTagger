@@ -11,7 +11,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Any, Set
+from typing import Callable, Dict, List, Optional, Set, Tuple, Any
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -78,6 +78,7 @@ class TimeIntervalLabeler(
         *,
         layout_spec: Optional[Dict[str, Any]] = None,
         panes: Optional[List[Dict[str, Any]]] = None,
+        parent: Optional[tk.Misc] = None,
     ) -> None:
         # --- Validate inputs ---
         if not isinstance(df.index, pd.DatetimeIndex):
@@ -181,8 +182,12 @@ class TimeIntervalLabeler(
         self.autosave_file = self.autosave_folder / "chronotagger_autosave.json"
         self.modified: bool = False
 
-        # GUI state
-        self.root: Optional[tk.Tk] = None
+        # GUI state.  When `parent` is provided (e.g. the quick-start wizard),
+        # the labeler will mount itself as a tk.Toplevel under that parent so
+        # only one tk.Tk root exists per process.  When parent is None, the
+        # labeler creates its own tk.Tk root (standalone use).
+        self._parent: Optional[tk.Misc] = parent
+        self.root: Optional[tk.Misc] = None
         self.notebook: Optional[ttk.Notebook] = None  # Only created if multi_pane_mode
 
         # === MOVED TO TabPane (will remove after refactoring complete) ===
@@ -206,7 +211,7 @@ class TimeIntervalLabeler(
         # NOTE: For now, keeping these on main class until mixins are refactored.
         #       Eventually these will be delegated to active_pane like fig/canvas/user_axes.
         self.axes_meta: Dict[str, Dict[str, Any]] = {}            # key -> {role, row, col, ...}
-        self._time_axis_keys: Set[str] = set()                     # which keys are "time"
+        self._time_axis_keys: List[str] = []                       # which keys are "time"
         self._primary_time_key: Optional[str] = None               # first time axis in col 0
 
         # Matplotlib connections
@@ -381,6 +386,13 @@ class TimeIntervalLabeler(
                 self.root.destroy()
                 return  # Exit without starting mainloop
 
-        # Update plot and start GUI event loop
+        # Update plot and start GUI event loop.
+        # When the labeler is a child Toplevel (launched from the wizard),
+        # mainloop() is already running on the parent's Tk.  We block on the
+        # Toplevel via wait_window() instead so labeler.run() returns when
+        # the user closes the labeler, but the parent's mainloop keeps going.
         self._update_plot()
-        self.root.mainloop()  # type: ignore[union-attr]
+        if isinstance(self.root, tk.Tk):
+            self.root.mainloop()  # type: ignore[union-attr]
+        else:
+            self.root.wait_window()  # type: ignore[union-attr]

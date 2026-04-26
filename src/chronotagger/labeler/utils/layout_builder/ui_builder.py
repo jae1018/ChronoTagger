@@ -220,6 +220,13 @@ class UIBuilderMixin:
         self._rebuild_vars_ui()
 
     def _on_grid_size_changed(self):
-        """Handle grid size changes - update Labels panel position."""
+        """Handle grid size changes -- clip panels to the new grid and
+        update the auto-managed Labels strip.
+
+        Order matters: panels are clipped FIRST, then the Labels strip
+        re-syncs to the (possibly-just-clipped) first time panel.
+        """
+        self._clip_panels_to_grid()
         self._update_labels_panel()
         self._redraw_grid()
+        self._update_panel_list()

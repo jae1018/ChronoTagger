@@ -1014,7 +1014,12 @@ class SelectionMixin:
                             x_vals.append(float(row[x_col]))
                             y_vals.append(float(row[y_col]))
                 else:
-                    # Fallback: extract from first artist with correct data length
+                    # Fallback: extract from the first artist whose length
+                    # matches the windowed dataframe.  Cross-plots are drawn
+                    # with ax.scatter() (PathCollection on ax.collections)
+                    # rather than ax.plot() (Line2D on ax.lines), so iterate
+                    # both.  The length filter avoids picking up our own
+                    # highlight overlay (which has len == len(selected)).
                     for line in ax.lines:
                         try:
                             xs = np.asarray(line.get_xdata(orig=False))
@@ -1027,6 +1032,24 @@ class SelectionMixin:
                                 break
                         except Exception:
                             continue
+                    else:
+                        # No matching Line2D -- try PathCollections (scatter)
+                        for artist in ax.collections:
+                            try:
+                                offsets = np.asarray(artist.get_offsets())
+                                if (
+                                    offsets.ndim != 2
+                                    or offsets.shape[1] != 2
+                                    or offsets.shape[0] != len(windowed_idx)
+                                ):
+                                    continue
+                                for idx in indices:
+                                    if 0 <= idx < offsets.shape[0]:
+                                        x_vals.append(float(offsets[idx, 0]))
+                                        y_vals.append(float(offsets[idx, 1]))
+                                break
+                            except Exception:
+                                continue
 
             except Exception:
                 return x_vals, y_vals

@@ -76,11 +76,23 @@ class RulesMixin:
         # This expands intervals by min(local_median/2, distance_to_nearest_false_point)
         # ensuring we don't capture points that don't satisfy the rule
         padded_intervals = self._apply_rule_aware_padding(runs, mask, df_scope.index)
-        
-        # For commit, we need half-open intervals, but padded_intervals are already in 
+
+        # Apply the chosen overlap policy so the preview reflects what will
+        # actually get added when the user clicks "Add Label".
+        #   - "skip":    carve out portions that overlap existing intervals
+        #                so the preview shows only the parts that would be
+        #                newly labeled.
+        #   - "replace": preview the full hypothetical spans; existing
+        #                intervals will be carved at add-time.
+        policy = res.overlap_policy or "skip"
+        filtered_intervals = self._apply_overlap_policy_to_spans(
+            padded_intervals, policy
+        )
+
+        # For commit, we need half-open intervals, but padded_intervals are already in
         # the correct format (start_ts, end_ts) from rule-aware padding
-        preview_full = padded_intervals
-        commit_full = padded_intervals
+        preview_full = filtered_intervals
+        commit_full = filtered_intervals
 
         # For drawing, clip preview to current visible window only (avoid painting the whole dataset)
         preview_for_window = self._clip_spans_to_window(preview_full, self.t0, self.t1)
@@ -89,7 +101,7 @@ class RulesMixin:
         self.current_selection = None
         self.current_spans = preview_for_window
         self._commit_spans = commit_full    # full scope; used by Add Label
-        self._overlap_policy = res.overlap_policy or "skip"
+        self._overlap_policy = policy
 
         if self.status_var is not None:
             mode_str = res.combine_mode if len(res.conditions) > 1 else ""

@@ -98,7 +98,21 @@ def generate_plot_fn(plot_config: Dict[str, Dict[str, Any]]) -> Callable:
                 continue  # Panel might not exist if layout changed
             
             ax = axs[panel_key]
-            ax.clear()  # Clear previous plot
+            # Remove only data artists. Calling ax.clear() here would also
+            # reset shared-axis relationships and the datetime unit converter,
+            # which the labeler's _update_plot already set up before invoking
+            # this plot_fn. Resetting them here makes the labeler's
+            # subsequent set_xlim(t0, t1) only apply to whichever axis it
+            # touches first, leaving the other axis with its auto-fit
+            # (60-year-wide) range and rendering its line invisibly.
+            for ln in list(ax.lines):
+                ln.remove()
+            for coll in list(ax.collections):
+                coll.remove()
+            for patch in list(ax.patches):
+                patch.remove()
+            for txt in list(ax.texts):
+                txt.remove()
             
             role = config.get('role', 'time')
             
