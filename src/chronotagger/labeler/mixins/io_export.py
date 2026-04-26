@@ -1074,13 +1074,6 @@ class IOExportMixin:
 
         return result['choice']
 
-    def _maybe_autosave(self) -> None:
-        """Legacy method for JSON session autosave. Now handled by _save_autosave()."""
-        # This method is deprecated - automatic saves now use _save_autosave()
-        # which saves to pickle format after every interval modification.
-        # Keeping this as a no-op for backward compatibility.
-        pass
-
     def _on_closing(self) -> None:
         if self.modified:
             resp = messagebox.askyesnocancel("Save Changes?", "Save before closing?")
