@@ -72,26 +72,25 @@ class PreviewMixin:
             figure=fig
         )
 
-        # Pick the first 'time' panel's column extent as the target the
-        # Labels strip will be coerced to. This matches the post-hoc
+        # Pick the first 'time' panel's column extent as the target.
+        # Both the Labels strip AND every other 'time' panel are coerced
+        # to this target during preview rendering, matching the post-hoc
         # normalization applied on export (see chronotagger.quickstart
-        # .plot_builder.normalize_time_columns) so the preview reflects
-        # what the eventual labeler will actually render.
-        target_labels_col = None
-        target_labels_colspan = None
+        # .plot_builder.normalize_time_columns). 'not-time' panels keep
+        # their authored col/colspan.
+        target_col = None
+        target_colspan = None
         for p in self.panels:
             if p.role == "time":
-                target_labels_col = p.col
-                target_labels_colspan = p.colspan
+                target_col = p.col
+                target_colspan = p.colspan
                 break
 
         # Create a subplot for each panel
         for panel in self.panels:
-            # Coerce the Labels strip to span like the first time panel.
-            # Other panels keep their authored col/colspan.
-            if panel.role == "labels" and target_labels_col is not None:
-                col = target_labels_col
-                colspan = target_labels_colspan
+            if panel.role in ("time", "labels") and target_col is not None:
+                col = target_col
+                colspan = target_colspan
             else:
                 col = panel.col
                 colspan = panel.colspan

@@ -27,9 +27,11 @@ class QuickStartWizard:
         """Initialize wizard state."""
         self.root: Optional[tk.Tk] = None
         self.df = None
-        self.selected_columns = None
-        self.layout_type = None
-        self.plot_config = None
+        # Configuration produced by the tab planner -- a list of dicts,
+        # one per labeler tab. Each entry has 'title', 'columns',
+        # 'layout_type', and (for custom_grid) 'layout_spec' +
+        # 'plot_config'. See chronotagger.quickstart.tab_planner.
+        self.tabs_config: Optional[list] = None
 
     def run(self):
         """
@@ -75,90 +77,99 @@ class QuickStartWizard:
         # Store loaded DataFrame
         self.df = df
 
-        # Proceed to column selector
-        self._show_column_selector()
+        # Proceed to tab planner
+        self._show_tab_planner()
 
-    def _show_column_selector(self):
-        """Show column selection dialog."""
-        from chronotagger.quickstart.column_selector import ColumnSelectorDialog
+    def _show_tab_planner(self):
+        """Show the tab planner dialog."""
+        from chronotagger.quickstart.tab_planner import TabPlannerDialog
 
-        col_dialog = ColumnSelectorDialog(self.root, self.df)
-        selection = col_dialog.run()
+        planner = TabPlannerDialog(self.root, self.df)
+        result = planner.run()
 
-        if selection is None:
+        if result is None:
             # User cancelled
             self._on_cancel()
             return
 
-        # Store selection
-        self.selected_columns = selection['columns']
-        self.layout_type = selection['layout_type']
-
-        # Proceed to launch the labeler (with custom-grid designer first
-        # if the user picked 'custom_grid')
+        self.tabs_config = result["tabs"]
         self._launch_labeler()
 
+    def _build_tab_plot(self, tab: dict):
+        """
+        Build (plot_fn, layout_spec) for a single tab config dict.
+
+        For 'vertical_stack' tabs, generates the plot function and layout
+        spec from the column selection on the fly. For 'custom_grid' tabs,
+        the user pre-designed the layout in the planner -- we reuse the
+        stored layout_spec / plot_config and just normalize.
+        """
+        from chronotagger.quickstart.plot_builder import (
+            build_layout_spec,
+            build_plot_function,
+            normalize_time_columns,
+            validate_plot_inputs,
+        )
+
+        columns = tab["columns"]
+        layout_type = tab["layout_type"]
+
+        if layout_type == "vertical_stack":
+            validate_plot_inputs(self.df, columns)
+            plot_fn = build_plot_function(columns)
+            layout_spec = build_layout_spec(columns, layout_type)
+        elif layout_type == "custom_grid":
+            from chronotagger.labeler.utils.plot_generator import (
+                generate_plot_fn,
+            )
+            layout_spec = tab["layout_spec"]
+            plot_config = tab["plot_config"]
+            normalize_time_columns(layout_spec)
+            plot_fn = generate_plot_fn(plot_config)
+        else:
+            raise ValueError(
+                f"Unknown layout type: {layout_type!r}. "
+                f"Expected 'vertical_stack' or 'custom_grid'."
+            )
+
+        return plot_fn, layout_spec
+
     def _launch_labeler(self):
-        """Launch TimeIntervalLabeler with configured data and plots."""
+        """Launch TimeIntervalLabeler with the configured tabs."""
         from chronotagger import TimeIntervalLabeler
 
         try:
-            if self.layout_type == 'vertical_stack':
-                # Quick path: auto-generate a vertical stack from column selection
-                from chronotagger.quickstart.plot_builder import (
-                    build_plot_function,
-                    build_layout_spec,
-                    validate_plot_inputs,
-                )
-                validate_plot_inputs(self.df, self.selected_columns)
-                plot_fn = build_plot_function(self.selected_columns)
-                layout_spec = build_layout_spec(
-                    self.selected_columns, self.layout_type
-                )
-            elif self.layout_type == 'custom_grid':
-                # Interactive path: hand off to the existing layout designer.
-                # build_layout() returns (layout_spec, plot_config); if the
-                # user cancels, both are None.
-                from chronotagger.labeler.utils.layout_builder import build_layout
-                from chronotagger.labeler.utils.plot_generator import generate_plot_fn
-
-                layout_spec, plot_config = build_layout(self.df, parent=self.root)
-
-                if layout_spec is None:
-                    # User cancelled the designer -- return them to the
-                    # column selector so they can pick again or exit
-                    self._show_column_selector()
-                    return
-
-                # Coerce all time and labels panels to share the same
-                # column extent (taken from the first time panel). The
-                # designer doesn't enforce this constraint up-front, so
-                # we normalize after the fact -- otherwise mismatched
-                # panels can leave time-series misaligned with each
-                # other and the labels strip rendering visibly narrower.
-                from chronotagger.quickstart.plot_builder import (
-                    normalize_time_columns,
-                )
-                normalize_time_columns(layout_spec)
-
-                plot_fn = generate_plot_fn(plot_config)
-            else:
-                raise ValueError(
-                    f"Unknown layout type: {self.layout_type!r}. "
-                    f"Expected 'vertical_stack' or 'custom_grid'."
-                )
+            # Build (plot_fn, layout_spec) for each tab
+            pane_configs = []
+            for tab in self.tabs_config:
+                plot_fn, layout_spec = self._build_tab_plot(tab)
+                pane_configs.append({
+                    "title": tab["title"],
+                    "plot_fn": plot_fn,
+                    "layout_spec": layout_spec,
+                })
 
             # Calculate a reasonable default window (10% of data range)
             time_range = self.df.index[-1] - self.df.index[0]
             default_window = time_range * 0.1
 
-            # Create TimeIntervalLabeler
-            labeler = TimeIntervalLabeler(
-                df=self.df,
-                plot_fn=plot_fn,
-                layout_spec=layout_spec,
-                window=default_window
-            )
+            if len(pane_configs) == 1:
+                # Single-pane API (preserves the historical surface for
+                # users who only configured one tab)
+                only = pane_configs[0]
+                labeler = TimeIntervalLabeler(
+                    df=self.df,
+                    plot_fn=only["plot_fn"],
+                    layout_spec=only["layout_spec"],
+                    window=default_window,
+                )
+            else:
+                # Multi-pane API
+                labeler = TimeIntervalLabeler(
+                    df=self.df,
+                    panes=pane_configs,
+                    window=default_window,
+                )
 
             # Hide wizard window
             self.root.withdraw()
@@ -170,16 +181,15 @@ class QuickStartWizard:
             self.root.destroy()
 
         except Exception as e:
-            # Show error and return to wizard
-            self.root.deiconify()  # Show wizard again
+            # Show error and return to the tab planner
+            self.root.deiconify()
             messagebox.showerror(
                 "Error Launching Labeler",
                 f"Failed to launch TimeIntervalLabeler:\n\n{str(e)}\n\n"
-                f"Please check your selections and try again.",
-                parent=self.root
+                f"Please check your tab configurations and try again.",
+                parent=self.root,
             )
-            # Return to column selector to try again
-            self._show_column_selector()
+            self._show_tab_planner()
 
     def _on_cancel(self):
         """Handle cancellation."""

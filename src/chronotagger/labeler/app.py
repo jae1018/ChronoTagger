@@ -11,7 +11,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Any, Set
+from typing import Callable, Dict, List, Optional, Set, Tuple, Any
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -206,7 +206,7 @@ class TimeIntervalLabeler(
         # NOTE: For now, keeping these on main class until mixins are refactored.
         #       Eventually these will be delegated to active_pane like fig/canvas/user_axes.
         self.axes_meta: Dict[str, Dict[str, Any]] = {}            # key -> {role, row, col, ...}
-        self._time_axis_keys: Set[str] = set()                     # which keys are "time"
+        self._time_axis_keys: List[str] = []                       # which keys are "time"
         self._primary_time_key: Optional[str] = None               # first time axis in col 0
 
         # Matplotlib connections
