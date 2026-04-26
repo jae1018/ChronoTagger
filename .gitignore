@@ -42,3 +42,8 @@ session_autosave.json
 chronotagger_autosave*
 *.pkl
 *.backup
+
+# Local scratch / dev artifacts
+debug/
+nul
+
