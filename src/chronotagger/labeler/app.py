@@ -190,26 +190,15 @@ class TimeIntervalLabeler(
         self.root: Optional[tk.Misc] = None
         self.notebook: Optional[ttk.Notebook] = None  # Only created if multi_pane_mode
 
-        # === MOVED TO TabPane (will remove after refactoring complete) ===
-        # These attributes are now stored per-pane and accessed via properties:
-        # self.fig: Optional[plt.Figure] = None
-        # self.canvas = None
-        # self.user_axes: Dict[str, plt.Axes] = {}
-        # self.strip_ax: Optional[plt.Axes] = None
-        # self.rect_selectors: Dict[str, RectangleSelector] = {}
-        # self._auto_xlims: Dict[plt.Axes, Tuple[float, float]] = {}
-        # self._auto_ylims: Dict[plt.Axes, Tuple[float, float]] = {}
-        # self._manual_zooms: Dict[plt.Axes, Set[str]] = {}
-
-        # Layout & axes metadata
-        # layout_spec supports "role" field for each axis area:
-        #   - "time": Time-series data with time on x-axis (box-select uses time coords)
-        #   - "not-time": Non-time plots like position/phase space (box-select maps point order to time)
-        # Box selection on "time" axes extracts timestamps directly from x-coordinates.
-        # Box selection on "not-time" axes uses point order to map back to timestamps.
-        # NOTE: layout_spec is now set above from active_pane.layout_spec for backward compatibility
-        # NOTE: For now, keeping these on main class until mixins are refactored.
-        #       Eventually these will be delegated to active_pane like fig/canvas/user_axes.
+        # Layout & axes metadata.  layout_spec supports a "role" field for each
+        # axis area:
+        #   - "time":     Time-series data with time on x-axis (box-select
+        #                 uses time coords).
+        #   - "not-time": Non-time plots like position/phase space (box-select
+        #                 maps point order to time).
+        # axes_meta mirrors active_pane.axes_meta for legacy access; figures
+        # / canvases / per-axis zoom state live on the TabPane and are
+        # accessed via the @property delegates below.
         self.axes_meta: Dict[str, Dict[str, Any]] = {}            # key -> {role, row, col, ...}
         self._time_axis_keys: List[str] = []                       # which keys are "time"
         self._primary_time_key: Optional[str] = None               # first time axis in col 0
@@ -219,7 +208,7 @@ class TimeIntervalLabeler(
         self.pick_cid: Optional[int] = None
         self._scroll_cid: Optional[int] = None
 
-        # Drag/resize/move state (unchanged) ...
+        # Drag/resize/move state
         self._drag_mode: Optional[str] = None
         self._drag_iv: Optional[Interval] = None
         self._drag_initial: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None
@@ -228,15 +217,13 @@ class TimeIntervalLabeler(
         self._press_cid: Optional[int] = None
         self._motion_cid: Optional[int] = None
         self._release_cid: Optional[int] = None
-        
-        # === Two-click time selection (new) ===
+
+        # Two-click time selection
         self.two_click_mode: bool = True         # default on; disable to use drag-selector
         self.two_click_auto_add: bool = False    # if True, auto-creates interval on 2nd click
 
-        # === Point highlighting (performance optimization) ===
+        # Point highlighting (performance optimization)
         self.enable_point_highlighting: bool = True  # disable for large datasets
-
-        # Sync highlighting state to all panes (for multi-pane mode)
         for pane in self.panes:
             pane.enable_point_highlighting = self.enable_point_highlighting
 
@@ -245,7 +232,7 @@ class TimeIntervalLabeler(
         self._time_click_cid: Optional[int] = None           # mpl connection for clicks
         self._time_motion_cid: Optional[int] = None          # mpl connection for motion
 
-        # Minimal interval duration inference (unchanged) ...
+        # Minimal interval duration inference
         try:
             diffs = self.df.index.to_series().diff().dropna()
             med = diffs.median()
@@ -254,27 +241,21 @@ class TimeIntervalLabeler(
             self.min_duration: pd.Timedelta = med
         except Exception:
             self.min_duration = pd.Timedelta(seconds=1)
-            
-         # Selection state
-        self.current_selection: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None
-        # NEW: multiple preview spans from box-select (each becomes an interval)
+
+        # Multi-span preview state from box-select / rule preview
         self.current_spans: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
         self._commit_spans: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
 
-        # --- Two-click time selection (existing) ---
-        self.two_click_mode: bool = True
-
-        # click-vs-drag arbitration (pixel slop)
+        # Click-vs-drag arbitration (pixel slop)
         self.CLICK_DRAG_SLOP_PX: int = 6
         self._press_xy_px: Optional[Tuple[int, int]] = None
         self._dragging_box: bool = False
-        
-        # label-rule policy
-        self._overlap_policy: str = "skip"   # v1 default for rule-based adds
 
-        # === Axis zoom state (for Y-zoom and cross-plot X/Y zoom) ===
-        # NOTE: These are stored per-pane in TabPane, but kept here temporarily
-        # until mixins are refactored in Phase 2
+        # Label-rule policy
+        self._overlap_policy: str = "skip"
+
+        # Per-axis zoom state for Y-zoom and cross-plot X/Y zoom.
+        # Keyed by matplotlib Axes so they survive plot rebuilds.
         self._auto_xlims: Dict[plt.Axes, Tuple[float, float]] = {}  # Auto X limits for cross-plots
         self._auto_ylims: Dict[plt.Axes, Tuple[float, float]] = {}  # Auto Y limits for all plots
         self._manual_zooms: Dict[plt.Axes, Set[str]] = {}           # Track manual zoom: {ax: {'x', 'y'}}
@@ -344,9 +325,6 @@ class TimeIntervalLabeler(
     def layout_spec(self) -> Optional[Dict[str, Any]]:
         """Delegate to active pane for backward compatibility."""
         return self.active_pane.layout_spec
-
-    # Note: axes_meta and rect_selectors are kept as regular attributes for now
-    # until mixins are refactored in Phase 2
 
     # -------- Public entrypoint --------
 

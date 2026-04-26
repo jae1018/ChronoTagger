@@ -47,7 +47,7 @@ class QuickStartWizard:
         # Center window on screen
         self._center_window()
 
-        # Phase 2: Start with file loading
+        # Start the wizard flow
         self._show_file_loader()
 
         # Start Tkinter main loop
