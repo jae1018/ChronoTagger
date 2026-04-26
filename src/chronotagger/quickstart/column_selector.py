@@ -168,10 +168,9 @@ class ColumnSelectorDialog:
 
         custom_radio = ttk.Radiobutton(
             layout_frame,
-            text="Custom Grid (advanced - not yet implemented)",
+            text="Custom Grid (advanced -- design your own panel arrangement)",
             variable=self.layout_var,
             value="custom_grid",
-            state='disabled',
             command=self._update_preview
         )
         custom_radio.pack(anchor='w', pady=2)

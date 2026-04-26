@@ -179,7 +179,12 @@ class CanvasMixin:
             # Build data axes from user-specified areas (skip Labels - handled separately)
             pane.user_axes = {}
             pane.axes_meta = {}
-            pane.time_axis_keys = set()
+            # Use a list (not set) so iteration order is deterministic --
+            # matches the order time-role areas appear in layout_spec.areas.
+            # Set iteration depends on Python hash randomization, which made
+            # downstream blit/draw ordering nondeterministic and caused
+            # intermittent missing panels in custom-grid layouts.
+            pane.time_axis_keys = []
             pane.primary_time_key = None
 
             for a in areas:
@@ -203,7 +208,7 @@ class CanvasMixin:
                 pane.axes_meta[key] = {"role": role, "row": row, "col": col,
                                        "rowspan": rowspan, "colspan": colspan}
                 if role == "time":
-                    pane.time_axis_keys.add(key)
+                    pane.time_axis_keys.append(key)
                     if pane.primary_time_key is None:
                         pane.primary_time_key = key
 

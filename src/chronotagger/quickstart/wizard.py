@@ -75,7 +75,7 @@ class QuickStartWizard:
         # Store loaded DataFrame
         self.df = df
 
-        # Proceed to Phase 3 (stub for now)
+        # Proceed to column selector
         self._show_column_selector()
 
     def _show_column_selector(self):
@@ -94,25 +94,59 @@ class QuickStartWizard:
         self.selected_columns = selection['columns']
         self.layout_type = selection['layout_type']
 
-        # Proceed to Phase 4 (launch labeler)
+        # Proceed to launch the labeler (with custom-grid designer first
+        # if the user picked 'custom_grid')
         self._launch_labeler()
 
     def _launch_labeler(self):
         """Launch TimeIntervalLabeler with configured data and plots."""
         from chronotagger import TimeIntervalLabeler
-        from chronotagger.quickstart.plot_builder import (
-            build_plot_function,
-            build_layout_spec,
-            validate_plot_inputs
-        )
 
         try:
-            # Validate inputs
-            validate_plot_inputs(self.df, self.selected_columns)
+            if self.layout_type == 'vertical_stack':
+                # Quick path: auto-generate a vertical stack from column selection
+                from chronotagger.quickstart.plot_builder import (
+                    build_plot_function,
+                    build_layout_spec,
+                    validate_plot_inputs,
+                )
+                validate_plot_inputs(self.df, self.selected_columns)
+                plot_fn = build_plot_function(self.selected_columns)
+                layout_spec = build_layout_spec(
+                    self.selected_columns, self.layout_type
+                )
+            elif self.layout_type == 'custom_grid':
+                # Interactive path: hand off to the existing layout designer.
+                # build_layout() returns (layout_spec, plot_config); if the
+                # user cancels, both are None.
+                from chronotagger.labeler.utils.layout_builder import build_layout
+                from chronotagger.labeler.utils.plot_generator import generate_plot_fn
 
-            # Build plot function and layout
-            plot_fn = build_plot_function(self.selected_columns)
-            layout_spec = build_layout_spec(self.selected_columns, self.layout_type)
+                layout_spec, plot_config = build_layout(self.df, parent=self.root)
+
+                if layout_spec is None:
+                    # User cancelled the designer -- return them to the
+                    # column selector so they can pick again or exit
+                    self._show_column_selector()
+                    return
+
+                # Normalize: ensure the Labels strip spans every column.
+                # The dialog emits labels at col=0 with no colspan (i.e., 1),
+                # which leaves the remaining cells in the labels row empty
+                # and the labels strip visibly narrower than the time panels.
+                ncols = int(layout_spec.get("ncols", 1))
+                for area in layout_spec.get("areas", []):
+                    if str(area.get("role", "")).lower() == "labels":
+                        area["col"] = 0
+                        area["colspan"] = ncols
+                        break
+
+                plot_fn = generate_plot_fn(plot_config)
+            else:
+                raise ValueError(
+                    f"Unknown layout type: {self.layout_type!r}. "
+                    f"Expected 'vertical_stack' or 'custom_grid'."
+                )
 
             # Calculate a reasonable default window (10% of data range)
             time_range = self.df.index[-1] - self.df.index[0]
