@@ -1,6 +1,6 @@
 [project]
 name = "chronotagger"
-version = "0.1.0"
+version = "0.2.0"
 description = "Interactive interval labeling for time-series with Tkinter/Matplotlib."
 readme = "README.md"
 requires-python = ">=3.9"
