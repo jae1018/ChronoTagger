@@ -6,6 +6,12 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["pandas", "numpy", "matplotlib", "pyarrow"]  # pyarrow for parquet
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7",
+    "pytest-cov",
+]
+
 [project.scripts]
 chronotagger = "chronotagger.launcher:main"
 
