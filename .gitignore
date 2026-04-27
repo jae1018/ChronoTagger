@@ -47,3 +47,8 @@ chronotagger_autosave*
 debug/
 nul
 
+# Example data files are large mission datasets the user supplies
+# locally -- never commit these (or the autosave files they generate).
+examples/data/
+examples/autosave/
+
