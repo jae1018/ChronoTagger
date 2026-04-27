@@ -1,5 +1,9 @@
 # ChronoTagger — Advanced Time-Series Interval Labeling Tool
 
+[![tests](https://github.com/jae1018/ChronoTagger/actions/workflows/tests.yml/badge.svg?branch=dev)](https://github.com/jae1018/ChronoTagger/actions/workflows/tests.yml)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ChronoTagger is a powerful, interactive GUI for labeling time intervals on matplotlib plots. Built for scientific data analysis, it provides a seamless workflow for annotating time-series data with ML-ready label exports. With temporal data, ChronoTagger can adapt to your custom plotting code.
 
 ![ChronoTagger quick-start](docs/assets/quickstart.gif)
