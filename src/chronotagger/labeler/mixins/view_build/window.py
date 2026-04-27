@@ -38,7 +38,18 @@ class WindowMixin:
     """
 
     def _build_gui(self) -> None:
-        self.root = tk.Tk()
+        # Mount as Toplevel under an existing Tk root when one is provided
+        # (e.g. when launched from the quick-start wizard).  This keeps the
+        # process to a single tk.Tk root, which is required for tk.StringVar
+        # / IntVar / BooleanVar bindings to resolve to the same Tcl
+        # interpreter as the widgets they're bound to.  Otherwise a
+        # nested tk.Tk() would create a second interpreter and silently
+        # break textvariable links.
+        parent = getattr(self, "_parent", None)
+        if parent is not None:
+            self.root = tk.Toplevel(parent)
+        else:
+            self.root = tk.Tk()
         self.root.title("ChronoTagger - Time Interval Labeler")
         self.root.geometry("1600x900")
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)

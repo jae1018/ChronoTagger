@@ -95,108 +95,6 @@ class IntervalCRUDMixin:
         # Clear selection state
         self._clear_preview_state()
 
-    def _add_interval_old(self) -> None:
-        """
-        DEPRECATED: Old add interval logic. Remove after testing new overlap dialog.
-        """
-        commit_spans = getattr(self, "_commit_spans", []) or []
-        preview_spans = getattr(self, "current_spans", []) or []
-        current_selection = getattr(self, "current_selection", None)
-
-        label = self.current_class_var.get()  # type: ignore[union-attr]
-        policy = getattr(self, "_overlap_policy", "skip")
-        count = 0
-
-        # === 1) Rule-driven path: commit spans are authoritative ===
-        if commit_spans:
-            # If you later implement "replace", you may carve here. For now, we just add.
-            for s, e in commit_spans:
-                if e <= s:
-                    continue
-                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
-                count += 1
-
-            # Clear selection state
-            self._commit_spans.clear()
-            self.current_spans.clear()
-            self.current_selection = None
-
-            # Clear point highlights
-            if hasattr(self, '_clear_selected_point_highlights'):
-                self._clear_selected_point_highlights()
-
-            if count > 0:
-                self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
-                self._update_plot()
-                self._maybe_autosave()
-            else:
-                # More informative message if policy produced emptiness
-                from tkinter import messagebox
-                messagebox.showwarning(
-                    "No Selection",
-                    "No valid spans after applying the overlap policy."
-                )
-            return
-
-        # === 2) Box-select / two-click path ===
-        if preview_spans:
-            spans_to_add = self._normalize_preview_spans_to_half_open(preview_spans)
-
-            final_spans: List[Tuple[pd.Timestamp, pd.Timestamp]]
-            if policy == "skip":
-                final_spans = []
-                for s, e in spans_to_add:
-                    subtracted = self._subtract_overlaps_from_span(s, e)
-                    final_spans.extend(subtracted)
-            else:
-                # Future: handle "replace" by carving, for now just add as-is
-                final_spans = spans_to_add
-
-            for s, e in final_spans:
-                if e <= s:
-                    continue
-                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
-                count += 1
-
-            self.current_spans.clear()
-            self.current_selection = None
-
-            # Clear point highlights
-            if hasattr(self, '_clear_selected_point_highlights'):
-                self._clear_selected_point_highlights()
-
-            if count > 0:
-                self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
-                self._update_plot()
-                self._maybe_autosave()
-            else:
-                from tkinter import messagebox
-                messagebox.showwarning("No Selection", "Box contained no valid points/spans.")
-            return
-
-        # === 3) Single-span path ===
-        if not current_selection:
-            from tkinter import messagebox
-            messagebox.showwarning("No Selection", "Select a time range first (drag or click×2).")
-            return
-
-        s, e = current_selection
-        if e <= s:
-            from tkinter import messagebox
-            messagebox.showwarning("Invalid Selection", "End time must be after start time.")
-            return
-
-        self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
-        self.current_selection = None
-
-        # Clear point highlights
-        if hasattr(self, '_clear_selected_point_highlights'):
-            self._clear_selected_point_highlights()
-
-        self.status_var.set(f"Added {label} interval")  # type: ignore[union-attr]
-        self._update_plot()
-        self._maybe_autosave()
-
     def _add_intervals_with_policy(
         self,
         spans: List[Tuple[pd.Timestamp, pd.Timestamp]],
@@ -236,7 +134,7 @@ class IntervalCRUDMixin:
 
             self.status_var.set(f"Added {count} {label} interval(s)")  # type: ignore[union-attr]
             self._update_plot()
-            self._maybe_autosave()
+            self._save_autosave()
         else:
             messagebox.showwarning(
                 "Nothing Added",
@@ -287,7 +185,7 @@ class IntervalCRUDMixin:
 
         self.status_var.set(f"Relabeled → {new_label}")  # type: ignore[union-attr]
         self._update_plot()
-        self._maybe_autosave()
+        self._save_autosave()
 
     # ---- DELETE operations ----
     def _delete_interval(self) -> None:
@@ -306,7 +204,7 @@ class IntervalCRUDMixin:
             self._clear_selected_interval_highlights()
         self.status_var.set("Deleted interval")  # type: ignore[union-attr]
         self._update_plot()
-        self._maybe_autosave()
+        self._save_autosave()
 
     # ---- CLEAR operations ----
     def _clear_preview_state(self) -> None:
@@ -316,6 +214,15 @@ class IntervalCRUDMixin:
         if hasattr(self, "current_spans"):
             self.current_spans.clear()
         self.current_selection = None
+        # Clear any per-axis component filter the user set via the
+        # component-selection dialog -- otherwise it would silently apply
+        # to the next selection's highlight rendering.
+        if hasattr(self, "_selected_component_labels"):
+            self._selected_component_labels = None
+        if hasattr(self, "active_pane") and hasattr(
+            self.active_pane, "_selected_component_labels"
+        ):
+            self.active_pane._selected_component_labels = None
         if hasattr(self, '_clear_selected_point_highlights'):
             self._clear_selected_point_highlights()
         self._update_plot()
@@ -479,7 +386,7 @@ class IntervalCRUDMixin:
 
             # Update UI
             self._update_plot()
-            self._maybe_autosave()
+            self._save_autosave()
 
         def on_cancel():
             """Close dialog without action."""

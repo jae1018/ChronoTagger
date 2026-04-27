@@ -1,6 +1,14 @@
 # ChronoTagger — Advanced Time-Series Interval Labeling Tool
 
-ChronoTagger is a powerful, interactive GUI for labeling time intervals on matplotlib plots. Built for scientific data analysis, it provides a seamless workflow for annotating time-series data with ML-ready label exports. Whether you're analyzing spacecraft data, sensor measurements, or any temporal data, ChronoTagger adapts to your custom plotting code.
+[![tests](https://github.com/jae1018/ChronoTagger/actions/workflows/tests.yml/badge.svg)](https://github.com/jae1018/ChronoTagger/actions/workflows/tests.yml)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+ChronoTagger is a powerful, interactive GUI for labeling time intervals on matplotlib plots. Built for scientific data analysis, it provides a seamless workflow for annotating time-series data with ML-ready label exports. With temporal data, ChronoTagger can adapt to your custom plotting code.
+
+![ChronoTagger quick-start](docs/assets/quickstart.gif)
+
+*From a CSV to labeled intervals in under a minute. `chronotagger` launches a guided wizard that handles file loading, column selection, layout, and the labeling UI.*
 
 ## Key Features
 
@@ -16,7 +24,41 @@ ChronoTagger is a powerful, interactive GUI for labeling time intervals on matpl
 - **Complete undo/redo** - Full command stack with keyboard shortcuts
 - **Professional label management** - Add, rename, recolor, reorder, reassign labels
 
+## See it in action
+
+### Multi-tab labeling
+
+![Multi-tab labeling](docs/assets/multi-tab.gif)
+
+Configure several tabs of plots in one wizard pass — each with its own column selection and layout — then label across them. Intervals stay synchronized: a label drawn on tab 1's strip shows up on tab 2's strip too.
+
+### Custom grid designer
+
+![Custom grid designer](docs/assets/custom-grid.gif)
+
+For layouts the vertical-stack default doesn't cover, drop into the visual grid designer. Drag panels onto cells, switch a panel from time-series to cross-plot, pick its X/Y columns from dropdowns. The output is the same `layout_spec` dict you'd write by hand — without writing it.
+
+### Rule-based labeling
+
+![Rule-based labeling](docs/assets/by-rule.gif)
+
+Skip the click-and-drag for systematic patterns: type `feat_1 >= 0`, hit Preview, see every matching span on screen, then commit. Combine multiple conditions with AND/OR, choose how to resolve overlaps with already-labeled intervals (skip vs replace), and apply to the current window or the entire dataset.
+
 ## Quick Start
+
+### Option 1 — GUI wizard (no code)
+
+After installing (see below), launch the wizard from any terminal:
+
+```bash
+chronotagger
+```
+
+The wizard walks you through file loading (CSV/Parquet), column selection, layout configuration, and drops you straight into the labeler. No Python required.
+
+### Option 2 — Python API
+
+For custom plot functions (e.g. spectrograms, multi-trace overlays, domain-specific overlays), construct the labeler directly:
 
 ```python
 import pandas as pd
@@ -25,16 +67,25 @@ from chronotagger import TimeIntervalLabeler
 # Your data (DataFrame with DatetimeIndex)
 df = pd.read_csv("data.csv", index_col=0, parse_dates=True)
 
-# Your custom plot function
+# Your custom plot function -- panel keys must match layout_spec.areas[*].key
 def plot_fn(axs, df, t0, t1):
     axs["panel1"].plot(df.index, df["temperature"])
     axs["panel1"].set_ylabel("Temperature (°C)")
-    
-    axs["panel2"].plot(df.index, df["pressure"])  
+
+    axs["panel2"].plot(df.index, df["pressure"])
     axs["panel2"].set_ylabel("Pressure (hPa)")
 
-# Launch the labeler
-app = TimeIntervalLabeler(df=df, plot_fn=plot_fn)
+# Layout: two time-series panels stacked, plus the auto-managed Labels strip
+layout_spec = {
+    "nrows": 3, "ncols": 1,
+    "areas": [
+        {"key": "panel1", "row": 0, "col": 0, "role": "time"},
+        {"key": "panel2", "row": 1, "col": 0, "role": "time"},
+        {"key": "labels", "row": 2, "col": 0, "role": "labels"},
+    ],
+}
+
+app = TimeIntervalLabeler(df=df, plot_fn=plot_fn, layout_spec=layout_spec)
 app.run()
 ```
 
@@ -43,16 +94,19 @@ app.run()
 ### Requirements
 - Python 3.9+
 - pandas
-- matplotlib  
 - numpy
+- matplotlib
+- pyarrow (for Parquet I/O)
 - tkinter (usually included with Python)
 
 ### Install from source
 ```bash
-git clone <repository-url>
-cd chronotagger
+git clone https://github.com/jae1018/ChronoTagger.git
+cd ChronoTagger
 pip install -e .
 ```
+
+After installation, the `chronotagger` console command is available from any terminal.
 
 ### Platform Notes
 
@@ -142,18 +196,19 @@ Combine time-series with position/phase-space plots:
 
 ```python
 layout_spec = {
-    "nrows": 2, "ncols": 2,
+    "nrows": 3, "ncols": 2,
     "areas": [
-        {"key": "timeseries", "row": 0, "col": 0, "colspan": 2, "role": "time"},
+        {"key": "timeseries",  "row": 0, "col": 0, "colspan": 2, "role": "time"},
         {"key": "xy_position", "row": 1, "col": 0, "role": "not-time"},
         {"key": "xz_position", "row": 1, "col": 1, "role": "not-time"},
+        {"key": "labels",      "row": 2, "col": 0, "colspan": 2, "role": "labels"},
     ]
 }
 
 def plot_fn(axs, df, t0, t1):
     # Time-series plot
     axs["timeseries"].plot(df.index, df["value"])
-    
+
     # Position plots (CRITICAL: preserve temporal ordering!)
     # Point N must correspond to df.index[N]
     axs["xy_position"].scatter(df["x"], df["y"], s=5)
@@ -327,132 +382,23 @@ labeler.run()
 - Inactive panes update when switched to
 - Efficient blitting for fast overlay rendering
 
-#### When to Use Multi-Pane
+Multi-pane is worth reaching for when one tab can't comfortably hold all the plots you need to see (e.g. 10+ panels, or fundamentally different views of the same data). For a 2-3 panel layout, stick with the single-pane API. See `examples/dual_pane_demo.py` and `examples/multi_pane_magnetosphere.py` for runnable starting points.
 
-✅ **Good use cases:**
-- Need to see 10+ plots for accurate labeling
-- Different views of same data (time series + position plots)
-- Comparing different parameter combinations
-- Separating overview from detailed plots
+#### Real-world example: cislunar plasma classification
 
-❌ **Not recommended:**
-- Only need 2-3 plots (use single pane with subplots)
-- Very slow plot functions (will multiply startup time)
-- More than 5-6 panes (gets cluttered)
+A two-pane setup driving real ARTEMIS-mission ion data. Pane 1 shows a 32-channel ion energy-flux spectrogram alongside density, B-field, and spacecraft potential time series; pane 2 shows the derived thermodynamic + velocity quantities. Both panes share the same orbital cross-plot panels — the GSE (Earth-centered) and SSE (Moon-centered) frames with bow shock and magnetopause boundaries overlaid — and any label drawn on either pane appears on both panes' Labels strips.
 
-#### Migrating from Single to Multi-Pane
+| Pane 1: spectra + fields | Pane 2: thermo + dynamics |
+|:---:|:---:|
+| ![Pane 1](docs/assets/spectrogram-flagship.png) | ![Pane 2](docs/assets/spectrogram-pane2.png) |
 
-Existing single-pane code still works:
-
-```python
-# Old way (still supported)
-labeler = TimeIntervalLabeler(
-    df=df,
-    plot_fn=my_plot_function,
-    layout_spec=my_layout,
-)
-
-# New multi-pane way
-panes = [
-    {"title": "Main View", "plot_fn": my_plot_function, "layout_spec": my_layout}
-]
-labeler = TimeIntervalLabeler(df=df, panes=panes)
-```
-
-See `examples/dual_pane_demo.py` and `examples/multi_pane_magnetosphere.py` for complete examples.
+Driver code: `examples/spectrogram_multipane.py`.
 
 ## User Interface
 
-### Main Layout
+The labeler window has a top toolbar (time range, navigation, label actions, I/O, help), the plot area in the center, an auto-managed Labels strip at the bottom, and a sidebar listing labeled intervals + live coverage statistics. The demos above show the layout in motion.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Time Range │ Navigation │ Current Label │ Actions           │  ← Top Bar
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Your matplotlib plots (stacked vertically)                 │  ← Plot Area
-│  - Drag to select                                           │
-│  - Scroll to zoom                                           │
-│  - Box select for value-based selection                     │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  ████████  ██████  █████████  ████                          │  ← Labels Strip
-└─────────────────────────────────────────────────────────────┘
-                                              ┌───────────────┐
-                                              │ Intervals     │  ← Sidebar
-                                              │ • start→end   │
-                                              │ • label       │
-                                              │ • duration    │
-                                              ├───────────────┤
-                                              │ Statistics    │
-                                              │ • Coverage %  │
-                                              │ • Label counts│
-                                              ├───────────────┤
-                                              │ Actions       │
-                                              │ Export        │
-                                              └───────────────┘
-```
-
-### Navigation Controls
-
-- **Time Range** - Direct entry fields for start/end times
-- **Step Size** - Adjustable step for navigation
-- **Quick Adjust** - `x2` and `/2` buttons to double/halve step
-- **Prev/Next** - Navigate by current step size
-- **Snap Toggle** - Enable/disable snap-to-samples
-
-### Keyboard Shortcuts
-
-| Key | Action | | Key | Action |
-|-----|--------|-|-----|--------|
-| `1-9` | Select label by index | | `n` / `→` | Next window |
-| `a` / `Enter` | Add interval | | `p` / `←` | Previous window |
-| `d` / `Delete` | Delete selected | | `Ctrl+Z` / `Backspace` | Undo |
-| `u` | Select UNKNOWN label | | `Ctrl+Y` / `Shift+Backspace` | Redo |
-| `r` | Relabel selected | | `Ctrl+S` | Save session |
-| `m` | Manage labels | | `Ctrl+E` | Export dialog |
-| `F1` | Help dialog | | `Escape` | Clear selection |
-
-**Multi-Pane Shortcuts (when using tabbed interface):**
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+Tab` | Switch to next tab |
-| `Ctrl+Shift+Tab` | Switch to previous tab |
-| `Ctrl+1` to `Ctrl+9` | Jump to tab 1-9 |
-| `Ctrl+0` | Jump to tab 10 |
-| Right-click tab | Show tab menu (rename, refresh) |
-
-### Mouse Controls
-
-- **Drag on plot** - Create time selection
-- **Drag rectangle** - Box selection (time+value or position)
-- **Scroll wheel** - Zoom in/out (20% per notch)
-- **Shift + wheel** - Pan left/right
-- **Click interval** - Select in labels strip
-- **Drag edges** - Resize intervals
-- **Drag center** - Move intervals
-- **Double-click** - Quick actions in dialogs
-
-### Sidebar Features
-
-**Labeled Intervals List:**
-- Shows all intervals in current window
-- Format: `start -> end: label (duration)`
-- Click to select
-- Double-click to jump to interval
-
-**Statistics Panel:**
-- Total/labeled/unlabeled point counts
-- Coverage percentage
-- Per-label statistics (count, coverage %)
-- Updates live as you label
-
-**Action Buttons:**
-- Relabel - Change selected interval's label
-- Delete - Remove selected interval
-- Label Unassigned... - Fill gaps with chosen label
-- Clear All Intervals - Remove all labels (with confirmation)
+**Press `F1` inside the labeler for the full keyboard and mouse reference** — the in-app help dialog is the source of truth and stays in sync with the code; this README does not duplicate it.
 
 ## Data Requirements
 
@@ -479,38 +425,34 @@ def plot_fn(
 
 ### Panel Count Resolution
 
-ChronoTagger determines panel count in this order:
-1. **Explicit:** `TimeIntervalLabeler(..., n_panels=3)`
-2. **Function attribute:** `plot_fn.n_panels = 3`
-3. **Auto-probe:** Calls plot_fn and counts axes with content
-4. **Default:** 2 panels
+The set of panels is fully determined by `layout_spec.areas`: every entry with a unique `key` becomes a panel and is passed to your `plot_fn` as `axs[key]`. Add entries to grow or shrink the layout — there is no separate panel-count argument.
 
 ## Exporting
 
+![Export Labels dialog](docs/assets/export-dialog.png)
+
 ### ML-Ready Export (Recommended)
 
-Via "Export Labels..." button or `app.export_labels()`:
+Click **Export Labels...** in the labeler's I/O group to produce a CSV of per-sample integer label IDs paired with a JSON label-map (programmatic access is on the roadmap). The dialog lets you pick:
 
-**Options:**
-- Scope: Full dataset or selected intervals only
-- Format: Index + labels only, or full DataFrame + labels
-- Output: CSV with integer labels + JSON mapping
+- **Scope** — full dataset or selected intervals only
+- **Content** — index + labels, or the full DataFrame joined with labels
+- **Format** — CSV (always) plus the `*_label_map.json` mapping
 
-```python
-# Produces two files:
-# 1. data_labels.csv:
-#    timestamp,label_id
-#    2024-01-01 00:00:00,-1    # Unlabeled
-#    2024-01-01 00:05:00,0     # PlasmaSheet
-#    2024-01-01 00:10:00,1     # Magnetosheath
+```text
+# data_labels.csv
+timestamp,label_id
+2024-01-01 00:00:00,-1    # unlabeled
+2024-01-01 00:05:00,0     # label_1
+2024-01-01 00:10:00,1     # label_2
 
-# 2. data_labels_label_map.json:
-#    {"PlasmaSheet": 0, "Magnetosheath": 1, "SolarWind": 2}
+# data_labels_label_map.json
+{"label_1": 0, "label_2": 1, "label_3": 2}
 ```
 
-- Uses smallest integer dtype (int8/int16/int32) for efficiency
-- Unlabeled samples marked as -1
-- Label order matches current display order
+- Smallest integer dtype (`int8`/`int16`/`int32`) chosen automatically
+- Unlabeled samples encoded as `-1`
+- Label IDs follow the current display order
 
 ### Interval Export
 
@@ -529,9 +471,24 @@ app.save("session.json")
 # Resume later
 app.load("session.json")
 
-# Enable autosave (saves on each change)
-app = TimeIntervalLabeler(..., autosave_path="auto_backup.json")
+# Autosave-on-change to a folder of your choice (default: ".")
+# Each modification rewrites <autosave_folder>/chronotagger_autosave.json,
+# which the labeler offers to recover from on the next launch.
+app = TimeIntervalLabeler(..., autosave_folder="autosaves")
 ```
+
+## Examples
+
+See the `examples/` directory for complete demonstrations:
+
+- `timeseries_only.py` — Basic time-series labeling
+- `mixed_layout.py` — Combined time and position plots
+- `layout_wizard_demo.py` — Interactive layout builder with sample data
+- `layout_wizard_simple.py` — Minimal layout builder for CSV files
+- `simple_layout_test.py` — Testing layout specifications
+- `dual_pane_demo.py` — Simple 2-tab multi-pane example
+- `multi_pane_magnetosphere.py` — Comprehensive 4-tab space physics example
+- `spectrogram_multipane.py` — Real-world cislunar plasma classification driver: ion energy spectrogram (pcolormesh), B-field components, and orbital cross-plots in both Earth- and Moon-centered frames. Optional `geospacefronts` overlay for bow-shock / magnetopause boundaries. Bring your own dataset via the `CHRONOTAGGER_EXAMPLE_DATA` env var.
 
 ## API Reference
 
@@ -539,34 +496,35 @@ app = TimeIntervalLabeler(..., autosave_path="auto_backup.json")
 
 ```python
 TimeIntervalLabeler(
-    df: pd.DataFrame,                      # Data with DatetimeIndex
+    df: pd.DataFrame,                      # Data with DatetimeIndex (required)
 
-    # Single-pane mode (backward compatible)
-    plot_fn: Callable = None,              # Your plot function
-    layout_spec: dict = None,              # Panel layout specification
-    n_panels: int = None,                  # Override panel count
+    # Single-pane mode
+    plot_fn: Callable = None,              # Plot function: fn(axs, df, t0, t1)
+    classes: List[str] = None,             # Label names (default: ["UNKNOWN", "label_1", "label_2"])
+    class_colors: Dict[str, str] = None,   # Label -> color (auto-generated if omitted)
+    window: pd.Timedelta = "30min",        # Initial visible window
+    step: pd.Timedelta = "15min",          # Prev/Next navigation step
+    start: pd.Timestamp = None,            # Initial window start (default: df.index[0])
+    autosave_folder: str = ".",            # Folder for chronotagger_autosave.json
 
-    # Multi-pane mode (NEW)
-    panes: List[Dict] = None,              # List of pane configs (see below)
-
-    # Common parameters
-    classes: List[str] = None,             # Label names (default: common plasma regions)
-    class_colors: Dict[str, str] = None,   # Label colors (auto-generated if not provided)
-    window: pd.Timedelta = "30min",        # View window size
-    step: pd.Timedelta = "15min",          # Navigation step
-    start: pd.Timestamp = None,            # Initial start time (default: df.index[0])
-    end: pd.Timestamp = None,              # Initial end time (default: start + window)
-    autosave_path: Path = None,            # Auto-save location
+    # Keyword-only:
+    *,
+    layout_spec: dict = None,              # Panel layout (single-pane); see below
+    panes: List[Dict] = None,              # Pane configs (multi-pane); see below
+    parent: tk.Misc = None,                # Existing Tk root to mount under (used by the wizard).
+                                           # If None, creates its own tk.Tk().
 )
+
+# Either `plot_fn` (single-pane) or `panes` (multi-pane) is required, not both.
 
 # Pane configuration (for multi-pane mode):
 panes = [
     {
         "title": str,                      # Tab label
         "plot_fn": Callable,               # Plot function for this pane
-        "layout_spec": dict,               # Layout for this pane (optional)
+        "layout_spec": dict,               # Layout for this pane
     },
-    # ... more panes
+    # ... up to several panes
 ]
 ```
 
@@ -595,76 +553,30 @@ layout_spec = {
 
 ### Methods
 
+The Python surface is intentionally small — most user actions are driven through the GUI (label management, interval editing, by-rule labeling, ML-ready export, etc.).
+
 ```python
-# Core operations
-app.run()                                  # Start the GUI main loop
-app.add_interval(start, end, label)        # Programmatically add interval
-app.delete_interval(interval)              # Remove specific interval
-app.clear_all_intervals()                  # Remove all intervals
+# Lifecycle
+app.run()                                  # Build the GUI and start the event loop
+
+# Session save/load (JSON)
+app.save(path: str = None)                 # Save session; prompts via file dialog if path=None
+app.load(path: str)                        # Load a session JSON
+
+# Export
+app.export_intervals(path: str, fmt="parquet")  # Per-interval rows: start, end, label, notes
+app.export_per_sample(path: str, fmt="parquet", label_on_uncovered="UNKNOWN")
+                                           # Per-row labels for the entire df.index
 
 # Navigation
-app.go_to_window(t0: pd.Timestamp)         # Jump to specific time
-app.set_window_size(window: pd.Timedelta)  # Change window duration
-app.set_step_size(step: pd.Timedelta)      # Change navigation step
-
-# Import/Export
-app.save(path: str = None)                 # Save session to JSON
-app.load(path: str)                        # Load session from JSON
-app.export_intervals(path: str, fmt: str)  # Export as CSV/Parquet
-app.export_per_sample(path: str, fmt: str) # Legacy string labels export
-app.export_labels(path: str, ...)          # ML-ready integer labels
-
-# Label management
-app.add_label(name: str, color: str)       # Add new label class
-app.rename_label(old: str, new: str)       # Rename label (updates intervals)
-app.delete_label(name: str)                # Remove unused label
-app.recolor_label(name: str, color: str)   # Change label color
+app.go_to_window(t0: pd.Timestamp)         # Jump the visible window so it begins at t0
 ```
 
-## Examples
+The richer ML-ready export (integer label IDs + JSON label-map) is reachable from the **Export Labels...** button in the GUI; programmatic access is on the roadmap.
 
-See the `examples/` directory for complete demonstrations:
+## Architecture
 
-- `timeseries_only.py` - Basic time-series labeling
-- `mixed_layout.py` - Combined time and position plots
-- `layout_wizard_demo.py` - Interactive layout builder with sample data
-- `layout_wizard_simple.py` - Minimal layout builder for CSV files
-- `simple_layout_test.py` - Testing layout specifications
-- `dual_pane_demo.py` - Simple 2-tab multi-pane example
-- `multi_pane_magnetosphere.py` - Comprehensive 4-tab space physics example
-
-## Project Structure
-
-```
-chronotagger/
-├── core/
-│   ├── commands.py         # Undo/redo command pattern implementation
-│   └── models.py          # Interval data model
-├── labeler/
-│   ├── app.py             # Main TimeIntervalLabeler class
-│   ├── dialogs/           
-│   │   ├── label_manager.py      # Comprehensive label management
-│   │   ├── label_by_rule.py      # Rule-based labeling with conditions
-│   │   └── overlap_resolution.py # Handle overlapping intervals
-│   ├── mixins/            
-│   │   ├── events.py      # Mouse/keyboard event handling
-│   │   ├── intervals.py   # Interval CRUD operations
-│   │   ├── io_export.py   # Save/load/export functionality
-│   │   ├── labels.py      # Label schema management
-│   │   ├── navigation.py  # Time window navigation
-│   │   ├── plotting.py    # Plot rendering and updates
-│   │   ├── rules.py       # Rule evaluation engine
-│   │   ├── stats.py       # Statistics calculation
-│   │   ├── view_build.py  # UI construction
-│   │   └── zoom.py        # Zoom/pan functionality
-│   └── utils/             
-│       ├── colorbar.py    # Colorbar utilities for plots
-│       ├── fastdraw.py    # Performance optimizations
-│       ├── layout_builder.py      # Interactive layout designer
-│       ├── overlays.py    # Interval overlay rendering
-│       ├── plot_generator.py      # Auto-generate plot functions
-│       └── timeaxis.py    # Time axis formatting
-```
+For contributors: see [`docs/architecture.md`](docs/architecture.md) for the package layout, how the mixins compose, and the single-`tk.Tk` invariant the wizard / labeler maintain.
 
 ## Testing
 
@@ -681,21 +593,6 @@ python -m pytest tests/test_interval_operations.py
 # Run with verbose output
 python -m pytest -v tests/
 ```
-
-## Performance Tips
-
-- **Large datasets** (>1M points)
-  - Use appropriate window/step sizes to limit visible data
-  - Consider downsampling for visualization
-  - Export to Parquet for faster I/O
-
-- **Many panels** (>6)
-  - Use layout builder to optimize arrangement
-  - Consider reducing panel count or using tabs
-
-- **Memory optimization**
-  - Export large label sets as Parquet (compressed)
-  - Use categorical dtype for label columns
 
 ## License
 

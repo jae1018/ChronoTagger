@@ -153,7 +153,11 @@ class ControlsMixin:
         ).grid(row=0, column=4, sticky="ew", padx=1, pady=2)
 
         # Row 2: [Dropdown list, Delete, Redo, By-Rule..., Clear...]
-        self.current_class_var = tk.StringVar(value=self.classes[0])
+        # Bind the StringVar to self.root explicitly so it resolves to the
+        # labeler's Tcl interpreter even if a stray second Tk root were
+        # ever introduced.  (The Toplevel-vs-Tk fix in _build_gui already
+        # avoids the second-root scenario, but this makes intent explicit.)
+        self.current_class_var = tk.StringVar(master=self.root, value=self.classes[0])
         self.class_combo = ttk.Combobox(
             grid_frame,
             textvariable=self.current_class_var,

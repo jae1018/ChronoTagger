@@ -39,7 +39,7 @@ class IntervalGapsMixin:
 
         self.status_var.set(f"Assigned {len(gaps)} UNKNOWN intervals")  # type: ignore[union-attr]
         self._update_plot()
-        self._maybe_autosave()
+        self._save_autosave()
 
     def _find_gaps_in_current_range(self) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
         """
@@ -276,4 +276,4 @@ class IntervalGapsMixin:
         # Update UI
         self.status_var.set(f"Assigned {len(gaps)} interval(s) to {label}")  # type: ignore[union-attr]
         self._update_plot()
-        self._maybe_autosave()
+        self._save_autosave()

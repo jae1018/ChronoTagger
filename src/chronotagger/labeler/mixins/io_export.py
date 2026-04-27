@@ -59,7 +59,7 @@ class IOExportMixin:
 
     # ---- GUI-connected ops ----
     def _save_session(self, path: Optional[str] = None) -> None:
-        target = Path(path) if path else self.autosave_path
+        target = Path(path) if path else None
         if target is None:
             chosen = filedialog.asksaveasfilename(
                 defaultextension=".json",
@@ -68,7 +68,6 @@ class IOExportMixin:
             if not chosen:
                 return
             target = Path(chosen)
-            self.autosave_path = target
 
         data = {
             "version": 1,
@@ -135,7 +134,6 @@ class IOExportMixin:
         self.step = pd.Timedelta(data["step"])
         self.intervals = [Interval.from_dict(d) for d in data["intervals"]]
 
-        self.autosave_path = Path(path)
         self.modified = False
 
         if self.class_combo is not None and self.current_class_var is not None:
@@ -312,8 +310,8 @@ class IOExportMixin:
             except Exception as e:
                 messagebox.showerror("Export Failed", f"{e}")
     
-        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side=tk.RIGHT, padx=(5, 0))
-        ttk.Button(btns, text="Export", command=do_export_and_close).pack(side=tk.RIGHT)
+        tk.Button(btns, text="Cancel", command=dlg.destroy).pack(side=tk.RIGHT, padx=(5, 0))
+        tk.Button(btns, text="Export", command=do_export_and_close).pack(side=tk.RIGHT)
         
         # --- Preview Update Functions ---
         def update_preview():
@@ -729,9 +727,352 @@ class IOExportMixin:
         self.status_var.set(f"Exported to {path}")  # type: ignore[union-attr]
         messagebox.showinfo("Export Complete", f"Per-sample labels exported to {path}")
 
-    def _maybe_autosave(self) -> None:
-        if self.autosave_path and self.modified:
-            self._save_session(str(self.autosave_path))
+    def _save_autosave(self) -> None:
+        """Save current state to autosave file with metadata (JSON format for security)."""
+        from datetime import datetime
+
+        # Use instance autosave file path
+        autosave_path = self.autosave_file
+
+        # Calculate statistics
+        label_stats = {}
+        total_duration = 0
+        for interval in self.intervals:
+            label = interval.label
+            duration_hours = (interval.end - interval.start).total_seconds() / 3600
+
+            if label not in label_stats:
+                label_stats[label] = {'count': 0, 'duration_hours': 0}
+            label_stats[label]['count'] += 1
+            label_stats[label]['duration_hours'] += duration_hours
+            total_duration += duration_hours
+
+        # Calculate coverage percentage
+        data_duration = (self.data_end - self.data_start).total_seconds() / 3600
+        coverage_percent = (total_duration / data_duration * 100) if data_duration > 0 else 0
+
+        # Build autosave data structure
+        autosave_data = {
+            'metadata': {
+                'data_columns': list(self.df.columns),  # For matching validation
+                'autosave_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'total_intervals': len(self.intervals),
+                'coverage_percent': round(coverage_percent, 1),
+                'time_range': {
+                    'start': self.data_start.isoformat(),  # Convert Timestamp to ISO string
+                    'end': self.data_end.isoformat()       # Convert Timestamp to ISO string
+                }
+            },
+            'intervals': [iv.to_dict() for iv in self.intervals],  # Convert Interval objects to dicts
+            'label_stats': label_stats
+        }
+
+        # Save to file (JSON format)
+        try:
+            with open(autosave_path, 'w', encoding='utf-8') as f:
+                json.dump(autosave_data, f, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not save autosave: {e}")
+
+    def _check_autosave(self):
+        """
+        Check if autosave exists and matches current data.
+        Supports both JSON (new, secure) and pickle (legacy) formats.
+
+        Returns:
+            dict or None: Autosave data if exists and matches, None otherwise
+        """
+        from chronotagger.core.models import Interval
+
+        # Try JSON format first (new, secure format)
+        json_path = self.autosave_folder / "chronotagger_autosave.json"
+        if json_path.exists():
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    autosave_data = json.load(f)
+
+                # Convert interval dicts back to Interval objects
+                autosave_data['intervals'] = [
+                    Interval.from_dict(d) for d in autosave_data['intervals']
+                ]
+
+                # Validate: Check if data columns match
+                saved_columns = autosave_data['metadata'].get('data_columns', [])
+                current_columns = list(self.df.columns)
+
+                if saved_columns != current_columns:
+                    print(f"Warning: Autosave columns don't match current data")
+                    print(f"  Saved: {saved_columns}")
+                    print(f"  Current: {current_columns}")
+                    # Still return it, let user decide in dialog
+
+                return autosave_data
+
+            except Exception as e:
+                print(f"Warning: Could not load JSON autosave: {e}")
+
+        # Fall back to pickle format (legacy, for backward compatibility)
+        pkl_path = self.autosave_folder / "chronotagger_autosave.pkl"
+        if pkl_path.exists():
+            print("⚠️  Warning: Loading legacy pickle autosave (insecure format)")
+            print("    Will automatically convert to JSON on next save.")
+
+            try:
+                import pickle
+                with open(pkl_path, 'rb') as f:
+                    autosave_data = pickle.load(f)
+
+                # Validate: Check if data columns match
+                saved_columns = autosave_data['metadata'].get('data_columns', [])
+                current_columns = list(self.df.columns)
+
+                if saved_columns != current_columns:
+                    print(f"Warning: Autosave columns don't match current data")
+                    print(f"  Saved: {saved_columns}")
+                    print(f"  Current: {current_columns}")
+
+                return autosave_data
+
+            except Exception as e:
+                print(f"Warning: Could not load pickle autosave: {e}")
+
+        return None
+
+    def _show_recovery_dialog(self, autosave_data):
+        """
+        Show recovery dialog with autosave information.
+
+        Args:
+            autosave_data: Dict containing autosave metadata and intervals
+
+        Returns:
+            str: User choice - 'recover', 'start_fresh', 'save_backup', or 'cancel'
+        """
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+        from datetime import datetime
+        import shutil
+
+        # Create modal dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Autosave Found")
+        dialog.geometry("550x500")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # Center on screen
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+
+        # Make dialog non-resizable for consistent appearance
+        dialog.resizable(False, False)
+
+        # Store result
+        result = {'choice': None}
+
+        # Main container with padding
+        main_frame = ttk.Frame(dialog, padding="20")
+        main_frame.pack(fill='both', expand=True)
+
+        # Header with icon and title
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill='x', pady=(0, 15))
+
+        # Title
+        title_label = ttk.Label(
+            header_frame,
+            text="Autosave Found for This Data File",
+            font=('Segoe UI', 12, 'bold')
+        )
+        title_label.pack()
+
+        # Info container with light background
+        info_frame = ttk.LabelFrame(main_frame, text="Session Information", padding="15")
+        info_frame.pack(fill='both', expand=True, pady=(0, 15))
+
+        metadata = autosave_data['metadata']
+        label_stats = autosave_data['label_stats']
+
+        # Autosave folder
+        folder_label = ttk.Label(
+            info_frame,
+            text=f"Autosave Folder: {self.autosave_folder}",
+            font=('Segoe UI', 9)
+        )
+        folder_label.pack(anchor='w', pady=(0, 5))
+
+        # Autosave date
+        date_label = ttk.Label(
+            info_frame,
+            text=f"Autosave Date: {metadata['autosave_timestamp']}",
+            font=('Segoe UI', 9)
+        )
+        date_label.pack(anchor='w', pady=(0, 5))
+
+        # Coverage
+        coverage_label = ttk.Label(
+            info_frame,
+            text=f"Coverage: {metadata['coverage_percent']}% of time range labeled",
+            font=('Segoe UI', 9)
+        )
+        coverage_label.pack(anchor='w', pady=(0, 10))
+
+        # Separator
+        ttk.Separator(info_frame, orient='horizontal').pack(fill='x', pady=(0, 10))
+
+        # Intervals by label header
+        intervals_header = ttk.Label(
+            info_frame,
+            text="Intervals by Label:",
+            font=('Segoe UI', 9, 'bold')
+        )
+        intervals_header.pack(anchor='w', pady=(0, 5))
+
+        # Create frame for interval list with padding
+        intervals_container = ttk.Frame(info_frame)
+        intervals_container.pack(fill='both', expand=True, pady=(0, 10))
+
+        # Display each label's stats
+        for label, stats in sorted(label_stats.items()):
+            count = stats['count']
+            hours = stats['duration_hours']
+
+            interval_frame = ttk.Frame(intervals_container)
+            interval_frame.pack(fill='x', pady=2)
+
+            # Label name (left-aligned)
+            label_text = ttk.Label(
+                interval_frame,
+                text=f"  {label}:",
+                font=('Segoe UI', 9),
+                width=20,
+                anchor='w'
+            )
+            label_text.pack(side='left')
+
+            # Stats (right side)
+            stats_text = ttk.Label(
+                interval_frame,
+                text=f"{count} intervals ({hours:.1f} hours)",
+                font=('Segoe UI', 9),
+                foreground='#666666'
+            )
+            stats_text.pack(side='left')
+
+        # Separator
+        ttk.Separator(info_frame, orient='horizontal').pack(fill='x', pady=(5, 10))
+
+        # Total summary
+        total_intervals = metadata['total_intervals']
+        total_hours = sum(s['duration_hours'] for s in label_stats.values())
+
+        total_label = ttk.Label(
+            info_frame,
+            text=f"Total: {total_intervals} intervals covering {total_hours:.1f} hours",
+            font=('Segoe UI', 9, 'bold')
+        )
+        total_label.pack(anchor='w')
+
+        # Button callbacks
+        def on_recover():
+            result['choice'] = 'recover'
+            dialog.destroy()
+
+        def on_start_fresh():
+            confirm = messagebox.askyesno(
+                "Confirm Start Fresh",
+                f"Are you sure you want to start fresh?\n\n"
+                f"This will NOT load the autosave with {total_intervals} intervals.\n"
+                f"The autosave file will remain and can be recovered later.",
+                parent=dialog
+            )
+            if confirm:
+                result['choice'] = 'start_fresh'
+                dialog.destroy()
+
+        def on_save_backup():
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_filename = f'chronotagger_autosave_backup_{timestamp}.json'
+            backup_file = self.autosave_folder / backup_filename
+
+            try:
+                shutil.copy(self.autosave_file, backup_file)
+                messagebox.showinfo(
+                    "Backup Saved",
+                    f"Autosave backed up to:\n{backup_filename}",
+                    parent=dialog
+                )
+                result['choice'] = 'start_fresh'
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror(
+                    "Backup Failed",
+                    f"Could not save backup:\n{e}",
+                    parent=dialog
+                )
+
+        def on_cancel():
+            result['choice'] = 'cancel'
+            dialog.destroy()
+
+        # Buttons frame
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill='x', pady=(10, 0))
+
+        # Create two rows of buttons
+        top_button_frame = ttk.Frame(button_frame)
+        top_button_frame.pack(fill='x', pady=(0, 5))
+
+        bottom_button_frame = ttk.Frame(button_frame)
+        bottom_button_frame.pack(fill='x')
+
+        # Top row buttons
+        recover_btn = tk.Button(
+            top_button_frame,
+            text="Recover Session",
+            command=on_recover,
+            width=25
+        )
+        recover_btn.pack(side='left', expand=True, padx=(0, 5))
+
+        fresh_btn = tk.Button(
+            top_button_frame,
+            text="Start Fresh",
+            command=on_start_fresh,
+            width=25
+        )
+        fresh_btn.pack(side='left', expand=True, padx=(5, 0))
+
+        # Bottom row buttons
+        backup_btn = tk.Button(
+            bottom_button_frame,
+            text="Save & Start Fresh",
+            command=on_save_backup,
+            width=25
+        )
+        backup_btn.pack(side='left', expand=True, padx=(0, 5))
+
+        cancel_btn = tk.Button(
+            bottom_button_frame,
+            text="Cancel",
+            command=on_cancel,
+            width=25
+        )
+        cancel_btn.pack(side='left', expand=True, padx=(5, 0))
+
+        # Make Recover button default (highlighted)
+        recover_btn.focus_set()
+
+        # Bind keyboard shortcuts
+        dialog.bind('<Escape>', lambda e: on_cancel())
+        dialog.bind('<Return>', lambda e: on_recover())
+
+        # Wait for dialog to close
+        dialog.wait_window()
+
+        return result['choice']
 
     def _on_closing(self) -> None:
         if self.modified:

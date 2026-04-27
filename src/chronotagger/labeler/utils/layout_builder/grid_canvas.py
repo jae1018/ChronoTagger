@@ -190,21 +190,64 @@ class GridCanvasMixin:
         self.panels.append(labels_panel)
         self._redraw_grid()
 
+    def _clip_panels_to_grid(self):
+        """
+        Clip every panel's row/col/rowspan/colspan to fit the current grid
+        dimensions. Called when the grid is resized smaller so user panels
+        don't visually extend past the grid edge or hold a span that no
+        longer makes sense.
+
+        Note: this is a mechanical clip and may produce overlaps if multiple
+        panels collapse onto the same cell. Users can resolve those manually.
+        """
+        nrows = self.nrows_var.get()
+        ncols = self.ncols_var.get()
+
+        for panel in self.panels:
+            # Column extent
+            if panel.col >= ncols:
+                panel.col = max(0, ncols - 1)
+            if panel.col + panel.colspan > ncols:
+                panel.colspan = max(1, ncols - panel.col)
+
+            # Row extent
+            if panel.row >= nrows:
+                panel.row = max(0, nrows - 1)
+            if panel.row + panel.rowspan > nrows:
+                panel.rowspan = max(1, nrows - panel.row)
+
     def _update_labels_panel(self):
-        """Update Labels panel position to match current grid size."""
-        # Find Labels panel
+        """
+        Keep the auto-managed Labels strip in sync with the grid.
+
+        Two invariants are maintained:
+          * The Labels strip always sits in the bottom row of the current grid.
+          * Its column extent (col + colspan) matches the FIRST 'time' panel so
+            the labels strip is horizontally aligned with the time-series
+            plots. Cross-plot ('not-time') panels do not influence it.
+
+        If there are no time panels yet, the labels strip keeps its current
+        col and falls back to a colspan clipped to the current grid width.
+        """
         labels = next((p for p in self.panels if p.role == "labels"), None)
         if labels is None:
             return
 
-        # Update position to bottom row
+        ncols = self.ncols_var.get()
+
+        # Pin to the bottom row of the current grid
         labels.row = self.nrows_var.get() - 1
 
-        # For now, keep colspan as-is (will be updated when we calculate time plot span)
-        # Ensure it doesn't exceed grid width
-        max_colspan = self.ncols_var.get()
-        if labels.col + labels.colspan > max_colspan:
-            labels.colspan = max_colspan - labels.col
+        # Match the first time panel's column extent
+        first_time = next((p for p in self.panels if p.role == "time"), None)
+        if first_time is not None:
+            labels.col = max(0, min(first_time.col, ncols - 1))
+            labels.colspan = max(1, min(first_time.colspan, ncols - labels.col))
+        else:
+            # No time panels yet -- clip current colspan to fit the grid
+            labels.col = max(0, min(labels.col, ncols - 1))
+            if labels.col + labels.colspan > ncols:
+                labels.colspan = ncols - labels.col
 
     def _update_panel_list(self):
         """Update the panel listbox (excludes locked Labels panel)."""
@@ -305,6 +348,10 @@ class GridCanvasMixin:
         self.selected_panel.x_column = x_col
         self.selected_panel.y_column_2 = y2_col
 
+        # Re-sync the auto-managed Labels strip in case the role
+        # changed to/from 'time' or this is now the first time panel
+        self._update_labels_panel()
+
         # Redraw and update list
         self._redraw_grid()
         self._update_panel_list()
@@ -348,6 +395,10 @@ class GridCanvasMixin:
         # Renumber all panels sequentially
         self._renumber_panels()
 
+        # Re-sync the Labels strip in case the deleted panel was the
+        # first 'time' panel (or the only one)
+        self._update_labels_panel()
+
         # Redraw
         self._redraw_grid()
         self._update_panel_list()
@@ -372,6 +423,9 @@ class GridCanvasMixin:
 
         # Renumber (will reset next_panel_id to 1)
         self._renumber_panels()
+
+        # Re-sync the Labels strip back to its no-time-panel default
+        self._update_labels_panel()
 
         self._redraw_grid()
         self._update_panel_list()

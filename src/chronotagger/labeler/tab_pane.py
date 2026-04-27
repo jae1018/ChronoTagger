@@ -8,7 +8,7 @@ while sharing interval/label state with other panes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Any, Optional, Set, Tuple
+from typing import Callable, Dict, Any, List, Optional, Set, Tuple
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -38,7 +38,9 @@ class TabPane:
 
     # Axes metadata (populated during layout building)
     axes_meta: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    time_axis_keys: Set[str] = field(default_factory=set)
+    # List (not set) so iteration order matches the order time areas
+    # appear in layout_spec.areas. See canvas.py for context.
+    time_axis_keys: List[str] = field(default_factory=list)
     primary_time_key: Optional[str] = None
 
     # Rendering state (for lazy updates)

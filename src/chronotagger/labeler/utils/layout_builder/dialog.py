@@ -156,7 +156,34 @@ class LayoutBuilderDialog(
                 )
                 return False
 
+        # Check that no two panels overlap in the grid. _clip_panels_to_grid
+        # may have collapsed two previously-disjoint panels onto the same
+        # cell when the user shrank the grid; rather than silently accept
+        # a degenerate layout, refuse and ask the user to fix it.
+        for i, p_a in enumerate(self.panels):
+            for p_b in self.panels[i + 1:]:
+                if self._panels_overlap(p_a, p_b):
+                    messagebox.showwarning(
+                        "Overlapping Panels",
+                        f"{p_a.key} and {p_b.key} overlap on the grid. "
+                        f"Please move or resize one of them so the panels "
+                        f"don't share any cells.",
+                        parent=self,
+                    )
+                    return False
+
         return True
+
+    @staticmethod
+    def _panels_overlap(a, b) -> bool:
+        """True if two PanelConfigs share any grid cell."""
+        a_row_end = a.row + a.rowspan
+        a_col_end = a.col + a.colspan
+        b_row_end = b.row + b.rowspan
+        b_col_end = b.col + b.colspan
+        rows_overlap = a.row < b_row_end and b.row < a_row_end
+        cols_overlap = a.col < b_col_end and b.col < a_col_end
+        return rows_overlap and cols_overlap
 
     def _on_done(self):
         """Handle Done button - validate and close."""

@@ -72,12 +72,33 @@ class PreviewMixin:
             figure=fig
         )
 
+        # Pick the first 'time' panel's column extent as the target.
+        # Both the Labels strip AND every other 'time' panel are coerced
+        # to this target during preview rendering, matching the post-hoc
+        # normalization applied on export (see chronotagger.quickstart
+        # .plot_builder.normalize_time_columns). 'not-time' panels keep
+        # their authored col/colspan.
+        target_col = None
+        target_colspan = None
+        for p in self.panels:
+            if p.role == "time":
+                target_col = p.col
+                target_colspan = p.colspan
+                break
+
         # Create a subplot for each panel
         for panel in self.panels:
+            if panel.role in ("time", "labels") and target_col is not None:
+                col = target_col
+                colspan = target_colspan
+            else:
+                col = panel.col
+                colspan = panel.colspan
+
             # Use GridSpec slice notation for spanning panels
             ax = fig.add_subplot(gs[
                 panel.row:panel.row + panel.rowspan,
-                panel.col:panel.col + panel.colspan
+                col:col + colspan
             ])
 
             # Set background color based on role (match grid colors)

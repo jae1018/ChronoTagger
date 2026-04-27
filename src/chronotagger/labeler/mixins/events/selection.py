@@ -96,6 +96,12 @@ class SelectionMixin:
             self.current_spans.clear()
             self.current_selection = (min(t_start, t_end), max(t_start, t_end))
             self._commit_spans = []
+
+            # CRITICAL: Full-height selection doesn't use component filtering - clear stale values
+            self._selected_component_labels = None
+            if hasattr(self, 'active_pane') and self.active_pane is not None:
+                self.active_pane._selected_component_labels = None
+
             self.status_var.set(  # type: ignore[union-attr]
                 f"Selected: {self.current_selection[0].strftime('%H:%M:%S')} → {self.current_selection[1].strftime('%H:%M:%S')}"
             )
@@ -190,6 +196,11 @@ class SelectionMixin:
             self.current_spans = spans_preview
             self._commit_spans = spans_commit
 
+            # CRITICAL: Not-time axis selection doesn't use component filtering - clear stale values
+            self._selected_component_labels = None
+            if hasattr(self, 'active_pane') and self.active_pane is not None:
+                self.active_pane._selected_component_labels = None
+
             # UPDATE TIME OVERLAYS for multi-span preview with padded intervals
             self._update_time_overlays_for_multi_spans(spans_preview)
 
@@ -226,6 +237,7 @@ class SelectionMixin:
 
         # Collect timestamps from lines & scatters inside the box
         picked_ts: list[pd.Timestamp] = []
+        line_contributions: dict[str, list[pd.Timestamp]] = {}  # Track which line contributed which timestamps
 
         for a in time_axes:
             # Line2D objects
@@ -239,12 +251,30 @@ class SelectionMixin:
                     if not m.any():
                         continue
                     xs_sel = xs[m]
+
+                    # Track which line these timestamps came from
+                    line_label = ln.get_label()  # e.g., "BX" or "_line0" if no label
+                    if line_label.startswith('_'):
+                        # Matplotlib auto-labels start with underscore - generate better name
+                        line_label = f"Line {len(line_contributions) + 1}"
+
+                    line_timestamps = []
+
                     # Convert selected xs (float days) to naive timestamps
                     for xf in xs_sel:
                         dt = mdates.num2date(float(xf))
                         if getattr(dt, "tzinfo", None) is not None:
                             dt = dt.replace(tzinfo=None)
-                        picked_ts.append(pd.Timestamp(dt))
+                        ts = pd.Timestamp(dt)
+                        picked_ts.append(ts)
+                        line_timestamps.append(ts)
+
+                    # Store which timestamps came from this line
+                    if line_timestamps:
+                        if line_label not in line_contributions:
+                            line_contributions[line_label] = []
+                        line_contributions[line_label].extend(line_timestamps)
+
                 except Exception:
                     continue
 
@@ -285,84 +315,20 @@ class SelectionMixin:
             self.canvas.draw_idle()  # type: ignore[union-attr]
             return
 
-        # Convert timestamps to index positions (nearest) and keep only those inside current data bounds
-        idx_full = self.df.index
-        pos = []
-        for ts in picked_ts:
-            j = idx_full.get_indexer([ts], method="nearest")[0]
-            if 0 <= j < len(idx_full):
-                pos.append(j)
+        # NEW: Check if multiple lines contributed
+        if len(line_contributions) > 1:
+            # Show component selection dialog
+            self._show_component_selection_dialog(line_contributions, pane)
+            return  # Dialog will call back when user selects
 
-        if not pos:
-            self.current_spans.clear()
-            self.current_selection = None
-            self._commit_spans = []
+        # CRITICAL: Single-component selection - clear any component filtering
+        # This ensures ALL components are highlighted on multi-component plots
+        self._selected_component_labels = None
+        if hasattr(self, 'active_pane') and self.active_pane is not None:
+            self.active_pane._selected_component_labels = None
 
-            # Clear point highlights
-            if hasattr(self, '_clear_selected_point_highlights'):
-                self._clear_selected_point_highlights()
-
-            self.status_var.set("No points in selection")  # type: ignore[union-attr]
-            self._update_strip()
-            self.canvas.draw_idle()  # type: ignore[union-attr]
-            return
-
-        pos = sorted(set(pos))
-
-        # Split into contiguous runs (diff == 1)
-        runs: list[tuple[int, int]] = []
-        run_start = pos[0]
-        prev = pos[0]
-        for j in pos[1:]:
-            if j == prev + 1:
-                prev = j
-                continue
-            runs.append((run_start, prev))
-            run_start = prev = j
-        runs.append((run_start, prev))
-
-        # Turn runs into intervals
-        # --- For BOX SELECTIONS: Use exact intervals [first, last] ---
-        # This avoids boundary issues where highlighting doesn't match selection
-        exact_intervals = self._runs_to_exact_intervals(idx_full, runs)
-
-        # APPLY LOCALIZED PADDING IMMEDIATELY for preview (user's request)
-        padded_intervals = self._apply_localized_padding_to_intervals(exact_intervals)
-
-        # Use padded intervals for both preview AND commit
-        spans_commit = padded_intervals
-        spans_preview = [(s, e) for s, e in padded_intervals]
-
-        # Optional snap (preview only)
-        if self.snap_var.get():  # type: ignore[union-attr]
-            snapped_prev: list[tuple[pd.Timestamp, pd.Timestamp]] = []
-            for s, e in spans_preview:
-                ss, ee = self._snap_to_samples(s, e)
-                snapped_prev.append((ss, ee))
-            spans_preview = snapped_prev
-
-        # Stash both: preview for drawing, commit for "Add Label"
-        self.current_selection = None
-        self.current_spans = spans_preview        # exact intervals for highlighting
-        self._commit_spans = spans_commit         # exact intervals for interval creation
-
-        # UPDATE TIME OVERLAYS for multi-span preview with padded intervals
-        self._update_time_overlays_for_multi_spans(spans_preview)
-
-        # UPDATE STRIP PREVIEW with padded intervals
-        import matplotlib.dates as mdates
-        spans_float = [(mdates.date2num(s), mdates.date2num(e)) for s, e in spans_preview]
-        self._draw_strip_preview_spans(spans_float)
-
-        self.status_var.set(
-            f"Selected {len(spans_preview)} contiguous block(s) from {len(pos)} point(s)"
-        )
-        self._update_strip()
-
-        # Show highlight overlays on selected points
-        self._show_selected_point_highlights()
-
-        self.canvas.draw_idle()
+        # Single line or no line info - proceed with finalization
+        self._finalize_box_selection(picked_ts)
 
 
     def _on_strip_click(self, event, pane) -> None:
@@ -969,17 +935,56 @@ class SelectionMixin:
                 time_vals = [mdates.date2num(windowed_idx[idx]) for idx in indices
                             if 0 <= idx < len(windowed_idx)]
 
+                # CRITICAL: Check component filter on correct object
+                # Priority: active_pane (if exists) > self
+                selected_components = None
+
+                if hasattr(self, 'active_pane') and self.active_pane is not None:
+                    selected_components = getattr(self.active_pane, '_selected_component_labels', None)
+                else:
+                    selected_components = getattr(self, '_selected_component_labels', None)
+
                 # For time axes, we need to determine which column is being plotted
-                # This is trickier - for now, extract from the first legitimate line artist
-                # that has the right number of data points
+                # Filter by selected components if specified
                 for line in ax.lines:
                     try:
                         ys = np.asarray(line.get_ydata(orig=False))
-                        if len(ys) == len(windowed_idx):  # Main data artist
-                            y_vals = [float(ys[idx]) for idx in indices
-                                     if 0 <= idx < len(ys)]
-                            x_vals = time_vals[:len(y_vals)]  # Match lengths
-                            break
+                        if len(ys) != len(windowed_idx):  # Not main data artist
+                            continue
+
+                        # If no filter (None), include ALL lines
+                        if selected_components is None:
+                            # No filtering - extract from this line
+                            pass
+                        else:
+                            # Apply component filtering
+                            line_label = line.get_label()
+
+                            # Handle auto-generated labels (matplotlib creates these)
+                            if line_label.startswith('_'):
+                                # Include auto-labeled lines by default for backward compatibility
+                                pass
+                            else:
+                                # Normalize labels for comparison (strip whitespace, case-insensitive)
+                                line_label_normalized = line_label.strip().upper()
+                                selected_labels_normalized = [lbl.strip().upper() for lbl in selected_components]
+
+                                # Exact match required
+                                if line_label_normalized not in selected_labels_normalized:
+                                    # This line is not in the selected components - skip it
+                                    continue
+
+                        y_vals_for_line = [float(ys[idx]) for idx in indices
+                                          if 0 <= idx < len(ys)]
+                        x_vals_for_line = time_vals[:len(y_vals_for_line)]  # Match lengths
+
+                        # Append these values
+                        x_vals.extend(x_vals_for_line)
+                        y_vals.extend(y_vals_for_line)
+
+                        # FIXED: Process ALL lines when no filter, not just first one
+                        # This ensures all components are highlighted on multi-component plots
+
                     except Exception:
                         continue
 
@@ -1009,7 +1014,12 @@ class SelectionMixin:
                             x_vals.append(float(row[x_col]))
                             y_vals.append(float(row[y_col]))
                 else:
-                    # Fallback: extract from first artist with correct data length
+                    # Fallback: extract from the first artist whose length
+                    # matches the windowed dataframe.  Cross-plots are drawn
+                    # with ax.scatter() (PathCollection on ax.collections)
+                    # rather than ax.plot() (Line2D on ax.lines), so iterate
+                    # both.  The length filter avoids picking up our own
+                    # highlight overlay (which has len == len(selected)).
                     for line in ax.lines:
                         try:
                             xs = np.asarray(line.get_xdata(orig=False))
@@ -1022,6 +1032,24 @@ class SelectionMixin:
                                 break
                         except Exception:
                             continue
+                    else:
+                        # No matching Line2D -- try PathCollections (scatter)
+                        for artist in ax.collections:
+                            try:
+                                offsets = np.asarray(artist.get_offsets())
+                                if (
+                                    offsets.ndim != 2
+                                    or offsets.shape[1] != 2
+                                    or offsets.shape[0] != len(windowed_idx)
+                                ):
+                                    continue
+                                for idx in indices:
+                                    if 0 <= idx < offsets.shape[0]:
+                                        x_vals.append(float(offsets[idx, 0]))
+                                        y_vals.append(float(offsets[idx, 1]))
+                                break
+                            except Exception:
+                                continue
 
             except Exception:
                 return x_vals, y_vals
@@ -1328,6 +1356,14 @@ class SelectionMixin:
         if hasattr(self, '_commit_spans'):
             self._commit_spans.clear()
 
+        # Clear component selection tracking
+        if hasattr(self, '_selected_component_labels'):
+            self._selected_component_labels = None
+
+        # CRITICAL: Also clear on active pane
+        if hasattr(self, 'active_pane') and hasattr(self.active_pane, '_selected_component_labels'):
+            self.active_pane._selected_component_labels = None
+
         # Clear two-click state
         self._two_click_active = False
         self._two_click_t0 = None
@@ -1507,3 +1543,301 @@ class SelectionMixin:
                     m = meta.get(k, {})
                     return m.get("role") == "time" and int(m.get("col", 0)) == 0
         return False
+
+    def _finalize_box_selection(self, picked_ts: list[pd.Timestamp]) -> None:
+        """
+        Finalize box selection with given timestamps.
+
+        Converts timestamps to intervals, applies padding and snapping,
+        updates previews, and shows highlights.
+
+        Args:
+            picked_ts: List of pd.Timestamp objects to create intervals from
+        """
+        # Convert timestamps to index positions (nearest) and keep only those inside current data bounds
+        idx_full = self.df.index
+        pos = []
+        for ts in picked_ts:
+            j = idx_full.get_indexer([ts], method="nearest")[0]
+            if 0 <= j < len(idx_full):
+                pos.append(j)
+
+        if not pos:
+            self.current_spans.clear()
+            self.current_selection = None
+            self._commit_spans = []
+
+            # Clear point highlights
+            if hasattr(self, '_clear_selected_point_highlights'):
+                self._clear_selected_point_highlights()
+
+            self.status_var.set("No points in selection")  # type: ignore[union-attr]
+            self._update_strip()
+            self.canvas.draw_idle()  # type: ignore[union-attr]
+            return
+
+        pos = sorted(set(pos))
+
+        # Split into contiguous runs (diff == 1)
+        runs: list[tuple[int, int]] = []
+        run_start = pos[0]
+        prev = pos[0]
+        for j in pos[1:]:
+            if j == prev + 1:
+                prev = j
+                continue
+            runs.append((run_start, prev))
+            run_start = prev = j
+        runs.append((run_start, prev))
+
+        # Turn runs into intervals
+        # --- For BOX SELECTIONS: Use exact intervals [first, last] ---
+        # This avoids boundary issues where highlighting doesn't match selection
+        exact_intervals = self._runs_to_exact_intervals(idx_full, runs)
+
+        # APPLY LOCALIZED PADDING IMMEDIATELY for preview (user's request)
+        padded_intervals = self._apply_localized_padding_to_intervals(exact_intervals)
+
+        # Use padded intervals for both preview AND commit
+        spans_commit = padded_intervals
+        spans_preview = [(s, e) for s, e in padded_intervals]
+
+        # Optional snap (preview only)
+        if self.snap_var.get():  # type: ignore[union-attr]
+            snapped_prev: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+            for s, e in spans_preview:
+                ss, ee = self._snap_to_samples(s, e)
+                snapped_prev.append((ss, ee))
+            spans_preview = snapped_prev
+
+        # Stash both: preview for drawing, commit for "Add Label"
+        self.current_selection = None
+        self.current_spans = spans_preview        # exact intervals for highlighting
+        self._commit_spans = spans_commit         # exact intervals for interval creation
+
+        # UPDATE TIME OVERLAYS for multi-span preview with padded intervals
+        self._update_time_overlays_for_multi_spans(spans_preview)
+
+        # UPDATE STRIP PREVIEW with padded intervals
+        import matplotlib.dates as mdates
+        spans_float = [(mdates.date2num(s), mdates.date2num(e)) for s, e in spans_preview]
+        self._draw_strip_preview_spans(spans_float)
+
+        self.status_var.set(
+            f"Selected {len(spans_preview)} contiguous block(s) from {len(pos)} point(s)"
+        )
+        self._update_strip()
+
+        # Show highlight overlays on selected points
+        self._show_selected_point_highlights()
+
+        self.canvas.draw_idle()  # type: ignore[union-attr]
+
+    def _show_component_selection_dialog(
+        self,
+        line_contributions: dict[str, list[pd.Timestamp]],
+        pane
+    ) -> None:
+        """
+        Show dialog for user to choose which line/component to select.
+
+        Creates a modal dialog with buttons for each component found in the
+        dragbox selection, plus "All" and "Cancel" options. When user selects
+        a component, calls _finalize_box_selection with only that component's
+        timestamps.
+
+        Args:
+            line_contributions: Dict mapping line labels to list of timestamps
+            pane: The TabPane where selection occurred
+        """
+        import tkinter as tk
+        from tkinter import ttk
+
+        # Get root window - handle multi-pane structure
+        root = getattr(self, 'root', None) or getattr(self, 'master', None)
+        if root is None and hasattr(self, 'canvas') and self.canvas is not None:
+            root = self.canvas.get_tk_widget().winfo_toplevel() if hasattr(self.canvas, 'get_tk_widget') else None
+
+        if root is None:
+            # Fallback: just select all if we can't show dialog
+            all_timestamps = []
+            for ts_list in line_contributions.values():
+                all_timestamps.extend(ts_list)
+            self._finalize_box_selection(all_timestamps)
+            return
+
+        # Create dialog window
+        dialog = tk.Toplevel(root)
+        dialog.title("Select Component")
+        dialog.geometry("380x350")
+        dialog.transient(root)
+        dialog.grab_set()  # Modal dialog
+
+        # Center dialog on screen
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+
+        # Header
+        header = ttk.Label(
+            dialog,
+            text="Multiple components in selection:",
+            font=('Arial', 11, 'bold')
+        )
+        header.pack(pady=(15, 10))
+
+        # Info label
+        info = ttk.Label(
+            dialog,
+            text="Select which component to label:",
+            font=('Arial', 9)
+        )
+        info.pack(pady=(0, 10))
+
+        # Component buttons frame
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=10)
+
+        # Sort components by number of points (most first) for better UX
+        sorted_components = sorted(
+            line_contributions.items(),
+            key=lambda x: len(x[1]),
+            reverse=True
+        )
+
+        def on_component_select(component_label):
+            """User selected a specific component."""
+            dialog.destroy()
+            # Get timestamps for this component only
+            selected_timestamps = line_contributions[component_label]
+
+            # CRITICAL: Store which component was selected for highlighting
+            self._selected_component_labels = [component_label]
+
+            # CRITICAL: Also store on active pane for multi-pane compatibility
+            if hasattr(self, 'active_pane'):
+                self.active_pane._selected_component_labels = [component_label]
+
+            self._finalize_box_selection(selected_timestamps)
+
+        def on_select_all():
+            """User wants all components (intersection only)."""
+            dialog.destroy()
+
+            # Use INTERSECTION of timestamps (same logic as for dialog count)
+            idx_full = self.df.index
+
+            # Convert each component's timestamps to dataframe indices
+            component_index_sets = []
+            for component_label, ts_list in line_contributions.items():
+                component_indices = set()
+                for ts in ts_list:
+                    try:
+                        idx_pos = idx_full.get_indexer([ts], method='nearest')[0]
+                        if 0 <= idx_pos < len(idx_full):
+                            component_indices.add(idx_pos)
+                    except Exception:
+                        continue
+                if component_indices:
+                    component_index_sets.append(component_indices)
+
+            # Compute intersection: only indices present in ALL components
+            if len(component_index_sets) > 0:
+                common_indices = component_index_sets[0]
+                for idx_set in component_index_sets[1:]:
+                    common_indices = common_indices & idx_set
+
+                # Convert intersection indices back to timestamps
+                intersection_timestamps = [idx_full[i] for i in sorted(common_indices)]
+            else:
+                intersection_timestamps = []
+
+            # CRITICAL: Store that we want ALL components highlighted
+            self._selected_component_labels = list(line_contributions.keys())
+
+            # CRITICAL: Also store on active pane for multi-pane compatibility
+            if hasattr(self, 'active_pane'):
+                self.active_pane._selected_component_labels = list(line_contributions.keys())
+
+            self._finalize_box_selection(intersection_timestamps)
+
+        def on_cancel():
+            """User cancelled - clear selection."""
+            dialog.destroy()
+            self._cancel_active_selection()
+
+        # Create button for each component
+        row = 0
+        col = 0
+        for component_label, timestamps in sorted_components:
+            point_count = len(timestamps)
+            btn_text = f"{component_label}\n({point_count} pts)"
+
+            btn = ttk.Button(
+                btn_frame,
+                text=btn_text,
+                width=12,
+                command=lambda label=component_label: on_component_select(label)
+            )
+            btn.grid(row=row, column=col, padx=5, pady=5)
+
+            col += 1
+            if col >= 3:  # 3 buttons per row
+                col = 0
+                row += 1
+
+        # Separator
+        separator = ttk.Separator(dialog, orient='horizontal')
+        separator.pack(fill='x', padx=20, pady=10)
+
+        # "All" button - count INTERSECTION of timestamps across all components
+        # This gives timestamps where ALL components have selected points
+        idx_full = self.df.index
+
+        # Convert each component's timestamps to a set of dataframe indices
+        component_index_sets = []
+        for component_label, ts_list in line_contributions.items():
+            component_indices = set()
+            for ts in ts_list:
+                try:
+                    idx_pos = idx_full.get_indexer([ts], method='nearest')[0]
+                    if 0 <= idx_pos < len(idx_full):
+                        component_indices.add(idx_pos)
+                except Exception:
+                    continue
+            if component_indices:  # Only add non-empty sets
+                component_index_sets.append(component_indices)
+
+        # Compute intersection: only indices present in ALL components
+        if len(component_index_sets) > 0:
+            # Start with first set, intersect with all others
+            common_indices = component_index_sets[0]
+            for idx_set in component_index_sets[1:]:
+                common_indices = common_indices & idx_set  # Set intersection
+            unique_count = len(common_indices)
+        else:
+            unique_count = 0
+
+        all_btn = ttk.Button(
+            dialog,
+            text=f"All Components ({unique_count} pts)",
+            width=30,
+            command=on_select_all
+        )
+        all_btn.pack(pady=5)
+
+        # Cancel button
+        cancel_btn = ttk.Button(
+            dialog,
+            text="Cancel",
+            width=30,
+            command=on_cancel
+        )
+        cancel_btn.pack(pady=(5, 15))
+
+        # Bind Escape key to cancel
+        dialog.bind('<Escape>', lambda e: on_cancel())
+
+        # Store dialog reference (in case we need to close it programmatically)
+        self._component_dialog = dialog

@@ -41,7 +41,7 @@ class IntervalCommandsMixin:
 
         self.status_var.set("Undo")  # type: ignore[union-attr]
         self._update_plot()
-        self._maybe_autosave()
+        self._save_autosave()
 
     def _redo(self) -> None:
         if not self.redo_stack:
@@ -63,4 +63,4 @@ class IntervalCommandsMixin:
 
         self.status_var.set("Redo")  # type: ignore[union-attr]
         self._update_plot()
-        self._maybe_autosave()
+        self._save_autosave()
