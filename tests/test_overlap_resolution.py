@@ -736,6 +736,44 @@ class TestPolicyApplication:
             assert len(result) == 1
             assert result[0] == spans[0]
 
+    def test_skip_policy_is_idempotent(self, mixin):
+        """
+        Applying the skip policy twice returns the same result as applying
+        it once.  The by-rule preview fix (commit c8c15a1) carves spans
+        through this helper at preview-time and then `_add_intervals_with_policy`
+        carves them again at add-time -- so this idempotency is a load-bearing
+        invariant: the second carve must be a no-op.
+        """
+        mixin.intervals = [
+            # Two existing intervals carving holes into the candidate spans
+            Interval(
+                pd.Timestamp("2024-01-01 00:10:00"),
+                pd.Timestamp("2024-01-01 00:20:00"),
+                "A",
+            ),
+            Interval(
+                pd.Timestamp("2024-01-01 00:35:00"),
+                pd.Timestamp("2024-01-01 00:45:00"),
+                "B",
+            ),
+        ]
+
+        candidate_spans = [
+            # Spans the rule preview would generate, intersecting both intervals
+            (pd.Timestamp("2024-01-01 00:00:00"), pd.Timestamp("2024-01-01 00:25:00")),
+            (pd.Timestamp("2024-01-01 00:30:00"), pd.Timestamp("2024-01-01 00:50:00")),
+        ]
+
+        once = mixin._apply_overlap_policy_to_spans(candidate_spans, "skip")
+        twice = mixin._apply_overlap_policy_to_spans(once, "skip")
+
+        # The second pass must not carve anything further.
+        assert twice == once
+
+        # And the carve must have actually happened on the first pass --
+        # otherwise this test would be vacuously true.
+        assert once != candidate_spans
+
 
 # ============================================================================
 # Integration Tests
