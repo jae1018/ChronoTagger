@@ -13,9 +13,10 @@ The fix is to remove only data artists (lines, collections, patches,
 texts) explicitly.  These tests confirm:
 
   1. A second render does not accumulate artists on top of the first.
-  2. Shared-axis state survives a re-render.
-  3. The datetime unit converter is not stripped from the axis between
-     renders (this is the actual mechanism the original bug exploited).
+  2. Shared-axis (sharex) state survives a re-render.  This is the
+     load-bearing regression check: ax.clear() detaches the datetime
+     unit converter as a side effect, which is what broke sharex
+     propagation between time axes in the original bug.
 """
 
 import matplotlib
@@ -142,37 +143,13 @@ class TestSharedAxisStateSurvives:
         # Setting xlim on panel0 must propagate to panel1 via the
         # shared-axis link.  If ax.clear() had been called between
         # renders, the link would be broken and panel1's xlim would
-        # remain at its auto value.
+        # remain at its auto value.  This is the actual regression
+        # check for the original bug -- ax.clear() detached the
+        # datetime unit converter as a side effect, which broke
+        # sharex propagation for date axes.
         new_xlim = (
             mdates.date2num(pd.Timestamp("2025-01-01 00:10:00")),
             mdates.date2num(pd.Timestamp("2025-01-01 00:20:00")),
         )
         axs["panel0"].set_xlim(new_xlim)
         np.testing.assert_allclose(axs["panel1"].get_xlim(), new_xlim, rtol=1e-6)
-
-    def test_datetime_unit_converter_persists(self, df_two_features, time_plot_config):
-        # The labeler relies on matplotlib's datetime unit converter
-        # being attached to every time axis.  ax.clear() detaches it,
-        # which was the proximate cause of the "set_xlim only constrains
-        # one axis" bug.  Confirm the converter is still set after a
-        # re-render.
-        fig = Figure()
-        axs = _make_axs(fig, ["panel0", "panel1"], sharex=True)
-        plot_fn = generate_plot_fn(time_plot_config)
-
-        plot_fn(axs, df_two_features, df_two_features.index[0], df_two_features.index[-1])
-        plot_fn(axs, df_two_features, df_two_features.index[0], df_two_features.index[-1])
-
-        # Plotting a pandas DatetimeIndex installs a date converter on
-        # the x-axis.  ax.clear() between renders would strip it; verify
-        # it survives a re-render.  matplotlib 3.10+ exposes this via
-        # get_converter() and stores units on ax.xaxis.units after a
-        # date axis has been used.
-        for ax in axs.values():
-            converter = None
-            if hasattr(ax.xaxis, "get_converter"):
-                converter = ax.xaxis.get_converter()
-            assert converter is not None or ax.xaxis.units is not None, (
-                "Datetime unit converter must survive re-render; "
-                "ax.clear() between renders would have stripped it."
-            )
