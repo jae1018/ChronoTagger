@@ -46,6 +46,7 @@ chronotagger_autosave*
 # Local scratch / dev artifacts
 debug/
 nul
+figs_for_showoff/
 
 # Example data files are large mission datasets the user supplies
 # locally -- never commit these (or the autosave files they generate).
