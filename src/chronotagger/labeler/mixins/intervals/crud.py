@@ -111,22 +111,37 @@ class IntervalCRUDMixin:
         """
         count = 0
 
-        if policy == "replace":
-            # Carve out existing intervals, then add new ones
-            for s, e in spans:
-                if e <= s:
-                    continue
-                self._carve_existing_for_new_span(s, e)
-                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
-                count += 1
-        else:
-            # Skip overlaps - only add non-overlapping portions
-            final_spans = self._apply_overlap_policy_to_spans(spans, "skip")
-            for s, e in final_spans:
-                if e <= s:
-                    continue
-                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
-                count += 1
+        # One user gesture -> one undo entry, however many spans/carves.
+        # If the gesture turns out to be a net no-op (nothing actually
+        # changed), report that honestly instead of "Added N" (fold V3).
+        # Detect the push by IDENTITY of the stack top, not by length:
+        # at max_undo the push+trim leaves the length unchanged
+        # (recheck M2 -- a length check falsely reported "Nothing
+        # Added" and skipped sync/autosave once the stack was full).
+        _top_before = self.undo_stack[-1] if self.undo_stack else None
+        with self._gesture(f"add {label} interval(s)"):
+            if policy == "replace":
+                # Carve out existing intervals, then add new ones
+                for s, e in spans:
+                    if e <= s:
+                        continue
+                    self._carve_existing_for_new_span(s, e)
+                    self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+                    count += 1
+            else:
+                # Skip overlaps - only add non-overlapping portions
+                final_spans = self._apply_overlap_policy_to_spans(spans, "skip")
+                for s, e in final_spans:
+                    if e <= s:
+                        continue
+                    self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+                    count += 1
+        pushed = bool(self.undo_stack) and self.undo_stack[-1] is not _top_before
+        if count > 0 and not pushed:
+            # Attempts were made but nothing changed (e.g. same-label
+            # replace over an identical existing interval): route to the
+            # "Nothing Added" branch rather than claiming success.
+            count = 0
 
         if count > 0:
             # Sync intervals across all panes
@@ -510,7 +525,7 @@ class IntervalCRUDMixin:
         4. Right overlap: Truncate to keep right part (after t1)
         5. Spanning: Split into left and right parts (before t0 and after t1)
 
-        All operations use commands for proper undo/redo support.
+        The whole clear runs as one gesture: a single undo entry.
 
         Args:
             t0: Start of range to clear
@@ -526,44 +541,47 @@ class IntervalCRUDMixin:
         # Snapshot intervals (commands will modify the list)
         intervals_to_process = list(self.intervals)
 
-        for iv in intervals_to_process:
-            # Case 1: No overlap - skip
-            if iv.end <= t0 or iv.start >= t1:
-                continue
+        # One user gesture -> one undo entry, matching the dialog's
+        # promise of a single Undo.
+        with self._gesture("clear range"):
+            for iv in intervals_to_process:
+                # Case 1: No overlap - skip
+                if iv.end <= t0 or iv.start >= t1:
+                    continue
 
-            # Case 2: Fully inside range - delete
-            if iv.start >= t0 and iv.end <= t1:
-                self._execute_command(DeleteIntervalCommand(self, iv))
-                deleted += 1
-                continue
+                # Case 2: Fully inside range - delete
+                if iv.start >= t0 and iv.end <= t1:
+                    self._execute_command(DeleteIntervalCommand(self, iv))
+                    deleted += 1
+                    continue
 
-            # Case 3: Left overlap - keep left part (truncate at t0)
-            if iv.start < t0 and iv.end > t0 and iv.end <= t1:
-                self._execute_command(ResizeIntervalCommand(self, iv, iv.start, t0))
-                truncated += 1
-                continue
+                # Case 3: Left overlap - keep left part (truncate at t0)
+                if iv.start < t0 and iv.end > t0 and iv.end <= t1:
+                    self._execute_command(ResizeIntervalCommand(self, iv, iv.start, t0))
+                    truncated += 1
+                    continue
 
-            # Case 4: Right overlap - keep right part (truncate at t1)
-            if iv.start >= t0 and iv.start < t1 and iv.end > t1:
-                self._execute_command(ResizeIntervalCommand(self, iv, t1, iv.end))
-                truncated += 1
-                continue
+                # Case 4: Right overlap - keep right part (truncate at t1)
+                if iv.start >= t0 and iv.start < t1 and iv.end > t1:
+                    self._execute_command(ResizeIntervalCommand(self, iv, t1, iv.end))
+                    truncated += 1
+                    continue
 
-            # Case 5: Spans entire range - split into left + right parts
-            if iv.start < t0 and iv.end > t1:
-                # Delete original interval
-                self._execute_command(DeleteIntervalCommand(self, iv))
+                # Case 5: Spans entire range - split into left + right parts
+                if iv.start < t0 and iv.end > t1:
+                    # Delete original interval
+                    self._execute_command(DeleteIntervalCommand(self, iv))
 
-                # Add left part (before clear range)
-                left_interval = Interval(iv.start, t0, iv.label, iv.notes)
-                self._execute_command(AddIntervalCommand(self, left_interval))
+                    # Add left part (before clear range)
+                    left_interval = Interval(iv.start, t0, iv.label, iv.notes)
+                    self._execute_command(AddIntervalCommand(self, left_interval))
 
-                # Add right part (after clear range)
-                right_interval = Interval(t1, iv.end, iv.label, iv.notes)
-                self._execute_command(AddIntervalCommand(self, right_interval))
+                    # Add right part (after clear range)
+                    right_interval = Interval(t1, iv.end, iv.label, iv.notes)
+                    self._execute_command(AddIntervalCommand(self, right_interval))
 
-                split += 1
-                continue
+                    split += 1
+                    continue
 
         return {
             'deleted': deleted,
@@ -796,27 +814,3 @@ class IntervalCRUDMixin:
         idx_start = sub.index[sub.index.get_indexer([t_start], method="nearest")[0]]
         idx_end = sub.index[sub.index.get_indexer([t_end], method="nearest")[0]]
         return idx_start, idx_end
-
-    def _clear_all_intervals(self) -> None:
-        """Delete every interval, reset selection/undo stacks, and refresh UI."""
-        if not self.intervals:
-            return
-        from tkinter import messagebox  # local import to keep mixin self-contained
-        if messagebox.askyesno("Clear All", f"Delete all {len(self.intervals)} intervals?"):
-            self.intervals.clear()
-            self.selected_interval = None
-
-            # Sync intervals across all panes
-            self.sync_manager.sync_intervals_changed()
-
-            # Clear interval highlights when all intervals are cleared
-            if hasattr(self, '_clear_selected_interval_highlights'):
-                self._clear_selected_interval_highlights()
-            self.undo_stack.clear()
-            self.redo_stack.clear()
-            self.modified = True
-            # Refresh UI
-            self._update_plot()
-            self._update_intervals_list()
-            if self.status_var is not None:
-                self.status_var.set("All intervals cleared")

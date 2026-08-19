@@ -34,6 +34,16 @@ class LabelsMixin:
 
     # ---- apply result (single place to keep logic tidy) ----
     def _apply_label_manager_result(self, res: LabelManagerResult) -> None:
+        # Renames, reassignments, and class-set changes mutate interval
+        # labels in place, outside the gesture/undo system. Undoing past
+        # such an edit would restore intervals carrying labels the schema
+        # no longer contains (which the ML export silently maps to -1),
+        # so those edits invalidate the undo history. A pure recolor or
+        # reorder changes no interval and keeps the history (fold V2-M2).
+        if res.rename_map or res.reassign_map or set(res.classes) != set(self.classes):
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+
         # Rename pass
         if res.rename_map:
             for iv in self.intervals:
@@ -66,6 +76,11 @@ class LabelsMixin:
                 if new_sel not in self.classes:
                     new_sel = fallback or (self.classes[0] if self.classes else "")
                 self.current_class_var.set(new_sel)
+
+        # Schema edits are real modifications: mark, sync, and autosave.
+        self.modified = True
+        self.sync_manager.sync_intervals_changed()
+        self._save_autosave()
 
         # Redraw everything (sidebar tags, strip colors, etc.)
         self._update_plot()

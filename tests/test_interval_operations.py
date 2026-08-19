@@ -95,30 +95,29 @@ class TestBasicIntervalOperations:
         """Test adding a simple interval with no overlaps."""
         t1, t2 = labeler.df.index[10], labeler.df.index[20]
         interval = Interval(t1, t2, "TestLabel", "Test notes")
-        
-        cmd = AddIntervalCommand(labeler, interval)
-        cmd.execute()
-        
+
+        labeler._execute_command(AddIntervalCommand(labeler, interval))
+
         assert len(labeler.intervals) == 1
         assert labeler.intervals[0] == interval
-        
+
         # Test undo
-        cmd.undo()
+        labeler._undo()
         assert len(labeler.intervals) == 0
     
     def test_delete_interval(self, labeler_with_intervals):
         """Test deleting an interval."""
         initial_count = len(labeler_with_intervals.intervals)
         to_delete = labeler_with_intervals.intervals[1]
-        
-        cmd = DeleteIntervalCommand(labeler_with_intervals, to_delete)
-        cmd.execute()
-        
+
+        labeler_with_intervals._execute_command(
+            DeleteIntervalCommand(labeler_with_intervals, to_delete))
+
         assert len(labeler_with_intervals.intervals) == initial_count - 1
         assert to_delete not in labeler_with_intervals.intervals
-        
-        # Test undo
-        cmd.undo()
+
+        # Test undo (value equality: the restored copy counts)
+        labeler_with_intervals._undo()
         assert len(labeler_with_intervals.intervals) == initial_count
         assert to_delete in labeler_with_intervals.intervals
     
@@ -127,39 +126,41 @@ class TestBasicIntervalOperations:
         interval = labeler_with_intervals.intervals[0]
         original_label = interval.label
         new_label = "NewLabel"
-        
-        cmd = RelabelIntervalCommand(labeler_with_intervals, interval, new_label)
-        cmd.execute()
-        
-        assert interval.label == new_label
-        
+
+        labeler_with_intervals._execute_command(
+            RelabelIntervalCommand(labeler_with_intervals, interval, new_label))
+
+        # Assert on the list, not the caller's object: snapshot undo
+        # restores value-copies (see G2 harness map).
+        assert labeler_with_intervals.intervals[0].label == new_label
+
         # Test undo
-        cmd.undo()
-        assert interval.label == original_label
+        labeler_with_intervals._undo()
+        assert labeler_with_intervals.intervals[0].label == original_label
     
     def test_resize_interval(self, labeler_with_intervals):
         """Test resizing an interval."""
         interval = labeler_with_intervals.intervals[0]
         original_start = interval.start
         original_end = interval.end
-        
+
         # Resize to be longer
         new_start = original_start - pd.Timedelta(minutes=5)
         new_end = original_end + pd.Timedelta(minutes=5)
-        
-        cmd = ResizeIntervalCommand(labeler_with_intervals, interval, 
-                                   new_start, new_end)
-        cmd.execute()
-        
+
+        labeler_with_intervals._execute_command(
+            ResizeIntervalCommand(labeler_with_intervals, interval,
+                                  new_start, new_end))
+
         # Original interval removed, new one added
         assert interval not in labeler_with_intervals.intervals
         # Find the new interval with same label
-        new_intervals = [iv for iv in labeler_with_intervals.intervals 
+        new_intervals = [iv for iv in labeler_with_intervals.intervals
                         if iv.label == interval.label]
         assert len(new_intervals) >= 1
-        
-        # Test undo
-        cmd.undo()
+
+        # Test undo (value equality: the restored copy counts)
+        labeler_with_intervals._undo()
         assert interval in labeler_with_intervals.intervals
 
 
@@ -808,31 +809,28 @@ class TestIntervalIntegration:
         assert len(labeler.intervals) == 0
     
     def test_adjacent_operations_with_merging(self, labeler):
-        """Test that adjacent operations trigger proper merging."""
+        """Adjacent same-label add merges; undo restores the exact
+        pre-add state (regression: the in-command auto-merge used to
+        make this a silent no-op or delete pre-existing data)."""
         idx = labeler.df.index
-        
-        # Add two intervals that will become adjacent after operation
-        interval1 = Interval(idx[10], idx[20], "A")
-        interval2 = Interval(idx[25], idx[35], "A")
-        interval_middle = Interval(idx[20], idx[25], "B")
-        
-        labeler._execute_command(AddIntervalCommand(labeler, interval1))
-        labeler._execute_command(AddIntervalCommand(labeler, interval2))
-        labeler._execute_command(AddIntervalCommand(labeler, interval_middle))
-        
-        assert len(labeler.intervals) == 3
-        
-        # Delete the middle interval
-        labeler._execute_command(DeleteIntervalCommand(labeler, interval_middle))
-        
-        # Change label of second interval to match first
-        intervals_a = [iv for iv in labeler.intervals if iv.label == "A"]
-        if len(intervals_a) == 2:
-            # They should be adjacent now, but not merged until we call merge
-            labeler._sort_and_merge_intervals()
-            
-            # If they were truly adjacent, they might merge
-            # Depends on exact boundaries
+
+        labeler._execute_command(AddIntervalCommand(labeler, Interval(idx[10], idx[20], "A")))
+        labeler._execute_command(AddIntervalCommand(labeler, Interval(idx[20], idx[30], "A")))
+
+        # Merged into one
+        assert len(labeler.intervals) == 1
+        assert labeler.intervals[0].start == idx[10]
+        assert labeler.intervals[0].end == idx[30]
+
+        # Undo the second add: the first must come back exactly
+        labeler._undo()
+        assert len(labeler.intervals) == 1
+        assert labeler.intervals[0].start == idx[10]
+        assert labeler.intervals[0].end == idx[20]
+
+        # Undo the first add: empty
+        labeler._undo()
+        assert len(labeler.intervals) == 0
 
 
 # ============================================================================

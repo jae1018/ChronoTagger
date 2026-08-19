@@ -53,3 +53,6 @@ figs_for_showoff/
 examples/data/
 examples/autosave/
 
+# Agent working area: edit packs, evidence maps, lessons, impl logs
+edit_pack/
+

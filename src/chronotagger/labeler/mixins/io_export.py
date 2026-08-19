@@ -134,6 +134,17 @@ class IOExportMixin:
         self.step = pd.Timedelta(data["step"])
         self.intervals = [Interval.from_dict(d) for d in data["intervals"]]
 
+        # A loaded session invalidates the undo history and any selection
+        # made against the previous session's interval objects. In strict
+        # mode, validate the loaded set NOW so a corrupt session file is
+        # blamed on the load, not on the user's next gesture (fold V3-M3).
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.selected_interval = None
+        if hasattr(self, '_clear_selected_interval_highlights'):
+            self._clear_selected_interval_highlights()
+        self._check_interval_invariants()
+
         self.modified = False
 
         if self.class_combo is not None and self.current_class_var is not None:

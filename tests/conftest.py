@@ -2,10 +2,25 @@
 import matplotlib
 matplotlib.use("Agg")
 
+import os
+
 import pytest
 import pandas as pd
 import numpy as np
 import tkinter as tk
+
+# Strict mode for the whole suite: the no-overlap invariant raises
+# loudly instead of letting corruption pass silently. A pre-existing
+# CHRONOTAGGER_STRICT in the environment wins (setdefault).
+os.environ.setdefault("CHRONOTAGGER_STRICT", "1")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cwd(tmp_path, monkeypatch):
+    """Run every test from a temp CWD so constructors that default to
+    autosave_folder='.' (20+ direct constructions across the suite)
+    can never touch a real autosave file."""
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture
@@ -36,7 +51,7 @@ def plot_fn():
 
 
 @pytest.fixture
-def labeler(df_hour, plot_fn):
+def labeler(df_hour, plot_fn, tmp_path):
     """Create a labeler with GUI built but window withdrawn (no popup)."""
     from chronotagger.labeler import TimeIntervalLabeler
 
@@ -55,6 +70,7 @@ def labeler(df_hour, plot_fn):
         df=df_hour,
         plot_fn=plot_fn,
         window=pd.Timedelta("30min"),
+        autosave_folder=str(tmp_path),
         layout_spec=layout_spec
     )
     lbl._build_gui()           # build axes & widgets

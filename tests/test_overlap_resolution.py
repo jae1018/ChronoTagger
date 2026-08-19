@@ -43,6 +43,10 @@ class MockIntervalsMixin:
         self._execute_command = IntervalsMixin._execute_command.__get__(self)
         self._remove_overlapping_intervals = IntervalsMixin._remove_overlapping_intervals.__get__(self)
         self._sort_and_merge_intervals = IntervalsMixin._sort_and_merge_intervals.__get__(self)
+        # Gesture plumbing used by _execute_command (Pack 1)
+        self._gesture = IntervalsMixin._gesture.__get__(self)
+        self._check_interval_invariants = IntervalsMixin._check_interval_invariants.__get__(self)
+        self._repoint_selected_interval = IntervalsMixin._repoint_selected_interval.__get__(self)
 
 
 @pytest.fixture

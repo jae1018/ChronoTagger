@@ -20,27 +20,6 @@ from chronotagger.core.commands import AddIntervalCommand
 class IntervalGapsMixin:
     """Mixin providing gap detection and labeling functionality."""
 
-    def _assign_remainder(self) -> None:
-        """Label unlabeled gaps in the current window as UNKNOWN."""
-        if "UNKNOWN" not in self.classes:
-            messagebox.showwarning("No UNKNOWN Class", "UNKNOWN class is not defined.")
-            return
-
-        # Find gaps and assign to UNKNOWN
-        gaps = self._find_gaps_in_current_range()
-
-        if not gaps:
-            self.status_var.set("No unassigned time in current window")  # type: ignore[union-attr]
-            return
-
-        # Create UNKNOWN intervals for each gap
-        for s, e in gaps:
-            self._execute_command(AddIntervalCommand(self, Interval(s, e, "UNKNOWN")))
-
-        self.status_var.set(f"Assigned {len(gaps)} UNKNOWN intervals")  # type: ignore[union-attr]
-        self._update_plot()
-        self._save_autosave()
-
     def _find_gaps_in_current_range(self) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
         """
         Find all unassigned time gaps in the current window [t0, t1].
@@ -269,9 +248,11 @@ class IntervalGapsMixin:
         if not gaps:
             return
 
-        # Create intervals for each gap with the specified label
-        for s, e in gaps:
-            self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+        # Create intervals for each gap with the specified label.
+        # One gesture: the whole fill is a single undo entry.
+        with self._gesture(f"fill {len(gaps)} gap(s) as {label}"):
+            for s, e in gaps:
+                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
 
         # Update UI
         self.status_var.set(f"Assigned {len(gaps)} interval(s) to {label}")  # type: ignore[union-attr]

@@ -174,7 +174,7 @@ class TimeIntervalLabeler(
         # Undo/redo
         self.undo_stack: List[Command] = []
         self.redo_stack: List[Command] = []
-        self.max_undo: int = 20
+        self.max_undo: int = 50  # gesture-level entries; each holds two list snapshots
 
         # Persistence - Autosave configuration
         self.autosave_folder = Path(autosave_folder)
@@ -342,6 +342,17 @@ class TimeIntervalLabeler(
             if choice == 'recover':
                 # Load intervals from autosave
                 self.intervals = autosave_data['intervals']
+                # Recovery replaces the interval list wholesale; stale
+                # commands and selections must not survive it. In strict
+                # mode, validate the recovered set NOW so a corrupt
+                # pre-pack autosave is blamed on the recovery, not on
+                # the user's next gesture (fold V3-M3).
+                self.undo_stack.clear()
+                self.redo_stack.clear()
+                self.selected_interval = None
+                if hasattr(self, '_clear_selected_interval_highlights'):
+                    self._clear_selected_interval_highlights()
+                self._check_interval_invariants()
                 # Sync intervals across all panes
                 self.sync_manager.sync_intervals_changed()
                 # Refresh UI to show loaded intervals

@@ -21,7 +21,7 @@ ChronoTagger is a powerful, interactive GUI for labeling time intervals on matpl
 - **Overlap resolution** - Smart handling when selections overlap existing intervals
 - **ML-ready exports** - Integer labels with JSON mapping for direct model training
 - **Performance optimized** - PolyCollection overlays for 10-30× faster rendering
-- **Complete undo/redo** - Full command stack with keyboard shortcuts
+- **Gesture-level undo/redo** - One undo step per user action, however many intervals it touched
 - **Professional label management** - Add, rename, recolor, reorder, reassign labels
 
 ## See it in action
@@ -160,7 +160,7 @@ When adding intervals that overlap existing ones:
    - **Skip** - Only label unassigned regions (preserve existing)
    - **Replace** - Delete conflicting intervals (new takes priority)
 3. **Preview** - See result before confirming
-4. **Undo Support** - All operations reversible with Ctrl+Z
+4. **Undo Support** - Labeling operations reversible with Ctrl+Z (session loads, autosave recovery, and label-schema edits reset the undo history)
 
 ## Advanced Features
 

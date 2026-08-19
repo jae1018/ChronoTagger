@@ -50,7 +50,7 @@ src/chronotagger/
 - **`launcher.py`** is the `chronotagger` console script. It launches `quickstart.wizard.run()`, which guides the user through file loading and tab/layout configuration, then constructs a `TimeIntervalLabeler` with the configured panes and runs it.
 
 - **`labeler/app.TimeIntervalLabeler`** is the heavyweight class. Behavior is split across mixins so any one file stays readable:
-  - `core.commands` provides the undo/redo command pattern; every mutation goes through a `Command` so it can be reversed.
+  - `core.commands` provides gesture-based undo/redo: each user gesture is captured as one `GestureCommand` holding before/after snapshots of the interval list, and undo/redo restore those snapshots wholesale. Session loads, autosave recovery, and label-schema edits invalidate the undo history instead of participating in it.
   - `mixins.intervals` owns interval CRUD, overlap policy resolution, gap-fill, and merging.
   - `mixins.events` (subpackage) handles mouse/keyboard input, drag-selection, two-click selection, box selection on time and not-time axes, and highlight overlays.
   - `mixins.view_build` (subpackage) builds the Tk window, the matplotlib canvas, the toolbar, and the sidebar.
