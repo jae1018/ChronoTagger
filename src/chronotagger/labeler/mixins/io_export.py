@@ -613,8 +613,9 @@ class IOExportMixin:
         sorted_intervals = sorted(self.intervals, key=lambda iv: iv.start)
         
         for interval in sorted_intervals:
-            # Calculate total labeled count (for estimation)
-            interval_mask = (self.df.index >= interval.start) & (self.df.index <= interval.end)
+            # Calculate total labeled count (half-open, matching the CSV's
+            # _compute_label_id_series -- Pack 3 R13)
+            interval_mask = (self.df.index >= interval.start) & (self.df.index < interval.end)
             interval_size = interval_mask.sum()
             total_labeled_count += interval_size
             

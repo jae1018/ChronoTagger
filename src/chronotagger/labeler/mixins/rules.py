@@ -334,34 +334,6 @@ class RulesMixin:
             runs.append((i0, i - 1))
         return runs
 
-    def _runs_to_preview_and_commit(
-        self, 
-        idx: pd.DatetimeIndex, 
-        runs: List[Tuple[int, int]]
-    ) -> tuple[List[tuple[pd.Timestamp, pd.Timestamp]], List[tuple[pd.Timestamp, pd.Timestamp]]]:
-        """
-        Convert index runs to preview and commit timestamp spans.
-        
-        Preview spans end AT the last included sample (for display).
-        Commit spans are half-open [start, next(last)) (for actual labeling).
-        
-        Args:
-            idx: DatetimeIndex to extract timestamps from
-            runs: List of inclusive (start_idx, end_idx) tuples
-            
-        Returns:
-            Tuple of (preview_spans, commit_spans) where each is a list of
-            (start_timestamp, end_timestamp) tuples
-        """
-        preview_spans: List[tuple[pd.Timestamp, pd.Timestamp]] = []
-        for i0, i1 in runs:
-            preview_spans.append((pd.Timestamp(idx[i0]), pd.Timestamp(idx[i1])))
-        
-        # Reuse the half-open interval logic from EventsMixin
-        commit_spans = self._runs_to_half_open_intervals(idx, runs)
-        
-        return preview_spans, commit_spans
-
     def _clip_spans_to_window(
         self,
         spans: List[tuple[pd.Timestamp, pd.Timestamp]],

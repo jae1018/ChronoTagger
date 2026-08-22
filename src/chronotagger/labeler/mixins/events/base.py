@@ -14,6 +14,10 @@ from tkinter import messagebox
 import pandas as pd
 import matplotlib.dates as mdates
 
+# Name-tag prefix for every artist the tool draws on user axes. Artist
+# scans skip anything carrying this prefix: ink is not data (Pack 3, T1).
+TOOL_GID_PREFIX = "chronotagger:"
+
 
 class EventsBaseMixin:
     """Base mixin providing utility methods for event handling and time operations."""
@@ -83,12 +87,6 @@ class EventsBaseMixin:
         # x is a Matplotlib date float or a datetime
         return pd.Timestamp(mdates.num2date(x) if isinstance(x, (int, float)) else x).tz_localize(None)
 
-    def _snap_nearest(self, t):
-        # snap t to the nearest df.index sample (no "inside" trimming)
-        import pandas as pd
-        idx = self.df.index.get_indexer([t], method="nearest")[0]
-        return pd.Timestamp(self.df.index[idx]).tz_localize(None) if idx >= 0 else t
-
     def _preview_selection(self, start, end) -> None:
         """Show live preview across panels using current_selection (blitted)."""
         import matplotlib.dates as mdates
@@ -148,4 +146,53 @@ class EventsBaseMixin:
                 e = cap
 
             out.append((s, e))
+        return out
+
+    def _exact_spans_to_half_open(
+        self,
+        spans: list[tuple[pd.Timestamp, pd.Timestamp]],
+    ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+        """
+        Convert closed spans whose end sits ON a sample into half-open:
+          [s, e_on_sample]  ->  [s, next_sample)   (or e + 1ns past data_end)
+        Ends that fall BETWEEN samples are already half-open-correct and pass
+        through unchanged. Span-level twin of _runs_to_half_open_intervals;
+        successor of the retired crud._normalize_preview_spans_to_half_open
+        (Pack 3, WYSIWYG doctrine).
+        """
+        out: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+        idx = self.df.index
+        n = len(idx)
+
+        for s, e in spans:
+            try:
+                loc = idx.get_loc(e)
+                # handle duplicate timestamps (slice) or scalar int
+                if isinstance(loc, slice):
+                    j = loc.stop - 1
+                else:
+                    j = int(loc)
+                if j + 1 < n:
+                    e2 = pd.Timestamp(idx[j + 1])
+                else:
+                    e2 = self._end_after_inclusive(pd.Timestamp(idx[j]))
+            except KeyError:
+                e2 = e  # not on a sample -> already exclusive-correct
+            except Exception:
+                e2 = e
+
+            # allow at most an epsilon beyond data_end (same cap as
+            # _runs_to_half_open_intervals). Guarded: the retired crud helper
+            # could never raise, and this one runs on the redraw path
+            # (plotting.py:181 -> _show_selected_point_highlights). max(cap, s)
+            # keeps the output a valid (possibly empty) span even for input
+            # entirely past data_end.
+            try:
+                cap = self.data_end + pd.Timedelta(nanoseconds=1)
+                if e2 > cap:
+                    e2 = max(cap, s)
+            except Exception:
+                pass
+
+            out.append((s, e2))
         return out

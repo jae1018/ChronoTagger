@@ -15,6 +15,8 @@ from matplotlib.collections import PolyCollection
 import pandas as pd
 import numpy as np
 
+from .base import TOOL_GID_PREFIX
+
 
 class OverlaysMixin:
     """
@@ -141,6 +143,8 @@ class OverlaysMixin:
                     alpha=0.25,
                     zorder=ax.get_zorder() + 10,
                 )
+                # Name-tag as tool ink so artist scans skip it (T1)
+                poly.set_gid(TOOL_GID_PREFIX + "multispan-overlay")
                 # NOTE: NOT using set_animated(True) - PolyCollections blit unreliably
                 # Better to use normal rendering for 100% reliability
                 ax.add_collection(poly)

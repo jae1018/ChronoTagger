@@ -256,38 +256,52 @@ class TestBoxSelection:
     
     def test_box_select_on_position_plot(self, labeler_with_position_plot):
         """
-        Box selection on position plot should map spatial selection to time.
-        
-        Position plot shows (X, Y) coordinates, but selection should
-        map back to time intervals based on point ordering.
+        Box selection on a position plot maps spatial selection to time.
+
+        The box is satisfiable BY CONSTRUCTION: |BX| >= 8 implies
+        |sin| >= 0.8 implies |cos| <= 0.6 implies |BY| <= 3. Ground truth
+        is computed vectorized from the windowed dataframe and compared
+        against the samples the commit spans would label (Pack 3, WYSIWYG).
         """
         labeler = labeler_with_position_plot
-        
+
         # Find the position plot axis
         xy_ax = labeler.user_axes.get("xy_plot")
         assert xy_ax is not None
-        
-        # Simulate box selection in position space
-        x_min, x_max = -5, 5  # BX range
-        y_min, y_max = -2, 2  # BY range
-        
+
+        # Simulate box selection in position space (reachable region)
+        x_min, x_max = 8.0, 11.0   # BX range (|BX| peaks at 10)
+        y_min, y_max = -3.0, 3.0   # BY range
+
         eclick = MockEvent(xdata=x_min, ydata=y_min, inaxes=xy_ax)
         erelease = MockEvent(xdata=x_max, ydata=y_max, inaxes=xy_ax)
-        
+
         # Mock the rectangle selector
         labeler.rect_selectors = {"xy_plot": MagicMock()}
-        
+
         # Perform selection (Phase 3 signature: eclick, erelease, pane)
         labeler._on_rectangle_select(eclick, erelease, labeler.active_pane)
-        
-        # Should have created spans based on which points fall in box
-        # The actual mapping depends on data values
-        if labeler.current_spans:
-            # Verify we got time intervals, not position coordinates
-            for start, end in labeler.current_spans:
-                assert isinstance(start, pd.Timestamp)
-                assert isinstance(end, pd.Timestamp)
-                assert start <= end
+
+        # Ground truth: windowed rows whose (BX, BY) fall inside the box
+        win = labeler.df.loc[labeler.t0:labeler.t1]
+        gt = ((win["BX"] >= x_min) & (win["BX"] <= x_max)
+              & (win["BY"] >= y_min) & (win["BY"] <= y_max))
+        expected = set(win.index[gt])
+        assert expected, "the test box must select at least one point"
+
+        # The commit spans must label exactly the ground-truth samples
+        assert labeler._commit_spans
+        got = set()
+        for start, end in labeler._commit_spans:
+            assert isinstance(start, pd.Timestamp)
+            assert isinstance(end, pd.Timestamp)
+            assert start < end
+            got.update(labeler.df.index[(labeler.df.index >= start)
+                                        & (labeler.df.index < end)])
+        assert got == expected
+
+        # And the preview highlights exactly the same samples (WYSIWYG)
+        assert set(labeler._get_preview_timestamps()) == expected
     
     def test_exact_vs_halfopen_intervals(self, labeler):
         """

@@ -271,11 +271,10 @@ class TestOverlapHandling:
         # First interval [10,15] -> [10,12] (trimmed)
         # Second interval [20,25] -> [23,25] (trimmed)
         
-        # Check that no interval occupies the carved space
+        # Check that no interval occupies the carved space: the model's own
+        # half-open overlap predicate is the assertion (Pack 3, R9)
         for iv in labeler_with_intervals.intervals:
-            assert iv.end <= s or iv.start >= e or \
-                   (iv.start < s and iv.end <= e) or \
-                   (iv.start >= s and iv.end > e)
+            assert not Interval(s, e, "test").overlaps(iv)
 
 
 # ============================================================================

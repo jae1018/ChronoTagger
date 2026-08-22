@@ -40,25 +40,24 @@ class IntervalCRUDMixin:
         4. On confirm, add intervals with chosen policy
         """
         commit_spans = getattr(self, "_commit_spans", []) or []
-        preview_spans = getattr(self, "current_spans", []) or []
         current_selection = getattr(self, "current_selection", None)
 
         label = self.current_class_var.get()  # type: ignore[union-attr]
 
         # Determine which spans to work with
         if commit_spans:
-            # Rule-driven or manual with preview
+            # Already in commit form: sample-aligned half-open for box lanes,
+            # padded exclusive bounds for rules (rules are fenced by R7).
             spans_to_check = commit_spans
-        elif preview_spans:
-            # Box-select path
-            spans_to_check = self._normalize_preview_spans_to_half_open(preview_spans)
         elif current_selection:
-            # Single-span path
+            # Single-span path (two-click / full-height / strip preview)
             s, e = current_selection
             if e <= s:
                 messagebox.showwarning("Invalid Selection", "End time must be after start time.")
                 return
-            spans_to_check = [(s, e)]
+            # WYSIWYG: an end landing exactly ON a sample means the user
+            # selected that sample -- convert to half-open so it is labeled.
+            spans_to_check = self._exact_spans_to_half_open([(s, e)])
         else:
             messagebox.showwarning("No Selection", "Select a time range first (drag or click×2).")
             return
@@ -155,36 +154,6 @@ class IntervalCRUDMixin:
                 "Nothing Added",
                 "No intervals added after applying overlap policy."
             )
-
-    def _normalize_preview_spans_to_half_open(
-        self, spans: List[Tuple[pd.Timestamp, pd.Timestamp]]
-    ) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
-        """
-        Convert preview spans that end AT the last included sample into half-open:
-          [s, e]  -> [s, next(e))   (or e+1ns if e is the last sample)
-        """
-        out: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
-        idx = self.df.index
-
-        for s, e in spans:
-            try:
-                loc = idx.get_loc(e)
-                # handle duplicate timestamps (slice) or scalar int
-                if isinstance(loc, slice):
-                    j = loc.stop - 1
-                else:
-                    j = int(loc)
-                if j + 1 < len(idx):
-                    e2 = idx[j + 1]
-                else:
-                    e2 = e + pd.Timedelta(nanoseconds=1)
-                out.append((s, e2))
-            except KeyError:
-                # e not exactly on a sample -> keep as-is (already half-open-ish)
-                out.append((s, e))
-            except Exception:
-                out.append((s, e))
-        return out
 
     # ---- UPDATE operations ----
     def _relabel_interval(self) -> None:

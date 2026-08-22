@@ -18,6 +18,8 @@ import matplotlib.dates as mdates
 import pandas as pd
 import numpy as np
 
+from .base import TOOL_GID_PREFIX
+
 
 class SelectionMixin:
     """Mixin providing selection-related event handlers and utilities."""
@@ -177,20 +179,16 @@ class SelectionMixin:
                 self.canvas.draw_idle()
                 return
 
-            # APPLY LOCALIZED PADDING IMMEDIATELY for preview (user's request)
-            padded_intervals = self._apply_localized_padding_to_intervals(exact_intervals)
-
-            # Use padded intervals for both preview AND commit
-            spans_commit = padded_intervals
-            spans_preview = [(s, e) for s, e in padded_intervals]
-
-            # Optional snap (preview only)
+            # Half-open commit spans first; the preview derives from them
+            # (WYSIWYG: what is highlighted is exactly what will be labeled)
             if self.snap_var.get():
-                snapped_prev = []
-                for s, e in spans_preview:
-                    ss, ee = self._snap_to_samples(s, e)
-                    snapped_prev.append((ss, ee))
-                spans_preview = snapped_prev
+                # Sample-aligned boundaries: [t_first, t_after_last)
+                spans_commit = self._exact_spans_to_half_open(exact_intervals)
+                spans_preview = [(s, e) for s, e in exact_intervals]
+            else:
+                # Padded midpoint boundaries that visually wrap the samples
+                spans_commit = self._apply_localized_padding_to_intervals(exact_intervals)
+                spans_preview = [(s, e) for s, e in spans_commit]
 
             self.current_selection = None
             self.current_spans = spans_preview
@@ -370,39 +368,6 @@ class SelectionMixin:
                 self.canvas.draw()  # type: ignore[union-attr]
                 break
 
-    def _x_from_anywhere(self, event) -> float | None:
-        """
-        Get a time-axis x (mdates float) no matter where the cursor is.
-        If we're over a time axis, use event.xdata. Otherwise, map screen x
-        into the primary time axis.
-        """
-        import matplotlib as mpl
-
-        if getattr(self, "_primary_time_key", None) is None:
-            return None
-
-        primary_ax = self.user_axes.get(self._primary_time_key)
-        if primary_ax is None:
-            return None
-
-        # If we're already on a time axis (or the strip), event.xdata is correct.
-        time_axes = {self.user_axes[k] for k in (self._time_axis_keys or [])}
-        if getattr(self, "strip_ax", None) is not None:
-            time_axes.add(self.strip_ax)
-
-        if event.inaxes in time_axes and event.xdata is not None:
-            return float(event.xdata)
-
-        # Otherwise, map canvas pixel x to primary time-axis data x.
-        inv = primary_ax.transData.inverted()
-        # pick a y inside the primary axes bbox
-        ymid = primary_ax.bbox.y0 + primary_ax.bbox.height * 0.5
-        try:
-            x_data, _ = inv.transform((event.x, ymid))
-            return float(x_data)
-        except Exception:
-            return None
-
     def _box_select_on_not_time_axis(self, ax, xlo: float, xhi: float,
                                       ylo: float, yhi: float,
                                       triggered_key: Optional[str] = None) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -414,7 +379,8 @@ class SelectionMixin:
         then falls back to artist-based extraction for backwards compatibility.
 
         Returns:
-            List of (start, end) timestamp tuples for half-open intervals [start, end)
+            List of CLOSED (first_sample, last_sample) exact pairs; the
+            caller converts these to half-open [start, end) at commit.
         """
         # Try direct dataframe filtering first
         # Use the triggered selector key if available, otherwise fall back to search
@@ -540,10 +506,16 @@ class SelectionMixin:
         for artist in ax.lines:
             if not hasattr(artist, "get_xdata"):
                 continue
+            if str(artist.get_gid() or "").startswith(TOOL_GID_PREFIX):
+                continue  # tool-owned overlay (ink), never data (T1)
             try:
                 xs = np.asarray(artist.get_xdata(orig=False), dtype=float)
                 ys = np.asarray(artist.get_ydata(orig=False), dtype=float)
                 if xs.size != ys.size or xs.size == 0:
+                    continue
+                if xs.size != len(windowed_idx):
+                    # The ordinal mapping below (artist point i -> windowed
+                    # row i) is only valid for one-point-per-row artists.
                     continue
                 mask = (xs >= xlo) & (xs <= xhi) & (ys >= ylo) & (ys <= yhi)
                 # The TRUE indices in mask correspond to indices in windowed_idx
@@ -555,9 +527,17 @@ class SelectionMixin:
         for artist in ax.collections:
             if not hasattr(artist, "get_offsets"):
                 continue
+            if str(artist.get_gid() or "").startswith(TOOL_GID_PREFIX):
+                continue  # tool-owned overlay (ink), never data (T1)
             try:
                 offsets = np.asarray(artist.get_offsets())
-                if offsets.size == 0:
+                if (
+                    offsets.ndim != 2
+                    or offsets.shape[1] != 2
+                    or offsets.shape[0] != len(windowed_idx)
+                ):
+                    # Same ordinal-validity condition as the line scan; also
+                    # rejects PolyCollection sentinel offsets ([[0, 0]]).
                     continue
                 xs = offsets[:, 0]
                 ys = offsets[:, 1]
@@ -1115,6 +1095,8 @@ class SelectionMixin:
                     edgecolors='darkred',
                     linewidths=0.5
                 )
+                # Name-tag as tool ink so artist scans skip it (T1)
+                scatter.set_gid(TOOL_GID_PREFIX + "preview-highlight")
 
                 # Track this highlight for later removal
                 if not hasattr(self, '_preview_highlights'):
@@ -1155,30 +1137,37 @@ class SelectionMixin:
         """
         Get list of timestamps from current preview selection.
 
+        WYSIWYG (Pack 3): derived from the COMMIT-equivalent spans with the
+        same half-open [start, end) mask the export uses, so the highlighted
+        samples are exactly the in-window samples the _add_interval door
+        would label. Strip drag is the one exception: _preview_selection
+        hands us an interval's ALREADY-exclusive end, so the dots there show
+        one sample more than a ResizeIntervalCommand stores (unchanged from
+        today; parked with S8).
+
         Returns:
             List of pd.Timestamp objects representing selected times
         """
-        import pandas as pd
-
         timestamps = []
 
-        # Check for multi-span preview (box selection)
-        if hasattr(self, 'current_spans') and self.current_spans:
-            for start_ts, end_ts in self.current_spans:
-                # Extract all timestamps in this span
-                try:
-                    mask = (self.df.index >= start_ts) & (self.df.index <= end_ts)
-                    span_timestamps = self.df.index[mask].tolist()
-                    timestamps.extend(span_timestamps)
-                except Exception:
-                    pass
+        commit_spans = getattr(self, '_commit_spans', None) or []
+        if not commit_spans and getattr(self, 'current_selection', None):
+            # Single-span flows commit current_selection through the same
+            # conversion (_add_interval door); mirror it here.
+            commit_spans = self._exact_spans_to_half_open([self.current_selection])
 
-        # Check for single-span preview (two-click or full-height selection)
-        elif hasattr(self, 'current_selection') and self.current_selection:
-            start_ts, end_ts = self.current_selection
+        # Clip to the visible window: _timestamps_to_indices maps missing
+        # timestamps to the NEAREST windowed row, so out-of-window samples
+        # (e.g. full-range rule commits) must not reach the highlighter.
+        lo = getattr(self, 't0', None)
+        hi = getattr(self, 't1', None)
+
+        for start_ts, end_ts in commit_spans:
             try:
-                mask = (self.df.index >= start_ts) & (self.df.index <= end_ts)
-                timestamps = self.df.index[mask].tolist()
+                mask = (self.df.index >= start_ts) & (self.df.index < end_ts)
+                if lo is not None and hi is not None:
+                    mask &= (self.df.index >= lo) & (self.df.index <= hi)
+                timestamps.extend(self.df.index[mask].tolist())
             except Exception:
                 pass
 
@@ -1250,9 +1239,9 @@ class SelectionMixin:
 
         interval = self.selected_interval
 
-        # Get timestamps for this interval
+        # Get timestamps for this interval (half-open, matches iv.contains)
         try:
-            mask = (self.df.index >= interval.start) & (self.df.index <= interval.end)
+            mask = (self.df.index >= interval.start) & (self.df.index < interval.end)
             selected_timestamps = self.df.index[mask].tolist()
         except Exception:
             return
@@ -1291,6 +1280,8 @@ class SelectionMixin:
                     edgecolors='darkblue',
                     linewidths=0.3
                 )
+                # Name-tag as tool ink so artist scans skip it (T1)
+                scatter.set_gid(TOOL_GID_PREFIX + "interval-highlight")
 
                 # Track this highlight for later removal
                 if not hasattr(self, '_interval_highlights'):
@@ -1345,47 +1336,6 @@ class SelectionMixin:
         self._two_click_last_x = None
         self._hide_time_overlays()
 
-    def _cancel_active_selection(self) -> None:
-        """
-        Cancel any active selection - SIMPLE BUT THOROUGH approach.
-        """
-        # Clear all selection state
-        self.current_selection = None
-        if hasattr(self, 'current_spans'):
-            self.current_spans.clear()
-        if hasattr(self, '_commit_spans'):
-            self._commit_spans.clear()
-
-        # Clear component selection tracking
-        if hasattr(self, '_selected_component_labels'):
-            self._selected_component_labels = None
-
-        # CRITICAL: Also clear on active pane
-        if hasattr(self, 'active_pane') and hasattr(self.active_pane, '_selected_component_labels'):
-            self.active_pane._selected_component_labels = None
-
-        # Clear two-click state
-        self._two_click_active = False
-        self._two_click_t0 = None
-        self._two_click_last_x = None
-
-        # Clear point highlights
-        if hasattr(self, '_clear_selected_point_highlights'):
-            self._clear_selected_point_highlights()
-
-        # Hide overlays using existing method
-        self._hide_time_overlays()
-
-        # Clear strip previews
-        self._draw_strip_preview_spans([])
-
-        # Update strip
-        self._update_strip()
-
-        # Force canvas redraw
-        if hasattr(self, 'canvas') and self.canvas is not None:
-            self.canvas.draw_idle()
-
     def _apply_localized_padding_to_intervals(self, intervals: list[tuple[pd.Timestamp, pd.Timestamp]]) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
         """
         Apply localized padding to intervals during preview creation.
@@ -1421,9 +1371,11 @@ class SelectionMixin:
                 padded_start = start_time - (start_local_med / 2)
                 padded_end = end_time + (end_local_med / 2)
 
-            # Clamp to data bounds
+            # Clamp to data bounds. The end cap sits 1ns PAST data_end so a
+            # tail interval still labels the final sample under half-open
+            # [start, end) semantics (T4).
             padded_start = max(padded_start, self.data_start)
-            padded_end = min(padded_end, self.data_end)
+            padded_end = min(padded_end, self._end_after_inclusive(self.data_end))
 
             # Ensure start <= end after padding
             if padded_start > padded_end:
@@ -1489,8 +1441,9 @@ class SelectionMixin:
           start = time of first included sample
           end   = time of last included sample (NOT the sample after)
 
-        This creates intervals that exactly match what the user visually selected,
-        avoiding the boundary issues with half-open intervals for box selections.
+        These closed pairs are DISPLAY/geometry values. Commit paths convert
+        them to half-open [start, end) via _exact_spans_to_half_open (snap)
+        or _apply_localized_padding_to_intervals (padded) -- Pack 3, WYSIWYG.
         """
         out: list[tuple[pd.Timestamp, pd.Timestamp]] = []
 
@@ -1595,25 +1548,21 @@ class SelectionMixin:
         # This avoids boundary issues where highlighting doesn't match selection
         exact_intervals = self._runs_to_exact_intervals(idx_full, runs)
 
-        # APPLY LOCALIZED PADDING IMMEDIATELY for preview (user's request)
-        padded_intervals = self._apply_localized_padding_to_intervals(exact_intervals)
-
-        # Use padded intervals for both preview AND commit
-        spans_commit = padded_intervals
-        spans_preview = [(s, e) for s, e in padded_intervals]
-
-        # Optional snap (preview only)
+        # Half-open commit spans first; the preview derives from them
+        # (WYSIWYG: what is highlighted is exactly what will be labeled)
         if self.snap_var.get():  # type: ignore[union-attr]
-            snapped_prev: list[tuple[pd.Timestamp, pd.Timestamp]] = []
-            for s, e in spans_preview:
-                ss, ee = self._snap_to_samples(s, e)
-                snapped_prev.append((ss, ee))
-            spans_preview = snapped_prev
+            # Sample-aligned boundaries: [t_first, t_after_last)
+            spans_commit = self._exact_spans_to_half_open(exact_intervals)
+            spans_preview = [(s, e) for s, e in exact_intervals]
+        else:
+            # Padded midpoint boundaries that visually wrap the samples
+            spans_commit = self._apply_localized_padding_to_intervals(exact_intervals)
+            spans_preview = [(s, e) for s, e in spans_commit]
 
         # Stash both: preview for drawing, commit for "Add Label"
         self.current_selection = None
-        self.current_spans = spans_preview        # exact intervals for highlighting
-        self._commit_spans = spans_commit         # exact intervals for interval creation
+        self.current_spans = spans_preview        # closed display spans for highlighting
+        self._commit_spans = spans_commit         # half-open spans for interval creation
 
         # UPDATE TIME OVERLAYS for multi-span preview with padded intervals
         self._update_time_overlays_for_multi_spans(spans_preview)

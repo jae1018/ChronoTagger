@@ -23,15 +23,6 @@ import matplotlib.dates as mdates
 class ZoomMixin:
     # ---------- helpers ----------
 
-    def _ts_from_mpl_x(self, x: Optional[float]) -> pd.Timestamp:
-        """Convert Matplotlib float-date to naive Timestamp; fallback to window center."""
-        if x is None:
-            return self.t0 + (self.t1 - self.t0) / 2
-        dt = mdates.num2date(x)
-        if getattr(dt, "tzinfo", None) is not None:
-            dt = dt.replace(tzinfo=None)
-        return pd.Timestamp(dt)
-
     def _clamp_to_bounds(self, t0: pd.Timestamp, t1: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
         """Clamp proposed [t0, t1] to data bounds while preserving window length."""
         win = t1 - t0
