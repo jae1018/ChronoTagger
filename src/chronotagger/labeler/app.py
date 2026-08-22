@@ -75,6 +75,7 @@ class TimeIntervalLabeler(
         start: Optional[pd.Timestamp] = None,
         end: Optional[pd.Timestamp] = None,
         autosave_folder: str = ".",
+        source_name: Optional[str] = None,
         *,
         layout_spec: Optional[Dict[str, Any]] = None,
         panes: Optional[List[Dict[str, Any]]] = None,
@@ -176,10 +177,22 @@ class TimeIntervalLabeler(
         self.redo_stack: List[Command] = []
         self.max_undo: int = 50  # gesture-level entries; each holds two list snapshots
 
-        # Persistence - Autosave configuration
+        # Persistence - Autosave configuration. The filename carries a
+        # dataset fingerprint (sorted columns + time bounds + row
+        # count), so differently-shaped datasets sharing one folder or
+        # CWD do not collide at recovery. Identical-schema datasets over
+        # the same window (two spacecraft via one loader) DO share a
+        # name -- the source_name check in _check_autosave is the guard
+        # for that case. Clean break (Pack 2 grill Q2): pre-fingerprint
+        # autosave files are ignored. The fingerprint is fixed at
+        # construction; do not add/rename df columns on a live labeler.
+        self.source_name: Optional[str] = source_name
         self.autosave_folder = Path(autosave_folder)
         self.autosave_folder.mkdir(parents=True, exist_ok=True)  # Create folder if it doesn't exist
-        self.autosave_file = self.autosave_folder / "chronotagger_autosave.json"
+        self.autosave_file = (
+            self.autosave_folder
+            / f"chronotagger_autosave_{self._dataset_fingerprint()}.json"
+        )
         self.modified: bool = False
 
         # GUI state.  When `parent` is provided (e.g. the quick-start wizard),
@@ -340,19 +353,11 @@ class TimeIntervalLabeler(
             choice = self._show_recovery_dialog(autosave_data)
 
             if choice == 'recover':
-                # Load intervals from autosave
-                self.intervals = autosave_data['intervals']
-                # Recovery replaces the interval list wholesale; stale
-                # commands and selections must not survive it. In strict
-                # mode, validate the recovered set NOW so a corrupt
-                # pre-pack autosave is blamed on the recovery, not on
-                # the user's next gesture (fold V3-M3).
-                self.undo_stack.clear()
-                self.redo_stack.clear()
-                self.selected_interval = None
-                if hasattr(self, '_clear_selected_interval_highlights'):
-                    self._clear_selected_interval_highlights()
-                self._check_interval_invariants()
+                # Restore intervals + the label schema they were made
+                # with; invalidate undo history/selection; validate in
+                # strict mode; mark modified. The testable core lives in
+                # IOExportMixin._apply_recovered_autosave (Pack 2 D1).
+                self._apply_recovered_autosave(autosave_data)
                 # Sync intervals across all panes
                 self.sync_manager.sync_intervals_changed()
                 # Refresh UI to show loaded intervals

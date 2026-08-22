@@ -74,8 +74,11 @@ class QuickStartWizard:
             self._on_cancel()
             return
 
-        # Store loaded DataFrame
+        # Store loaded DataFrame, and remember where it came from so
+        # the labeler's autosave metadata / recovery dialog can name it
+        # (the path was previously known here and thrown away).
         self.df = df
+        self.source_name = getattr(file_dialog, 'current_file', None)
 
         # Proceed to tab planner
         self._show_tab_planner()
@@ -167,6 +170,7 @@ class QuickStartWizard:
                     plot_fn=only["plot_fn"],
                     layout_spec=only["layout_spec"],
                     window=default_window,
+                    source_name=getattr(self, 'source_name', None),
                     parent=self.root,
                 )
             else:
@@ -175,6 +179,7 @@ class QuickStartWizard:
                     df=self.df,
                     panes=pane_configs,
                     window=default_window,
+                    source_name=getattr(self, 'source_name', None),
                     parent=self.root,
                 )
 

@@ -472,8 +472,17 @@ app.save("session.json")
 app.load("session.json")
 
 # Autosave-on-change to a folder of your choice (default: ".")
-# Each modification rewrites <autosave_folder>/chronotagger_autosave.json,
-# which the labeler offers to recover from on the next launch.
+# Each modification atomically rewrites
+#   <autosave_folder>/chronotagger_autosave_<fingerprint>.json
+# (fingerprint = dataset identity: columns + time bounds + row count),
+# keeping one .bak generation, so differently-shaped datasets sharing a
+# folder do not collide. Identical-schema datasets over the same time
+# window share a name; the recovery dialog warns via the source file
+# name. Notes: pre-2.x chronotagger_autosave.json files are no longer
+# read; the fingerprint is fixed at construction (do not add or rename
+# columns on a live labeler); run parallel sessions on the SAME dataset
+# with separate autosave_folder values (one autosave per dataset per
+# folder, last writer wins).
 app = TimeIntervalLabeler(..., autosave_folder="autosaves")
 ```
 
@@ -505,7 +514,7 @@ TimeIntervalLabeler(
     window: pd.Timedelta = "30min",        # Initial visible window
     step: pd.Timedelta = "15min",          # Prev/Next navigation step
     start: pd.Timestamp = None,            # Initial window start (default: df.index[0])
-    autosave_folder: str = ".",            # Folder for chronotagger_autosave.json
+    autosave_folder: str = ".",            # Folder for chronotagger_autosave_<fingerprint>.json
 
     # Keyword-only:
     *,
@@ -564,7 +573,7 @@ app.save(path: str = None)                 # Save session; prompts via file dial
 app.load(path: str)                        # Load a session JSON
 
 # Export
-app.export_intervals(path: str, fmt="parquet")  # Per-interval rows: start, end, label, notes
+app.export_intervals(path: str, fmt="parquet")  # Per-interval rows: start, end, label, notes (raises ValueError if there are no intervals)
 app.export_per_sample(path: str, fmt="parquet", label_on_uncovered="UNKNOWN")
                                            # Per-row labels for the entire df.index
 
@@ -581,7 +590,7 @@ For contributors: see [`docs/architecture.md`](docs/architecture.md) for the pac
 ## Testing
 
 ```bash
-# Run test suite
+# Run test suite (on headless Linux, wrap with: xvfb-run -a)
 python -m pytest tests/
 
 # Run with coverage

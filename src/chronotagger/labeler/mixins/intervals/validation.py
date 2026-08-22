@@ -143,7 +143,8 @@ class IntervalValidationMixin:
           - Left/right edge overlaps are resized.
           - Middle overlaps (new span cuts an interval in two) are split by
             deleting the original and adding two trimmed intervals.
-        All changes are executed via commands for proper undo/redo.
+        All changes run inside the caller's gesture; the gesture
+        snapshot provides undo/redo (see intervals/commands.py).
         """
         if e <= s:
             return
