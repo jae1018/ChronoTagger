@@ -80,6 +80,7 @@ class TimeIntervalLabeler(
         layout_spec: Optional[Dict[str, Any]] = None,
         panes: Optional[List[Dict[str, Any]]] = None,
         parent: Optional[tk.Misc] = None,
+        decimate: bool = True,
     ) -> None:
         # --- Validate inputs ---
         if not isinstance(df.index, pd.DatetimeIndex):
@@ -137,6 +138,16 @@ class TimeIntervalLabeler(
         # Core data / plotting contract
         self.df = df
         # Note: plot_fn and layout_spec are now properties that delegate to active_pane
+
+        # Draw-only decimation (Pack 5 R4b/R11). ON by default: a window
+        # holding more samples than the panel has pixels is drawn from an
+        # envelope of ORIGINAL rows -- per pixel column, per numeric
+        # column, the argmin and argmax rows -- so single-sample spikes
+        # survive and nothing is averaged or synthesised. Selection,
+        # rules, labeling and export always read the full-resolution
+        # frame. decimate=False draws every sample; see the README's
+        # known-limitations note for what that buys and costs.
+        self.decimate: bool = bool(decimate)
 
         # Label classes & colors
         if classes is None:

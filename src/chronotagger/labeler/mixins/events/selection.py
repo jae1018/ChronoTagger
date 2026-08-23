@@ -19,8 +19,10 @@ import logging
 
 import pandas as pd
 import numpy as np
+from ...utils.fasttime import naive_timestamps_from_num
 
 from .base import TOOL_GID_PREFIX
+from ...utils.fastindex import positions_exact_then_nearest, positions_nearest
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,12 @@ class SelectionMixin:
         # Only process if we have a valid selector match
         if triggered_selector_key is None:
             return
+
+        # A coalesced redraw may still be queued (Pack 5 R4d). Everything
+        # below reads what it writes -- the drawn artists and
+        # _last_windowed_index -- so render it now instead of mapping this
+        # gesture onto the previous window.
+        self._flush_pending_redraw()
 
         if eclick.xdata is None or erelease.xdata is None:
             return
@@ -120,6 +128,25 @@ class SelectionMixin:
             return
 
         # === BOX-SELECT path (points-in-rect over time lane axes OR not-time axes) ===
+        # Draw decimation is a RENDERING optimisation and may never cost
+        # selection accuracy (Pack 5 R11: DRAW-ONLY). Everything below
+        # reads the drawn artists, so if this frame was decimated, render
+        # it once at full resolution first and scan THAT.
+        # This is not belt-and-braces. Measured on the 43k window, a box
+        # y-band against a decimated trace versus the raw scan:
+        #     band 60% of the axis  recall 1.000  precision 0.934
+        #     band 10% of the axis  recall 0.994  precision 0.269
+        #     band  3% of the axis  recall 0.687  precision 0.125
+        # -- a thin band silently mislabels. One extra full-resolution
+        # frame (332 ms at 43k) against a gesture that used to cost 16.1 s
+        # is not a trade worth thinking about.
+        if getattr(self, "_decim_active", False):
+            self._decim_suspend = True
+            try:
+                self._update_plot()
+            finally:
+                self._decim_suspend = False
+
         import matplotlib.dates as mdates
 
         # CRITICAL: Only check data from the axis where the box was drawn
@@ -238,8 +265,10 @@ class SelectionMixin:
         ylo, yhi = float(y_lo), float(y_hi)
 
         # Collect timestamps from lines & scatters inside the box
-        picked_ts: list[pd.Timestamp] = []
-        line_contributions: dict[str, list[pd.Timestamp]] = {}  # Track which line contributed which timestamps
+        # Pack 5 R13: parts are DatetimeIndex chunks, joined once below,
+        # instead of a Python list appended to per point.
+        picked_parts: list = []
+        line_contributions: dict = {}  # Track which line contributed which timestamps
 
         for a in time_axes:
             # Line2D objects
@@ -260,22 +289,20 @@ class SelectionMixin:
                         # Matplotlib auto-labels start with underscore - generate better name
                         line_label = f"Line {len(line_contributions) + 1}"
 
-                    line_timestamps = []
-
                     # Convert selected xs (float days) to naive timestamps
-                    for xf in xs_sel:
-                        dt = mdates.num2date(float(xf))
-                        if getattr(dt, "tzinfo", None) is not None:
-                            dt = dt.replace(tzinfo=None)
-                        ts = pd.Timestamp(dt)
-                        picked_ts.append(ts)
-                        line_timestamps.append(ts)
+                    # -- ONE vectorized conversion (Pack 5 R13), bit-exact
+                    # with the per-point mdates.num2date loop it replaces
+                    # (measured max |delta| 0 ns on three real frames and
+                    # five edge branches), 7,741x faster on the reference
+                    # gesture's haul.
+                    line_timestamps = naive_timestamps_from_num(xs_sel)
+                    picked_parts.append(line_timestamps)
 
                     # Store which timestamps came from this line
-                    if line_timestamps:
+                    if len(line_timestamps):
                         if line_label not in line_contributions:
                             line_contributions[line_label] = []
-                        line_contributions[line_label].extend(line_timestamps)
+                        line_contributions[line_label].append(line_timestamps)
 
                 except Exception:
                     continue
@@ -294,16 +321,26 @@ class SelectionMixin:
                     m = (xs >= xlo) & (xs <= xhi) & (ys >= ylo) & (ys <= yhi)
                     if not m.any():
                         continue
-                    for xf in xs[m]:
-                        dt = mdates.num2date(float(xf))
-                        if getattr(dt, "tzinfo", None) is not None:
-                            dt = dt.replace(tzinfo=None)
-                        picked_ts.append(pd.Timestamp(dt))
+                    # ONE vectorized conversion (Pack 5 R13), as above.
+                    picked_parts.append(naive_timestamps_from_num(xs[m]))
                 except Exception:
                     continue
 
         # Nothing in the box → just clear preview
-        if not picked_ts:
+        # ONE concatenation instead of N appends (Pack 5 R13). The parts
+        # are DatetimeIndex chunks; a pandas Index is not truth-testable,
+        # so the emptiness gates below become explicit length checks.
+        if picked_parts:
+            picked_ts = (picked_parts[0] if len(picked_parts) == 1
+                         else picked_parts[0].append(picked_parts[1:]))
+        else:
+            picked_ts = pd.DatetimeIndex([])
+        for _label, _parts in list(line_contributions.items()):
+            line_contributions[_label] = (
+                _parts[0] if len(_parts) == 1
+                else _parts[0].append(_parts[1:]))
+
+        if len(picked_ts) == 0:
             self.current_spans.clear()
             self.current_selection = None
             self._commit_spans = []
@@ -338,7 +375,12 @@ class SelectionMixin:
         if pane is not self.active_pane:
             return
 
-        if event.artist not in pane.strip_ax.patches:  # type: ignore[union-attr]
+        # The artist is only a GATE ("was the click on a band at all?") --
+        # the interval is re-derived from the mouse x below, so which
+        # artist was hit is never used. Pack 5 R14 draws the strip's bands
+        # as ONE PolyCollection, so the gate accepts collections too.
+        if (event.artist not in pane.strip_ax.patches  # type: ignore[union-attr]
+                and event.artist not in pane.strip_ax.collections):  # type: ignore[union-attr]
             return
         if event.mouseevent.xdata is None:
             return
@@ -466,13 +508,12 @@ class SelectionMixin:
             # Get timestamps of selected points
             selected_timestamps = selected_df.index.tolist()
 
-            # Map to index positions in the FULL dataframe
+            # Map to index positions in the FULL dataframe (Pack 5 R1: ONE
+            # vectorized get_indexer for the whole haul; bit-exact, and it
+            # raises the same ValueError on a non-monotonic index -- which
+            # the enclosing try still downgrades to the artist scan)
             idx_full = self.df.index
-            pos_in_full = []
-            for ts in selected_timestamps:
-                j = idx_full.get_indexer([ts], method="nearest")[0]
-                if 0 <= j < len(idx_full):
-                    pos_in_full.append(j)
+            pos_in_full = positions_nearest(idx_full, selected_timestamps)
 
             if not pos_in_full:
                 return []
@@ -566,13 +607,12 @@ class SelectionMixin:
         picked_timestamps = [pd.Timestamp(windowed_idx[i]) for i in picked_indices
                             if 0 <= i < len(windowed_idx)]
 
-        # Map to index positions in the FULL dataframe (not windowed)
+        # Map to index positions in the FULL dataframe (not windowed).
+        # Pack 5 R1: ONE vectorized get_indexer, bit-exact with the scalar
+        # loop it replaces and raising the same ValueError on a
+        # non-monotonic index (this site is unguarded today and stays so).
         idx_full = self.df.index
-        pos_in_full = []
-        for ts in picked_timestamps:
-            j = idx_full.get_indexer([ts], method="nearest")[0]
-            if 0 <= j < len(idx_full):
-                pos_in_full.append(j)
+        pos_in_full = positions_nearest(idx_full, picked_timestamps)
 
         if not pos_in_full:
             return []
@@ -1074,17 +1114,21 @@ class SelectionMixin:
         if not selected_timestamps:
             return
 
+        # Downsample if too many points (for performance).
+        # Pack 5 R2: the cap now runs BEFORE the mapping. It used to sit
+        # one step too late -- the per-probe get_loc loop had already run
+        # over the FULL preview set, so the 2000-marker guard protected
+        # the scatter call and not the loop that fed it (pack5_g1 S6).
+        if len(selected_timestamps) > 2000:
+            # Show every Nth point to keep ~1000 markers per axes
+            step = len(selected_timestamps) // 1000
+            selected_timestamps = selected_timestamps[::step]
+
         # Convert timestamps to indices in the windowed dataframe
         selected_indices = self._timestamps_to_indices(selected_timestamps)
 
         if not selected_indices:
             return
-
-        # Downsample if too many points (for performance)
-        if len(selected_indices) > 2000:
-            # Show every Nth point to keep ~1000 markers per axes
-            step = len(selected_indices) // 1000
-            selected_indices = selected_indices[::step]
 
         # Create highlights on all user axes (time and position plots)
         for key, ax in self.user_axes.items():
@@ -1172,12 +1216,25 @@ class SelectionMixin:
         lo = getattr(self, 't0', None)
         hi = getattr(self, 't1', None)
 
+        # Pack 5 R2: clip to the window ONCE, then mask inside it. The old
+        # shape rebuilt three to four FULL-LENGTH boolean masks over
+        # self.df.index PER SPAN -- O(spans x N), measured at 1.5e-8 s per
+        # (span x row), i.e. ~2.3 s for 100 spans on the 1.46M-row frame
+        # (pack5_g1 3e). Same rows, same order: the window clip is exactly
+        # the mask term that was ANDed in per span. Boolean masks (not
+        # searchsorted) are deliberate -- they stay correct on a
+        # NON-MONOTONIC index, where searchsorted silently mislabels.
+        base_idx = self.df.index
+        if lo is not None and hi is not None:
+            try:
+                base_idx = base_idx[(base_idx >= lo) & (base_idx <= hi)]
+            except Exception:
+                base_idx = self.df.index
+
         for start_ts, end_ts in commit_spans:
             try:
-                mask = (self.df.index >= start_ts) & (self.df.index < end_ts)
-                if lo is not None and hi is not None:
-                    mask &= (self.df.index >= lo) & (self.df.index <= hi)
-                timestamps.extend(self.df.index[mask].tolist())
+                mask = (base_idx >= start_ts) & (base_idx < end_ts)
+                timestamps.extend(base_idx[mask].tolist())
             except Exception:
                 pass
 
@@ -1202,30 +1259,14 @@ class SelectionMixin:
         if windowed_idx is None or len(windowed_idx) == 0:
             return []
 
-        indices = []
-
-        for ts in timestamps:
-            try:
-                # Find position of this timestamp in windowed index
-                idx = windowed_idx.get_loc(ts)
-
-                # Handle duplicate timestamps (returns slice)
-                if isinstance(idx, slice):
-                    idx = idx.start
-
-                if idx is not None and 0 <= idx < len(windowed_idx):
-                    indices.append(int(idx))
-
-            except Exception:
-                # Try nearest neighbor approach as fallback
-                try:
-                    nearest_idx = windowed_idx.get_indexer([ts], method="nearest")[0]
-                    if 0 <= nearest_idx < len(windowed_idx):
-                        indices.append(int(nearest_idx))
-                except Exception:
-                    continue
-
-        return indices
+        # Pack 5 R2: one exact get_indexer for the whole list, then ONE
+        # nearest pass over the probes that missed -- the same two-step
+        # ladder the per-probe loop ran, in two calls instead of 2N. A
+        # NON-UNIQUE index keeps the scalar ladder inside the helper:
+        # get_loc returns a slice there (whose .start this code took) and
+        # get_indexer refuses outright, so vectorizing it would turn a
+        # working answer into an exception.
+        return positions_exact_then_nearest(windowed_idx, timestamps)
 
     # ========== Selected Interval Point Highlighting ==========
 
@@ -1259,17 +1300,19 @@ class SelectionMixin:
         if not selected_timestamps:
             return
 
+        # Downsample if too many points (for performance) -- BEFORE the
+        # mapping, same reorder and same reason as the preview
+        # highlighter above (Pack 5 R2, pack5_g1 S6).
+        if len(selected_timestamps) > 2000:
+            # Show every Nth point to keep ~1000 markers per axes
+            step = len(selected_timestamps) // 1000
+            selected_timestamps = selected_timestamps[::step]
+
         # Convert timestamps to indices in the windowed dataframe
         selected_indices = self._timestamps_to_indices(selected_timestamps)
 
         if not selected_indices:
             return
-
-        # Downsample if too many points (for performance)
-        if len(selected_indices) > 2000:
-            # Show every Nth point to keep ~1000 markers per axes
-            step = len(selected_indices) // 1000
-            selected_indices = selected_indices[::step]
 
         # Create highlights on all user axes (time and position plots)
         for key, ax in self.user_axes.items():
@@ -1523,12 +1566,13 @@ class SelectionMixin:
             picked_ts: List of pd.Timestamp objects to create intervals from
         """
         # Convert timestamps to index positions (nearest) and keep only those inside current data bounds
+        # Pack 5 R1: ONE vectorized get_indexer instead of one call per
+        # picked point. This is the site that owned 91-98% of the gesture
+        # (measured: 47.7 s of a 48.5 s drag on the 1.46M-row frame), and
+        # the one whose probes genuinely need method="nearest" -- they came
+        # back through mdates.num2date a median 484 ns off the true sample.
         idx_full = self.df.index
-        pos = []
-        for ts in picked_ts:
-            j = idx_full.get_indexer([ts], method="nearest")[0]
-            if 0 <= j < len(idx_full):
-                pos.append(j)
+        pos = positions_nearest(idx_full, picked_ts)
 
         if not pos:
             self.current_spans.clear()
@@ -1624,9 +1668,10 @@ class SelectionMixin:
 
         if root is None:
             # Fallback: just select all if we can't show dialog
-            all_timestamps = []
-            for ts_list in line_contributions.values():
-                all_timestamps.extend(ts_list)
+            # Pack 5 R13: the values are DatetimeIndex chunks now.
+            parts = list(line_contributions.values())
+            all_timestamps = (parts[0] if len(parts) == 1
+                              else parts[0].append(parts[1:]))
             self._finalize_box_selection(all_timestamps)
             return
 
@@ -1693,16 +1738,16 @@ class SelectionMixin:
             idx_full = self.df.index
 
             # Convert each component's timestamps to dataframe indices
+            # (Pack 5 R1: ONE vectorized get_indexer per COMPONENT instead
+            # of one per point. The intersection stays position-based --
+            # duplicate timestamps would change the answer otherwise.)
             component_index_sets = []
             for component_label, ts_list in line_contributions.items():
-                component_indices = set()
-                for ts in ts_list:
-                    try:
-                        idx_pos = idx_full.get_indexer([ts], method='nearest')[0]
-                        if 0 <= idx_pos < len(idx_full):
-                            component_indices.add(idx_pos)
-                    except Exception:
-                        continue
+                try:
+                    component_indices = set(
+                        positions_nearest(idx_full, ts_list))
+                except Exception:
+                    continue
                 if component_indices:
                     component_index_sets.append(component_indices)
 
@@ -1760,16 +1805,16 @@ class SelectionMixin:
         idx_full = self.df.index
 
         # Convert each component's timestamps to a set of dataframe indices
+        # (Pack 5 R1, and this loop is the one that runs UNCONDITIONALLY at
+        # dialog BUILD time purely to render the "All Components (N pts)"
+        # caption -- measured 27.7 s at 43k points, paid even by a user who
+        # only ever intends to click BX. pack5_g1 1d/S5.)
         component_index_sets = []
         for component_label, ts_list in line_contributions.items():
-            component_indices = set()
-            for ts in ts_list:
-                try:
-                    idx_pos = idx_full.get_indexer([ts], method='nearest')[0]
-                    if 0 <= idx_pos < len(idx_full):
-                        component_indices.add(idx_pos)
-                except Exception:
-                    continue
+            try:
+                component_indices = set(positions_nearest(idx_full, ts_list))
+            except Exception:
+                continue
             if component_indices:  # Only add non-empty sets
                 component_index_sets.append(component_indices)
 

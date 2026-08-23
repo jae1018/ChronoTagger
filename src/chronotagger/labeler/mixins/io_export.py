@@ -80,30 +80,49 @@ class IOExportMixin:
         ]
         df_export = pd.DataFrame(rows)
         if fmt.lower() == "parquet":
-            atomic_write_path(path, lambda p: df_export.to_parquet(p, index=False))
+            atomic_write_path(path, lambda p: df_export.to_parquet(p, index=False),
+                              sync_dir=True)
         else:
-            atomic_write_path(path, lambda p: df_export.to_csv(p, index=False))
+            atomic_write_path(path, lambda p: df_export.to_csv(p, index=False),
+                              sync_dir=True)
         logger.info("Exported intervals to %s", path)
 
-    def export_per_sample(
-        self, path: str, fmt: str = "parquet", label_on_uncovered: Optional[str] = "UNKNOWN"
-    ) -> None:
+    def export_per_sample(self, path: str, fmt: str = "parquet") -> None:
+        """
+        Write one integer label id per row of ``self.df``.
+
+        Output contract (Pack 5 R7, a CLEAN BREAK from the old string
+        column):
+
+            label_id = index into ``self.classes`` for a covered row,
+                       and -1 for a row no interval covers.
+
+        The old shape wrote label STRINGS and spelled uncovered rows
+        ``label_on_uncovered="UNKNOWN"`` -- which is also the default name
+        of class 0, so a genuinely UNKNOWN-labelled sample and an
+        unlabelled one were the same characters in the file and could not
+        be told apart. Ids separate them: 0 against -1. The
+        ``label_on_uncovered`` argument is gone with the ambiguity it
+        encoded.
+
+        It is also 31,780x faster at 100 intervals, which is the reason
+        this edit exists. The old loop was O(rows x intervals) in PYTHON:
+        measured 41.518 s on the user's 1,464,070-row frame with 100
+        intervals and seven and a half MINUTES with 2,000, against
+        1.31 ms and 19.19 ms for the vectorized path that already shipped
+        in this file (pack5_g1 section 6).
+        """
         if not self.intervals:
             raise ValueError("No intervals to export.")
-        labels: List[Optional[str]] = []
-        for ts in self.df.index:
-            lbl = None
-            for iv in self.intervals:
-                if iv.contains(ts):
-                    lbl = iv.label
-                    break
-            labels.append(lbl if lbl is not None else label_on_uncovered)
 
-        df_export = pd.DataFrame({"label": labels}, index=self.df.index)
+        df_export = pd.DataFrame(
+            {"label_id": self._compute_label_id_series()}, index=self.df.index)
         if fmt.lower() == "parquet":
-            atomic_write_path(path, lambda p: df_export.to_parquet(p))
+            atomic_write_path(path, lambda p: df_export.to_parquet(p),
+                              sync_dir=True)
         else:
-            atomic_write_path(path, lambda p: df_export.to_csv(p))
+            atomic_write_path(path, lambda p: df_export.to_csv(p),
+                              sync_dir=True)
         logger.info("Exported per-sample labels to %s", path)
 
     # ---- GUI-connected ops ----
@@ -143,7 +162,11 @@ class IOExportMixin:
             ] if getattr(self, 'multi_pane_mode', False) else [],
         }
         try:
-            atomic_write_json(target, data)
+            # sync_dir: the user asked for this write (Ctrl+S / Save As),
+            # so it gets rename-durability too -- 0 ms on Windows,
+            # +8.94 ms on ext4. The autosave deliberately does not
+            # (Pack 5 R8).
+            atomic_write_json(target, data, sync_dir=True)
         except Exception as e:
             # GUI session: surface in a dialog and report failure.
             # Headless/library use: RE-RAISE -- a modal here would hang
@@ -276,14 +299,33 @@ class IOExportMixin:
     
         idx = self.df.index
         ids = np.full(len(idx), fill_value=unknown_id, dtype=dtype)
-    
+
+        # Index.searchsorted does NOT validate sortedness. On a frame that
+        # is not monotonic -- two spacecraft concatenated without a
+        # re-sort, say -- it returned a bogus slice and MISLABELLED:
+        # measured, 95 rows set where 185 are contained, and not even a
+        # subset of the right ones (pack5_g1 6b / S9). The slice stays for
+        # the monotonic case, where [searchsorted(start), searchsorted(end))
+        # IS exactly {ts : start <= ts < end}; otherwise the half-open
+        # boolean mask, which agrees with Interval.contains by
+        # construction. Fixing it (rather than raising) is the ruling:
+        # export has no current raise behaviour to preserve, it has a
+        # silently wrong one to correct (Pack 5 R7).
+        monotonic = bool(getattr(idx, "is_monotonic_increasing", False))
+
         # NOTE: intervals are non-overlapping by construction
         for iv in self.intervals:
-            s = idx.searchsorted(iv.start, side="left")
-            e = idx.searchsorted(iv.end, side="left")
-            if s < e:
-                ids[s:e] = label_to_id.get(iv.label, unknown_id)
-    
+            code = label_to_id.get(iv.label, unknown_id)
+            if monotonic:
+                s = idx.searchsorted(iv.start, side="left")
+                e = idx.searchsorted(iv.end, side="left")
+                if s < e:
+                    ids[s:e] = code
+            else:
+                mask = (idx >= iv.start) & (idx < iv.end)
+                if mask.any():
+                    ids[mask] = code
+
         return pd.Series(ids, index=idx, name="label_id")
 
     def _export_labels_dialog(self) -> None:
@@ -514,8 +556,8 @@ class IOExportMixin:
     
         # Write CSV atomically (complete file or no change, never a
         # valid-looking truncated training set)
-        atomic_write_path(csv_path, lambda p: out.to_csv(p))
-    
+        atomic_write_path(csv_path, lambda p: out.to_csv(p), sync_dir=True)
+
         # Write sidecar mapping, atomically, AFTER the CSV -- so the only
         # possible partial state is "complete CSV, old/missing sidecar",
         # which is reported honestly below.
@@ -523,7 +565,7 @@ class IOExportMixin:
         label_to_id = {label: i for i, label in enumerate(self.classes)}
         sidecar = Path(csv_path).with_name(Path(csv_path).stem + "_label_map.json")
         try:
-            atomic_write_json(sidecar, label_to_id)
+            atomic_write_json(sidecar, label_to_id, sync_dir=True)
         except Exception as e:
             raise RuntimeError(
                 f"The labels CSV was written to {csv_path}, but the label "
@@ -810,9 +852,11 @@ class IOExportMixin:
         df_export = pd.DataFrame(rows)
         try:
             if path.lower().endswith(".parquet"):
-                atomic_write_path(path, lambda p: df_export.to_parquet(p, index=False))
+                atomic_write_path(path, lambda p: df_export.to_parquet(p, index=False),
+                                  sync_dir=True)
             else:
-                atomic_write_path(path, lambda p: df_export.to_csv(p, index=False))
+                atomic_write_path(path, lambda p: df_export.to_csv(p, index=False),
+                                  sync_dir=True)
         except Exception as e:
             messagebox.showerror(
                 "Export Failed",

@@ -170,6 +170,11 @@ class CanvasMixin:
             use_constrained = not use_lane_gutter
 
             pane.fig = plt.Figure(figsize=(14, 8), constrained_layout=use_constrained)
+            # Pack 5 R4a: remember whether this figure HAS a solver, so the
+            # freeze/re-solve pair can never install one on a figure the
+            # user opted out of (time_lane_cbar_gutter).
+            pane._layout_constrained = bool(use_constrained)
+            pane._layout_frozen = False
             gs = pane.fig.add_gridspec(
                 nrows, ncols,  # Use nrows directly - no +1
                 width_ratios=width_ratios, height_ratios=hrs,
@@ -253,6 +258,14 @@ class CanvasMixin:
             # Embed in Tk
             pane.canvas = FigureCanvasTkAgg(pane.fig, master=parent)
             pane.canvas.draw()
+            # The first solve has happened; freeze it (Pack 5 R4a). A
+            # figure RESIZE is the one live layout change in this tree --
+            # window resize, the F9 sidebar toggle, a DPI change all reach
+            # matplotlib as resize_event -- so that is what un-freezes it.
+            self._freeze_layout_after_draw(pane)
+            pane.canvas.mpl_connect(
+                "resize_event",
+                lambda event, p=pane: self._invalidate_layout_freeze(p))
             pane.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
             toolbar = NavigationToolbar2Tk(pane.canvas, parent)  # noqa: F841
             toolbar.update()

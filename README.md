@@ -263,10 +263,52 @@ The "Label Unassigned..." button opens a dialog to:
 ### Performance Optimizations
 
 - **PolyCollection overlays** - Multi-span overlays use single collection (10-30× faster)
+- **Envelope decimation** - a window holding more samples than the panel has
+  pixels is drawn from an envelope of ORIGINAL rows: per screen-pixel column,
+  per numeric column, the minimum and maximum rows. Nothing is averaged or
+  synthesised, so a one-sample spike always survives, and zooming in reveals
+  raw data. Pass `decimate=False` to draw every sample.
+- **Frozen layout solver** - the constrained-layout solve runs once and is
+  re-run only on a real layout change (window resize, sidebar toggle)
+- **PolyCollection interval bands** - one collection per panel AND one for the
+  Labels strip, instead of one rectangle per interval per panel
+- **Coalesced redraws** - a burst of wheel notches renders once, at the window
+  it ended on, instead of once per notch
+- **Vectorized index mapping** - one lookup per gesture instead of one per
+  selected point
 - **Fast draw mode** - Optimized redraw for large datasets
-- **Vectorized operations** - NumPy-based label assignment
-- **Smart caching** - Reuses matplotlib artists where possible
 - **Efficient slicing** - Pandas datetime indexing for data windows
+
+#### Known limitations
+
+- **Spectrogram / `pcolormesh` panels are not accelerated.** Decimation is a
+  line transform; decimating the time axis of a 2-D mesh would drop whole
+  columns of spectral data, which is a scientific change rather than a
+  rendering one. A single 32-channel mesh panel measures 1.3 s at 43,000
+  samples and 3.3 s at 100,000, which can exceed the cost of every line panel
+  in the figure combined.
+- **Decimation changes appearance, not data.** Under markers a decimated
+  series reads as a different dot density, and structure finer than one pixel
+  column is not reconstructable at that zoom level. Zoom in, or pass
+  `decimate=False`.
+- **Decimation switches itself off for some figures, on purpose.** If your
+  DataFrame carries companion arrays in `df.attrs` - a spectrogram's energy
+  table, for instance - every panel draws at full resolution, because those
+  arrays are windowed to the full window and a shorter frame beside a
+  full-length array would break your own plot function. The same applies if
+  any panel in the layout has `role="not-time"`: a minimum/maximum envelope
+  per time bin is meaningless on an X-Y cross plot, so the whole figure opts
+  out. Neither case is an error; both mean you get the pre-Pack-5 redraw
+  cost, and neither is announced anywhere at runtime.
+- **Box select, rules, labeling and export are never decimated.** They always
+  read the full-resolution DataFrame. A box select over a decimated view
+  re-renders at full resolution first, which shows up as a one-frame pause on
+  the first box gesture after a zoom or pan - and the view then STAYS at full
+  resolution until the next pan, zoom or commit re-draws it, so a second box
+  gesture in the same window costs nothing extra. Preview and
+  selected-interval MARKERS are the one thing computed against the drawn
+  frame: under decimation they snap to the nearest drawn sample, which is
+  bounded by one screen pixel.
 
 ### Multi-Pane Interface
 
@@ -574,14 +616,18 @@ app.load(path: str)                        # Load a session JSON
 
 # Export
 app.export_intervals(path: str, fmt="parquet")  # Per-interval rows: start, end, label, notes (raises ValueError if there are no intervals)
-app.export_per_sample(path: str, fmt="parquet", label_on_uncovered="UNKNOWN")
-                                           # Per-row labels for the entire df.index
+app.export_per_sample(path: str, fmt="parquet")
+                                           # One integer label_id per row of df.index:
+                                           # the index into app.classes, or -1 where no
+                                           # interval covers the row
 
 # Navigation
 app.go_to_window(t0: pd.Timestamp)         # Jump the visible window so it begins at t0
 ```
 
 The richer ML-ready export (integer label IDs + JSON label-map) is reachable from the **Export Labels...** button in the GUI; programmatic access is on the roadmap.
+
+Both exports default to Parquet, which preserves dtypes exactly - an integer `label_id`, real timestamps - and writes a ~1.5M-row session in well under a second. Passing `fmt="csv"` produces identical labels but takes a few seconds at that scale and stringifies the dtypes; the cost is the pandas CSV serializer, not the labeling math.
 
 ## Architecture
 

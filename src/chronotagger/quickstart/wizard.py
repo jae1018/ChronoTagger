@@ -156,6 +156,23 @@ class QuickStartWizard:
             time_range = self.df.index[-1] - self.df.index[0]
             default_window = time_range * 0.1
 
+            # Insurance for multi-million-row frames (Pack 5 R5). The 10%
+            # rule scales by TIME RANGE, not row count, so on the real
+            # files it opens 304,119 points (3.0M-row peif) and 1,033,278
+            # (13.6M-row spinres) in the first frame. Cap the FIRST window
+            # at ~200k samples by asking the index where sample 200,000
+            # sits. Honest limit, also measured: at the 147k-point default
+            # scale a cap buys ~14% -- this is a bound on the worst case,
+            # not the fix for "feels slow on first open" (pack5_g2 7/S6).
+            first_frame_cap = 200_000
+            if len(self.df.index) > first_frame_cap:
+                try:
+                    span_cap = self.df.index[first_frame_cap] - self.df.index[0]
+                    if pd.Timedelta(0) < span_cap < default_window:
+                        default_window = span_cap
+                except Exception:
+                    pass
+
             # Pass parent=self.root so the labeler mounts itself as a
             # tk.Toplevel under the wizard's Tk root, instead of creating a
             # second tk.Tk() (which would land tk.StringVar/IntVar/BooleanVar

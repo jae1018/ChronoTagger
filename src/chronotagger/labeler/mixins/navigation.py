@@ -49,7 +49,10 @@ class NavigationMixin:
         self.start_time_entry.insert(0, str(self.t0))  # type: ignore[union-attr]
         self.end_time_entry.delete(0, tk.END)  # type: ignore[union-attr]
         self.end_time_entry.insert(0, str(self.t1))  # type: ignore[union-attr]
-        self._update_plot()
+        # Every wheel time-zoom and wheel pan notch lands here, and a wheel
+        # emits 10-30 notches per second against a 612 ms frame. Coalesced
+        # (Pack 5 R4d): the burst renders once, at the window it ended on.
+        self._request_redraw()
         self.status_var.set(  # type: ignore[union-attr]
             f"Window: {self.t0.strftime('%H:%M:%S')} → {self.t1.strftime('%H:%M:%S')}"
         )
@@ -218,8 +221,8 @@ class NavigationMixin:
         # Update the time range UI fields to reflect new window
         self._update_time_range_fields()
 
-        # Redraw plot with new time range
-        self._update_plot()
+        # Redraw plot with new time range -- coalesced (Pack 5 R4d)
+        self._request_redraw()
 
         # Update status
         if hasattr(self, 'status_var') and self.status_var is not None:

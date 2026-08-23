@@ -22,6 +22,71 @@ TOOL_GID_PREFIX = "chronotagger:"
 class EventsBaseMixin:
     """Base mixin providing utility methods for event handling and time operations."""
 
+    # ---------- Pack 5: idle-coalesced redraws (R4d / R12) ----------
+
+    def _request_redraw(self) -> None:
+        """
+        Ask for a redraw, coalesced onto Tk's IDLE queue.
+
+        A lone gesture still renders immediately-when-idle; a burst
+        collapses to ONE render, of the latest state. Measured: ten
+        redraw requests produce ten full Agg renders today -- 7.1 s at
+        43k points, 10.7 s at 500k -- and one after coalescing
+        (pack5_g2 section 5d). No timer and no debounce: a timer would
+        add latency to the single-gesture case, which is the common one.
+
+        Hosts without a Tk root (headless scripts, the mixin test
+        harnesses) have no idle queue, so there the call is synchronous --
+        which is also exactly what every Pack 1-4 test expects.
+        """
+        after_idle = getattr(getattr(self, "root", None), "after_idle", None)
+        if not callable(after_idle):
+            self._redraw_pending = False
+            self._redraw_idle_id = None
+            self._update_plot()
+            return
+        self._redraw_pending = True
+        if getattr(self, "_redraw_idle_id", None) is not None:
+            return  # a render is already queued; this request folds into it
+        try:
+            self._redraw_idle_id = after_idle(self._run_pending_redraw)
+        except Exception:
+            self._redraw_idle_id = None
+            self._redraw_pending = False
+            self._update_plot()
+
+    def _run_pending_redraw(self) -> None:
+        """Idle callback: render the LATEST state, exactly once."""
+        self._redraw_idle_id = None
+        if not getattr(self, "_redraw_pending", False):
+            return
+        self._redraw_pending = False
+        self._update_plot()
+
+    def _flush_pending_redraw(self) -> None:
+        """
+        Render NOW if a coalesced redraw is still queued.
+
+        Called by gestures that READ what _update_plot writes -- above all
+        _last_windowed_index, which box select maps artist ordinals
+        through. Tk services window events before idle handlers, so a fast
+        user can land a click between the request and the render; without
+        this the click would map onto the previous window, which is the
+        exact failure Pack 4 R7 closed for a different cause.
+        """
+        if not getattr(self, "_redraw_pending", False):
+            return
+        idle_id = getattr(self, "_redraw_idle_id", None)
+        cancel = getattr(getattr(self, "root", None), "after_cancel", None)
+        if idle_id is not None and callable(cancel):
+            try:
+                cancel(idle_id)
+            except Exception:
+                pass
+        self._redraw_idle_id = None
+        self._redraw_pending = False
+        self._update_plot()
+
     def _update_time_window(self) -> None:
         try:
             new_t0 = pd.to_datetime(self.start_time_entry.get())  # type: ignore[union-attr]
@@ -37,7 +102,7 @@ class EventsBaseMixin:
             self.end_time_entry.delete(0, tk.END)  # type: ignore[union-attr]
             self.end_time_entry.insert(0, str(self.t1))  # type: ignore[union-attr]
 
-            self._update_plot()
+            self._request_redraw()  # coalesced (Pack 5 R4d)
             self.status_var.set(  # type: ignore[union-attr]
                 f"Window updated: {self.t0.strftime('%H:%M:%S')} → {self.t1.strftime('%H:%M:%S')}"
             )

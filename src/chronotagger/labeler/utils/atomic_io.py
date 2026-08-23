@@ -16,12 +16,18 @@ node; see edit_pack/evidence/pack2_dell_crossplatform_report.md):
 - os.replace over a target held open: Windows raises PermissionError
   (OneDrive/antivirus share locks) and the bounded retry rides it out;
   Linux always succeeds, so the retry is simply dormant there.
-- Directory fsync (full POSIX rename-durability) is deliberately
-  SKIPPED: it raises on Windows, and on ext4 it measured +90% autosave
-  cost (+9ms per gesture) for crash-durability of the rename alone.
-  Atomicity holds without it; if rename-durability is ever wanted for
-  the user-initiated writes (session save, exports), that is a Pack 5
-  opt-in, not a per-gesture default.
+- Directory fsync (full POSIX rename-durability) is OPT-IN via
+  sync_dir=True, and Pack 5 (R8) wires it to the writes a USER
+  initiated -- session save, Save As, exports -- and never to the
+  per-gesture autosave, where ext4 measured +8.94 ms per write (+90% of
+  the autosave path). Atomicity holds without it either way.
+  CORRECTION to what this docstring used to claim: on Windows the idiom
+  fails one step EARLIER than "os.fsync raises". It is
+  os.open(dir, O_RDONLY) that raises PermissionError (errno 13); fsync
+  is never reached, and os.O_DIRECTORY does not exist on the platform at
+  all (measured, pack5_g1 5c / S8). The cost there is one raised and
+  caught OSError -- 0.0675 ms per call, measured over 2,000 -- so the
+  guard has to sit around the open.
 """
 
 from __future__ import annotations
@@ -81,7 +87,29 @@ def _backup_existing_json(target: Path) -> None:
         pass
 
 
-def _finish(tmp: Path, target: Path, backup: bool) -> None:
+def _sync_dir(target: Path) -> None:
+    """Best-effort directory fsync -- rename-durability for USER-initiated
+    writes only (Pack 5 R8). On Windows the open itself raises
+    PermissionError before fsync is reachable, so the cost there is the
+    cost of raising and catching one OSError: MEASURED 0.0675 ms per call
+    over 2,000 calls -- effectively free, not literally zero. On the
+    Dell's ext4 the fsync does run, +8.94 ms per write. Never raises: a
+    durability nicety may not fail a save whose bytes are already on
+    disk."""
+    try:
+        fd = os.open(str(target.parent), os.O_RDONLY)
+    except (OSError, ValueError):
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _finish(tmp: Path, target: Path, backup: bool,
+            sync_dir: bool = False) -> None:
     """Shared tail: optional validated backup, then the atomic swap.
     Cleanup contract: tmp is removed on success; on a replace failure
     tmp is KEPT and named in the error (it holds the only copy of the
@@ -93,6 +121,8 @@ def _finish(tmp: Path, target: Path, backup: bool) -> None:
     except PermissionError as e:
         raise PermissionError(
             f"{e} -- the new content is preserved at {tmp}") from e
+    if sync_dir:
+        _sync_dir(target)
     try:
         tmp.unlink()
     except OSError:
@@ -108,8 +138,10 @@ def _cleanup_tmp(tmp: Path) -> None:
 
 
 def atomic_write_json(target: Union[str, Path], obj: Any,
-                      backup: bool = False) -> None:
-    """Serialize obj fully to a same-directory temp file, fsync, swap."""
+                      backup: bool = False, sync_dir: bool = False) -> None:
+    """Serialize obj fully to a same-directory temp file, fsync, swap.
+    sync_dir=True adds the directory fsync (see _sync_dir): pass it for
+    writes the USER asked for, never for the autosave."""
     target = Path(target)
     tmp = _tmp_for(target)
     try:
@@ -120,16 +152,17 @@ def atomic_write_json(target: Union[str, Path], obj: Any,
     except BaseException:
         _cleanup_tmp(tmp)
         raise
-    _finish(tmp, target, backup)
+    _finish(tmp, target, backup, sync_dir)
 
 
 def atomic_write_path(target: Union[str, Path],
                       write_to: Callable[[str], None],
-                      backup: bool = False) -> None:
+                      backup: bool = False, sync_dir: bool = False) -> None:
     """
     For writers that need a PATH (DataFrame.to_csv / to_parquet):
     write_to(tmp_path) must produce the complete file; it is then
-    fsynced and swapped in.
+    fsynced and swapped in. sync_dir=True adds the directory fsync
+    (see _sync_dir) -- user-initiated writes only.
     """
     target = Path(target)
     tmp = _tmp_for(target)
@@ -144,4 +177,4 @@ def atomic_write_path(target: Union[str, Path],
     except BaseException:
         _cleanup_tmp(tmp)
         raise
-    _finish(tmp, target, backup)
+    _finish(tmp, target, backup, sync_dir)

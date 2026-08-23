@@ -475,9 +475,10 @@ class MouseEventsMixin:
                 else:
                     self.status_var.set("Resized interval")
 
-            # Clear preview & refresh
+            # Clear preview & refresh -- coalesced (Pack 5 R4d): a strip
+            # drag-resize ends in a burst of release-adjacent redraws.
             self.current_selection = None
-            self._update_plot()
+            self._request_redraw()
             self._save_autosave()
 
         # Reset drag state & cursor

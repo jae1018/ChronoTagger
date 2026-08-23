@@ -22,8 +22,26 @@ register_matplotlib_converters()
 
 from ..utils.timeaxis import apply_time_axis_format
 from ..utils.overlays import draw_interval_bands
+from ..utils.decimate import plan_decimation
 
 logger = logging.getLogger(__name__)
+
+# Layout re-solves are supposed to be rare (a window resize, the F9
+# sidebar). If they stop being rare the freeze is buying nothing, which is
+# a degrade worth exactly one record per session (Pack 4 R14).
+_LAYOUT_INVALIDATIONS = 0
+_LAYOUT_STORM_WARNED = False
+_LAYOUT_STORM_AT = 500
+
+
+def _note_layout_invalidation() -> None:
+    global _LAYOUT_INVALIDATIONS, _LAYOUT_STORM_WARNED
+    _LAYOUT_INVALIDATIONS += 1
+    if _LAYOUT_INVALIDATIONS > _LAYOUT_STORM_AT and not _LAYOUT_STORM_WARNED:
+        _LAYOUT_STORM_WARNED = True
+        logger.warning(
+            "constrained-layout re-solve requested %d times this session; "
+            "the layout freeze is not holding", _LAYOUT_INVALIDATIONS)
 
 
 class PlottingMixin:
@@ -94,6 +112,153 @@ class PlottingMixin:
         lines.append("  full traceback -> chronotagger.log")
         return "\n".join(lines)
 
+    # ---------- Pack 5: draw-only decimation (R4b / R11) ----------
+
+    def _decimation_enabled(self) -> bool:
+        """
+        Whether draw decimation may run for the CURRENT pane.
+
+        Off when the user asked for raw drawing (``decimate=False``), and
+        off in the two shapes where selecting rows would break something
+        real instead of speeding it up:
+
+        - ``df.attrs`` carries companion arrays -- a spectrogram's energy
+          table, for one -- that plot_fn indexes against ``df.index``.
+          ``_build_window_attrs_view`` slices those to the FULL window, so
+          handing plot_fn a shorter frame beside a full-length array is a
+          shape error, not a speedup. That is also the case decimation
+          cannot help anyway: a mesh is not a line (README, known limits).
+        - a ``not-time`` panel is present. Min/max per time bin is a
+          line-envelope transform; on an X-Y cross plot it means nothing,
+          and the highlight extractor for those panels indexes the full
+          window frame positionally.
+        """
+        if not getattr(self, "decimate", True):
+            return False
+        if getattr(self, "_decim_suspend", False):
+            # A box selection is reading the artists; see
+            # _on_rectangle_select. Nothing that decides which samples get
+            # LABELLED may ever look at a decimated trace.
+            return False
+        try:
+            if getattr(self.df, "attrs", None):
+                return False
+        except Exception:
+            return False
+        meta = getattr(self, "axes_meta", None)
+        if isinstance(meta, dict):
+            for m in meta.values():
+                try:
+                    if str(m.get("role", "time")).lower() != "time":
+                        return False
+                except Exception:
+                    return False
+        return True
+
+    def _draw_width_px(self) -> int:
+        """Pixel width of a data panel -- the bin count decimation aims at."""
+        axes = getattr(self, "user_axes", None) or {}
+        for ax in axes.values():
+            try:
+                w = int(ax.bbox.width)
+            except Exception:
+                continue
+            if w > 1:
+                return w
+        try:
+            return int(self.fig.get_size_inches()[0] * self.fig.dpi)
+        except Exception:
+            return 0
+
+    def _decimate_for_draw(self, sub_df):
+        """
+        Return the frame plot_fn should draw, and record whether it was
+        decimated (the selection path asks).
+
+        sub_df comes back untouched whenever decimation is off or a no-op:
+        there is no half-decimated state.
+        """
+        self._decim_active = False
+
+        if not self._decimation_enabled():
+            return sub_df
+
+        n_px = self._draw_width_px()
+        if n_px <= 1:
+            return sub_df
+
+        try:
+            plan = plan_decimation(sub_df, n_px)
+        except Exception:
+            # A rendering optimisation may never take the redraw down.
+            self._warn_once(
+                "decimation-failed",
+                "envelope decimation failed; drawing the full window")
+            return sub_df
+        if plan is None:
+            return sub_df
+
+        kept = plan[0]
+        self._decim_active = True
+        return sub_df.take(kept)
+
+    # ---------- Pack 5: constrained-layout freeze (R4a) ----------
+
+    def _freeze_layout_after_draw(self, pane=None) -> None:
+        """
+        Turn the constrained-layout solver off once it has produced a
+        geometry.
+
+        The solver runs on EVERY canvas.draw() and its cost is flat, not
+        per-point: an empty figure measures 122.5 ms with
+        constrained_layout against 46.3 ms frozen, and a 43k-point frame
+        332 ms against 210 ms. Freezing installs matplotlib's
+        PlaceHolderLayoutEngine, which preserves the solved geometry
+        exactly (verified), and re-solving is one call away.
+        """
+        if pane is None:
+            pane = getattr(self, "active_pane", None)
+        fig = getattr(pane, "fig", None) if pane is not None else None
+        if fig is None or getattr(pane, "_layout_frozen", False):
+            return
+        if not getattr(pane, "_layout_constrained", False):
+            pane._layout_frozen = True
+            return
+        try:
+            fig.set_layout_engine("none")
+        except Exception:
+            self._warn_once("layout-freeze",
+                            "could not freeze the constrained-layout engine")
+            return
+        pane._layout_frozen = True
+
+    def _invalidate_layout_freeze(self, pane=None) -> None:
+        """
+        Ask for ONE more constrained-layout solve.
+
+        A genuine layout change -- a figure resize (window resize, the F9
+        sidebar toggle, a DPI change) or a rebuilt view -- must re-solve or
+        the panels keep the geometry of the old window. Everything else
+        keeps the frozen geometry, which is the entire point.
+        """
+        if pane is None:
+            pane = getattr(self, "active_pane", None)
+        if pane is None:
+            return
+        fig = getattr(pane, "fig", None)
+        if fig is None or not getattr(pane, "_layout_constrained", False):
+            return
+        if not getattr(pane, "_layout_frozen", False):
+            return
+        try:
+            fig.set_layout_engine("constrained")
+        except Exception:
+            self._warn_once("layout-resolve",
+                            "could not restore the constrained-layout engine")
+            return
+        pane._layout_frozen = False
+        _note_layout_invalidation()
+
     def _update_plot(self) -> None:
         """Redraw user panels and strip, preserving two-click preview overlays."""
         import pandas as pd
@@ -158,12 +323,22 @@ class PlottingMixin:
                 "df.attrs windowed view failed; plot_fn receives "
                 "full-length attrs arrays")
     
+        # --- Draw-only decimation (Pack 5 R4b / R11) ---
+        # Chooses WHICH original rows to draw; never averages or
+        # synthesises one. Selection, rules, labeling and export keep
+        # reading self.df at full resolution -- pinned by
+        # test_decimation_is_draw_only.
+        sub_df = self._decimate_for_draw(sub_df)
+
         # --- User plot function ---
         # Cache the windowed index BEFORE rendering (Pack 4 R7): the
         # windowing above succeeded independently of plot_fn, and a stale
         # cache mis-mapped box selections onto the PREVIOUS window --
         # measured: an interval committed 1 hour off, with a success
-        # message (evidence pack4_repro_T1).
+        # message (evidence pack4_repro_T1). It caches the frame plot_fn
+        # actually receives, so Pack 3's artist-ordinal condition (artist
+        # point count == len(windowed_idx)) still holds when that frame
+        # has been decimated.
         self._last_windowed_index = sub_df.index.copy()
 
         if len(sub_df.index) == 0:
@@ -289,7 +464,11 @@ class PlottingMixin:
                         "restoring selected interval highlights failed")
     
         self.canvas.draw()
-        
+        # The constrained-layout solver has now produced a geometry for
+        # this figure; freeze it (Pack 5 R4a). Genuine layout changes call
+        # _invalidate_layout_freeze and the next draw re-solves.
+        self._freeze_layout_after_draw()
+
     def _capture_auto_limits(self) -> None:
         """
         Capture current axis limits as 'auto' state after plot_fn() renders.
@@ -445,9 +624,12 @@ class PlottingMixin:
             self.end_time_entry.delete(0, "end");   self.end_time_entry.insert(0, str(self.t1))
         except Exception:
             pass
-    
-        self._update_plot()
-            
+
+        # Toolbar zoom/pan is a CONTINUOUS gesture: matplotlib emits
+        # xlim_changed for every intermediate limit. Coalesced (Pack 5
+        # R4d): the drag renders once, at the limits it ended on.
+        self._request_redraw()
+
     def _build_window_attrs_view(self, j0: int, j1: int) -> dict:
         """
         Build a dict for sub_df.attrs where array-likes that look 'time-like' are
@@ -532,7 +714,16 @@ class PlottingMixin:
     def _update_strip(self) -> None:
         """Redraw annotation strip (intervals + current selection preview)."""
         import matplotlib.dates as mdates
-        
+        # Pack 5 R14. Function-scoped on purpose: TOOL_GID_PREFIX lives in
+        # mixins.events.base, and this module is imported BY that package,
+        # so a module-level import would be a cycle.
+        import numpy as np
+        import pandas as pd
+        from matplotlib.collections import PolyCollection
+        from matplotlib.colors import to_rgba
+        from matplotlib.transforms import blended_transform_factory
+        from .events.base import TOOL_GID_PREFIX
+
         ax = self.strip_ax  # type: ignore[assignment]
         with self._squelch_xlim_events():
             ax.clear()
@@ -554,29 +745,55 @@ class PlottingMixin:
             except Exception:
                 pass
 
-        # Labeled intervals in strip
+        # Labeled intervals in strip -- ONE PolyCollection, not one
+        # Rectangle per interval (Pack 5 R14). Structurally the same
+        # disease R4c cured on the data panels: at 2,000 intervals this
+        # loop built 2,000 pickable patches every frame and measured
+        # 1,419.9 ms of a 2,251.4 ms redraw; the collection measures
+        # 27.0 ms and takes the whole frame to 730.9 ms.
+        # Per-face facecolor / edgecolor / linewidth keep the
+        # selected-interval emphasis exactly as the Rectangles had it.
+        spans = []
+        faces = []
+        edges = []
+        widths = []
         for iv in self.intervals:
             if iv.end <= self.t0 or iv.start >= self.t1:
                 continue
             s = max(iv.start, self.t0)
             e = min(iv.end, self.t1)
 
+            selected = iv == self.selected_interval
             color = self.class_colors.get(iv.label, "#cccccc")
-            alpha = 0.8 if iv == self.selected_interval else 0.6
-            edgecolor = "red" if iv == self.selected_interval else "black"
-            lw = 2 if iv == self.selected_interval else 0.5
+            spans.append((s, e))
+            faces.append(to_rgba(color, 0.8 if selected else 0.6))
+            edges.append(to_rgba("red" if selected else "black", 1.0))
+            widths.append(2.0 if selected else 0.5)
 
-            rect = Rectangle(
-                (mdates.date2num(s), 0.1),
-                mdates.date2num(e) - mdates.date2num(s),
-                0.8,
-                facecolor=color,
-                edgecolor=edgecolor,
-                linewidth=lw,
-                alpha=alpha,
-                picker=True,
-            )
-            ax.add_patch(rect)
+        if spans:
+            x0 = mdates.date2num(
+                pd.DatetimeIndex([s for s, _ in spans]).to_numpy())
+            x1 = mdates.date2num(
+                pd.DatetimeIndex([e for _, e in spans]).to_numpy())
+            verts = np.empty((len(spans), 4, 2), dtype=float)
+            verts[:, 0, 0] = x0
+            verts[:, 1, 0] = x1
+            verts[:, 2, 0] = x1
+            verts[:, 3, 0] = x0
+            verts[:, 0, 1] = 0.1
+            verts[:, 1, 1] = 0.1
+            verts[:, 2, 1] = 0.9
+            verts[:, 3, 1] = 0.9
+            bands = PolyCollection(
+                verts, facecolors=faces, edgecolors=edges,
+                linewidths=widths, picker=True)
+            # y in AXES coordinates -- the strip's ylim is pinned to (0, 1)
+            # a few lines above, so this is the same geometry the
+            # Rectangles had, and it survives any future ylim change.
+            bands.set_transform(
+                blended_transform_factory(ax.transData, ax.transAxes))
+            bands.set_gid(TOOL_GID_PREFIX + "strip-bands")
+            ax.add_collection(bands, autolim=False)
 
         # single-span preview
         if self.current_selection:
