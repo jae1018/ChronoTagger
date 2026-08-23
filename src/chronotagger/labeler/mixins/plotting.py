@@ -13,12 +13,17 @@ import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 
 from contextlib import contextmanager
+from pathlib import Path
+
+import logging
 
 from pandas.plotting import register_matplotlib_converters
 register_matplotlib_converters()
 
 from ..utils.timeaxis import apply_time_axis_format
 from ..utils.overlays import draw_interval_bands
+
+logger = logging.getLogger(__name__)
 
 
 class PlottingMixin:
@@ -42,6 +47,52 @@ class PlottingMixin:
             return bool(self.overlays_var.get())  # created in view_build Options
         except Exception:
             return True
+
+    def _warn_once(self, key: str, msg: str) -> None:
+        """
+        WARNING with traceback, once per session per site: these sites
+        fire on every redraw, and a repeating fallback is one fact, not
+        a log flood (Pack 4 level doctrine R14).
+        """
+        warned = getattr(self, "_redraw_warnings", None)
+        if warned is None:
+            warned = set()
+            self._redraw_warnings = warned
+        if key in warned:
+            return
+        warned.add(key)
+        logger.warning(msg, exc_info=True)
+
+    def _plot_error_text(self, exc: BaseException) -> str:
+        """
+        Three-line on-axes summary (Pack 4 R6): exception type + message,
+        the user's own file:line (last traceback frame OUTSIDE this
+        package -- their code is the frame that matters), and the log
+        pointer. The full traceback goes to the log, not the axes.
+        """
+        import traceback
+        lines = [f"Plot error: {type(exc).__name__}: {exc}"]
+        try:
+            pkg_root = str(Path(__file__).resolve().parents[2])
+            # FORWARD walk, first frame outside the package: that is the
+            # user's own plot_fn frame. A reversed walk returns the
+            # DEEPEST foreign frame -- pandas internals (verifier B3:
+            # `base.py, line 3819, in get_loc` instead of the user).
+            for frame in traceback.extract_tb(exc.__traceback__):
+                fname = frame.filename
+                try:
+                    fname = str(Path(fname).resolve())
+                except Exception:
+                    pass
+                if not fname.startswith(pkg_root):
+                    lines.append(
+                        f"  {Path(frame.filename).name}, line "
+                        f"{frame.lineno}, in {frame.name}")
+                    break
+        except Exception:
+            pass
+        lines.append("  full traceback -> chronotagger.log")
+        return "\n".join(lines)
 
     def _update_plot(self) -> None:
         """Redraw user panels and strip, preserving two-click preview overlays."""
@@ -67,6 +118,13 @@ class PlottingMixin:
         try:
             sub_df = self.df.loc[self.t0:self.t1]
         except Exception:
+            # Unsorted/duplicated index: fall back to the FULL frame --
+            # recorded now instead of silent (Pack 4 A4). The stale-cache
+            # hazard this used to compound is closed by EDIT 087, which
+            # caches sub_df.index regardless of render outcome.
+            self._warn_once(
+                "window-fallback",
+                "windowing df.loc[t0:t1] failed; plotting the FULL frame")
             sub_df = self.df
     
         # Also window any time-like arrays carried in df.attrs so plot_fn can use them.
@@ -80,6 +138,12 @@ class PlottingMixin:
             else:
                 j0, j1 = 0, 0
         except Exception:
+            # Window positions default to the array START: attrs arrays
+            # handed to plot_fn are misaligned by the window offset (A5).
+            self._warn_once(
+                "attrs-window-positions",
+                "df.attrs window positions failed; attrs arrays are "
+                "sliced from position 0 (misaligned)")
             j0, j1 = 0, len(sub_df.index)
     
         try:
@@ -87,21 +151,49 @@ class PlottingMixin:
             sub_df = sub_df.copy(deep=False)
             sub_df.attrs = self._build_window_attrs_view(j0, j1)
         except Exception:
-            pass
+            # plot_fn receives FULL-LENGTH attrs beside a windowed frame
+            # (shallow copy inherits self.df.attrs) -- recorded (A6).
+            self._warn_once(
+                "attrs-window-view",
+                "df.attrs windowed view failed; plot_fn receives "
+                "full-length attrs arrays")
     
         # --- User plot function ---
-        try:
-            self.plot_fn(self.user_axes, sub_df, self.t0, self.t1)
+        # Cache the windowed index BEFORE rendering (Pack 4 R7): the
+        # windowing above succeeded independently of plot_fn, and a stale
+        # cache mis-mapped box selections onto the PREVIOUS window --
+        # measured: an interval committed 1 hour off, with a success
+        # message (evidence pack4_repro_T1).
+        self._last_windowed_index = sub_df.index.copy()
 
-            # Cache windowed index for position-space box selections
-            # (allows mapping point order -> timestamps for role="not-time" axes)
-            self._last_windowed_index = sub_df.index.copy()
-        except Exception as e:
-            for ax in self.user_axes.values():
-                ax.text(
-                    0.5, 0.5, f"Plot error:\n{e}", transform=ax.transAxes,
-                    ha="center", va="center"
+        if len(sub_df.index) == 0:
+            # Zoomed finer than the data cadence: say so instead of
+            # handing user code an empty frame and calling the explosion
+            # a "Plot error" (Pack 4, ledger 7.x cheap fix).
+            first_ax = next(iter(self.user_axes.values()), None)
+            if first_ax is not None:
+                first_ax.text(
+                    0.5, 0.5,
+                    "No samples in this time range\n(zoom out or pan)",
+                    transform=first_ax.transAxes, ha="center", va="center"
                 )
+        else:
+            try:
+                self.plot_fn(self.user_axes, sub_df, self.t0, self.t1)
+            except Exception as e:
+                # Full traceback to the forensic channel; a three-line
+                # honest summary on ONE axis; a statusbar pointer (R6).
+                logger.exception("plot_fn raised during redraw")
+                first_ax = next(iter(self.user_axes.values()), None)
+                if first_ax is not None:
+                    first_ax.text(
+                        0.02, 0.98, self._plot_error_text(e),
+                        transform=first_ax.transAxes, ha="left", va="top",
+                        fontsize=8, family="monospace", wrap=True
+                    )
+                if getattr(self, "status_var", None) is not None:
+                    self.status_var.set(
+                        "Plot error -- details in chronotagger.log")
 
         # Capture auto limits after plot_fn() completes
         self._capture_auto_limits()
@@ -180,7 +272,11 @@ class PlottingMixin:
                 try:
                     self._show_selected_point_highlights(redraw=False)
                 except Exception:
-                    pass  # Silently fail if highlighting fails
+                    # Highlights vanishing with no reason given was a
+                    # named ledger target (Pack 4 B3). Fallback unchanged.
+                    self._warn_once(
+                        "highlight-restore-preview",
+                        "restoring selection point highlights failed")
         
         # --- Restore selected interval highlights if there's a selected interval ---
         if hasattr(self, '_show_selected_interval_highlights'):
@@ -188,7 +284,9 @@ class PlottingMixin:
                 try:
                     self._show_selected_interval_highlights()
                 except Exception:
-                    pass  # Silently fail if highlighting fails
+                    self._warn_once(
+                        "highlight-restore-interval",
+                        "restoring selected interval highlights failed")
     
         self.canvas.draw()
         

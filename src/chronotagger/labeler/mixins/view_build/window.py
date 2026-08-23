@@ -174,7 +174,7 @@ class WindowMixin:
                 self.notebook.select(clicked_tab)
                 # Show menu at cursor
                 self.tab_menu.post(event.x_root, event.y_root)
-        except:
+        except Exception:
             pass
 
     def _rename_active_tab(self) -> None:

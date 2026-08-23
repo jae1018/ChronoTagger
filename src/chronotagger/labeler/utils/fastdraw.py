@@ -1,7 +1,14 @@
 # src/chronotagger/labeler/utils/fastdraw.py
 from __future__ import annotations
+import logging
 from typing import Dict, Iterable, List
 import matplotlib.axes
+
+logger = logging.getLogger(__name__)
+
+# Once per SESSION, module-level: a per-instance flag would log once per
+# pane's BlitHelper instead (verifier F8).
+_degrade_logged = False
 
 class BlitHelper:
     """
@@ -78,5 +85,14 @@ class BlitHelper:
                 # Blit just this axes
                 self.canvas.blit(ax.bbox)
         except Exception:
-            # Safe fallback
+            # Safe fallback -- and worth one line PER SESSION: this is
+            # the app silently dropping from ~0.1 ms blits to full
+            # ~200 ms draws (Pack 4 R14, degraded rendering). Never
+            # per-frame: the log write itself costs 31.7 us on the path
+            # that is already degraded.
+            global _degrade_logged
+            if not _degrade_logged:
+                _degrade_logged = True
+                logger.warning("blit failed; degrading to full draws",
+                               exc_info=True)
             self.canvas.draw_idle()

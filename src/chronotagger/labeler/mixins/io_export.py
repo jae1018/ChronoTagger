@@ -12,6 +12,7 @@ from typing import Optional, List
 
 import hashlib
 import json
+import logging
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import pandas as pd
@@ -19,6 +20,8 @@ import numpy as np
 
 from chronotagger.core.models import Interval
 from ..utils.atomic_io import atomic_write_json, atomic_write_path
+
+logger = logging.getLogger(__name__)
 
 
 def _norm_iso(ts: pd.Timestamp) -> str:
@@ -80,7 +83,7 @@ class IOExportMixin:
             atomic_write_path(path, lambda p: df_export.to_parquet(p, index=False))
         else:
             atomic_write_path(path, lambda p: df_export.to_csv(p, index=False))
-        print(f"Exported intervals to {path}")
+        logger.info("Exported intervals to %s", path)
 
     def export_per_sample(
         self, path: str, fmt: str = "parquet", label_on_uncovered: Optional[str] = "UNKNOWN"
@@ -101,7 +104,7 @@ class IOExportMixin:
             atomic_write_path(path, lambda p: df_export.to_parquet(p))
         else:
             atomic_write_path(path, lambda p: df_export.to_csv(p))
-        print(f"Exported per-sample labels to {path}")
+        logger.info("Exported per-sample labels to %s", path)
 
     # ---- GUI-connected ops ----
     def _save_session(self, path: Optional[str] = None) -> bool:
@@ -878,8 +881,32 @@ class IOExportMixin:
         try:
             atomic_write_json(autosave_path, autosave_data, backup=True)
         except Exception as e:
+            # Silent data-loss was reported through the most ephemeral
+            # channel in the app, and only if the statusbar existed
+            # (Pack 4). Now: always logged; statusbar when present; a
+            # dialog ONCE per session (R13) -- autosave fires per
+            # gesture, so a persistent failure must not dialog-spam.
+            logger.error("autosave write failed: %s", e, exc_info=True)
             if getattr(self, 'status_var', None) is not None:
                 self.status_var.set(f"Autosave failed: {e}")
+            # Real-Tk sessions only: MockPersistHost sets root=object()
+            # on purpose, and an unstubbed dialog from the GUI-free suite
+            # deadlocks the whole run (verifier B1 -- observed live).
+            if (isinstance(getattr(self, 'root', None), tk.Misc)
+                    and not getattr(self, '_autosave_failure_dialog_shown',
+                                    False)):
+                self._autosave_failure_dialog_shown = True
+                try:
+                    messagebox.showerror(
+                        "Autosave Failed",
+                        "Autosave is not working -- your labels are NOT "
+                        "being backed up.\n\n"
+                        f"{e}\n\n"
+                        "Further failures this session are logged "
+                        "(chronotagger.log) without this dialog."
+                    )
+                except Exception:
+                    pass  # headless: the log line above is the record
 
     def _check_autosave(self):
         """
@@ -917,7 +944,11 @@ class IOExportMixin:
             except Exception as e:
                 # A corrupt candidate is worth telling the user about --
                 # silently pretending no autosave exists converted
-                # "recoverable" into "lost" before this pack.
+                # "recoverable" into "lost" before this pack. The status
+                # line is overwritten before the first frame renders
+                # (Pack 4 G2 2.1), so the log carries it now too.
+                logger.warning("autosave unreadable (%s): %s",
+                               candidate.name, e, exc_info=True)
                 if getattr(self, 'status_var', None) is not None:
                     self.status_var.set(
                         f"Autosave unreadable ({candidate.name}): {e}")

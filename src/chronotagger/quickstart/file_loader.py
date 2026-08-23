@@ -5,12 +5,15 @@ Provides a GUI for selecting and loading CSV/Parquet files with
 automatic time column detection and data validation.
 """
 
+import logging
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import tkinter.ttk as ttk
 from typing import Optional
 import pandas as pd
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class FileLoaderDialog:
@@ -274,23 +277,45 @@ class FileLoaderDialog:
                 try:
                     pd.to_datetime(df[name])
                     return name
-                except:
+                except Exception:
                     continue
 
-        # Check for datetime dtype columns
-        for col in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df[col]):
-                return col
-
-        # Check if any column can be parsed as datetime
+        # Check for datetime dtype columns (guarded: this probe was the
+        # ONLY unprotected statement in the method -- Pack 4 G1 3.6)
         for col in df.columns:
             try:
+                if pd.api.types.is_datetime64_any_dtype(df[col]):
+                    return col
+            except Exception:
+                continue
+
+        # Last resort: a column whose VALUES coerce to datetimes -- but
+        # NEVER a numeric column (R8 as amended). Any numeric column
+        # coerces (read as ns-since-1970), so column ORDER used to pick a
+        # magnetometer trace as the time axis with validation passing
+        # (A2/A3, execute-proven) -- and monotonicity is no gate: ramps,
+        # counters and L-shells are monotonic (verifier-proven on the
+        # gather's own linear-ramp Bx_nT). String/object columns still
+        # coerce, even unsorted: the downstream validator owns the
+        # "must be sorted" message, and refusing them here handed the
+        # win to a numeric column (verifier B4).
+        skipped_numeric = 0
+        for col in df.columns:
+            try:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    skipped_numeric += 1
+                    continue
                 # Try to parse first few values
                 pd.to_datetime(df[col].head())
                 return col
-            except:
+            except Exception:
                 continue
 
+        if skipped_numeric:
+            logger.warning(
+                "no time column detected; %d numeric column(s) were not "
+                "considered (numeric values are never coerced to "
+                "timestamps)", skipped_numeric)
         return None
 
     def _update_time_column_options(self, df: pd.DataFrame, auto_detected: Optional[str]):
@@ -446,6 +471,8 @@ class FileLoaderDialog:
         Args:
             error: Exception that occurred
         """
+        # The dialog is transient; the traceback is not (Pack 4).
+        logger.error("file load failed", exc_info=error)
         error_msg = str(error)
 
         # Provide helpful suggestions based on error type

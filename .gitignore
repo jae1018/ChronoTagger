@@ -40,6 +40,7 @@ Thumbs.db
 # Project specific
 session_autosave.json
 chronotagger_autosave*
+*.log
 *.pkl
 *.backup
 

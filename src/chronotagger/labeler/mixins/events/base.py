@@ -79,6 +79,12 @@ class EventsBaseMixin:
                 self._show_selected_interval_highlights()
                 self.canvas.draw()  # type: ignore[union-attr]
         except Exception:
+            # The sidebar still LOOKS selected; the next relabel/delete
+            # acts on nothing or a stale target (Pack 4 A10).
+            import logging as _logmod
+            _logmod.getLogger(__name__).warning(
+                "interval-tree selection failed; selection cleared",
+                exc_info=True)
             self.selected_interval = None
             self._clear_selected_interval_highlights()
 

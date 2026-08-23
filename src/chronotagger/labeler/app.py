@@ -189,6 +189,11 @@ class TimeIntervalLabeler(
         self.source_name: Optional[str] = source_name
         self.autosave_folder = Path(autosave_folder)
         self.autosave_folder.mkdir(parents=True, exist_ok=True)  # Create folder if it doesn't exist
+        # Forensic log lives BESIDE the autosave: it inherits the writable-
+        # dir guarantee, the suite's CWD isolation, and the examples'
+        # gitignored autosave dirs for free (Pack 4 R2/R3). Idempotent.
+        from .._logging import configure_file_logging
+        self._log_path = configure_file_logging(self.autosave_folder)
         self.autosave_file = (
             self.autosave_folder
             / f"chronotagger_autosave_{self._dataset_fingerprint()}.json"
@@ -253,6 +258,12 @@ class TimeIntervalLabeler(
                 med = pd.Timedelta(seconds=1)
             self.min_duration: pd.Timedelta = med
         except Exception:
+            # Gates interval validation; a silent 1 s changes the
+            # minimum-length rule's meaning (Pack 4 A9).
+            import logging as _logmod
+            _logmod.getLogger(__name__).warning(
+                "min_duration inference failed; defaulting to 1 s",
+                exc_info=True)
             self.min_duration = pd.Timedelta(seconds=1)
 
         # Multi-span preview state from box-select / rule preview

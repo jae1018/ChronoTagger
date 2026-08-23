@@ -15,10 +15,14 @@ from typing import Optional, Tuple
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+import logging
+
 import pandas as pd
 import numpy as np
 
 from .base import TOOL_GID_PREFIX
+
+logger = logging.getLogger(__name__)
 
 
 class SelectionMixin:
@@ -481,8 +485,14 @@ class SelectionMixin:
 
             return intervals
 
-        except Exception as e:
-            # If anything goes wrong, fall back to artist method
+        except Exception:
+            # Fall back to the artist method -- but RECORD the downgrade:
+            # the fallback is the phantom-prone path Pack 3 had to guard.
+            # A failure in the good algorithm silently switching to the
+            # bad one is Pack 4 A7.
+            logger.warning(
+                "dataframe box-filter failed; falling back to the "
+                "artist scan", exc_info=True)
             return None
 
     def _box_select_via_artists(self, ax, xlo: float, xhi: float,
@@ -1429,6 +1439,11 @@ class SelectionMixin:
             return pd.Timedelta(seconds=median_seconds)
 
         except Exception:
+            # This guess pads committed span boundaries; on a 3 s cadence
+            # it inflates every padded edge 20x (Pack 4 A8).
+            logger.warning(
+                "localized median cadence failed; guessing 60 s",
+                exc_info=True)
             return pd.Timedelta(seconds=60)
 
     def _runs_to_exact_intervals(

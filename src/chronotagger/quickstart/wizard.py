@@ -194,7 +194,11 @@ class QuickStartWizard:
             self.root.destroy()
 
         except Exception as e:
-            # Show error and return to the tab planner
+            # Show error and return to the tab planner. The dialog is
+            # transient; the traceback is not (Pack 4 R6c).
+            import logging
+            logging.getLogger("chronotagger.quickstart.wizard").exception(
+                "labeler launch failed")
             self.root.deiconify()
             messagebox.showerror(
                 "Error Launching Labeler",

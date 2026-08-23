@@ -71,7 +71,7 @@ class DragHandlerMixin:
                     self.panel_listbox.selection_clear(0, tk.END)
                     self.panel_listbox.selection_set(idx)
                     self.panel_listbox.see(idx)
-                except:
+                except Exception:
                     pass
                 # Load settings
                 self.role_var.set(panel.role)
