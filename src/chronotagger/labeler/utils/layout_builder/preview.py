@@ -75,9 +75,10 @@ class PreviewMixin:
         # Pick the first 'time' panel's column extent as the target.
         # Both the Labels strip AND every other 'time' panel are coerced
         # to this target during preview rendering, matching the post-hoc
-        # normalization applied on export (see chronotagger.quickstart
-        # .plot_builder.normalize_time_columns). 'not-time' panels keep
-        # their authored col/colspan.
+        # normalization applied on export (see chronotagger.labeler
+        # .utils.plot_generator.normalize_time_columns -- it moved there
+        # with the rest of the wizard's old generator, Pack 7 W1).
+        # 'not-time' panels keep their authored col/colspan.
         target_col = None
         target_colspan = None
         for p in self.panels:
@@ -162,7 +163,20 @@ class PreviewMixin:
         ).pack()
 
     def _generate_layout_spec(self) -> Dict:
-        """Generate layout_spec dictionary from current panels."""
+        """Generate layout_spec dictionary from current panels.
+
+        Cross-plot areas carry x_col / y_col (Pack 7 W2). The labeler's
+        box-select reads those two names off the LAYOUT_SPEC
+        (events/selection.py:481-482) to filter the dataframe directly;
+        when they are missing it silently downgrades to scanning drawn
+        artists, which is the phantom-prone path Pack 3 had to guard.
+        The designer stores the same two columns under `x_column` and
+        `y_column_2` on its PanelConfig, and used to emit neither -- so
+        every wizard-designed cross-plot ran on the fallback while
+        hand-written drivers got the exact filter. Measured before the
+        fix: _try_dataframe_box_filter -> None on a designer layout, one
+        exact interval on a hand-written one, same data, same box.
+        """
         nrows = self.nrows_var.get()
         ncols = self.ncols_var.get()
 
@@ -178,6 +192,9 @@ class PreviewMixin:
                 area['rowspan'] = panel.rowspan
             if panel.colspan > 1:
                 area['colspan'] = panel.colspan
+            if panel.role == "not-time" and panel.x_column and panel.y_column_2:
+                area['x_col'] = panel.x_column
+                area['y_col'] = panel.y_column_2
             areas.append(area)
 
         return {

@@ -797,9 +797,12 @@ def _wizard_first_window(monkeypatch, index):
     wiz.df = pd.DataFrame({"BX": np.zeros(len(index))}, index=index)
     wiz.root = _StubRoot()
     wiz.tabs_config = [{"title": "t"}]
+    # Pack 7 W1: _build_tab_plot returns (plot_fn, layout_spec,
+    # plot_config) now -- the wizard keeps the config beside the closure
+    # so a driver file can be emitted from the same collected state.
     monkeypatch.setattr(
         wiz, "_build_tab_plot",
-        lambda tab: (lambda axs, df, t0, t1: None, {"nrows": 1}))
+        lambda tab: (lambda axs, df, t0, t1: None, {"nrows": 1}, {}))
     monkeypatch.setattr(wiz, "_show_tab_planner", lambda: None)
 
     wiz._launch_labeler()

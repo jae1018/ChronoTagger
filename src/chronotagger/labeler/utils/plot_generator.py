@@ -8,22 +8,34 @@ write plot_fn code for simple plotting scenarios.
 The generated plot functions support:
 - Time-series plots (line and scatter)
 - Cross-plots / scatter plots (any column vs any column)
+- A log or linear y scale
 - Basic styling and labeling
 
 For more complex plotting needs, users should write custom plot functions.
 
+THIS IS THE PACKAGE'S ONE PLOT GENERATOR (Pack 7 W1). The quick-start
+wizard used to carry a second one, `quickstart.plot_builder`, which
+could not express a cross-plot at all, accumulated artists on repeat
+renders, and used its own `panel0` key scheme. It was folded in here:
+`vertical_stack_config` IS that preset, emitting the same shapes the
+interactive grid designer emits, so the live wizard, the designer and
+the generated driver file all agree on one vocabulary.
+
 Usage:
     from chronotagger.labeler.utils import build_layout, generate_plot_fn
-    
-    layout_spec, plot_config = build_layout(df)
+
+    layout_spec, plot_config = build_layout(df)             # designer
     plot_fn = generate_plot_fn(plot_config)
+
+    from chronotagger.labeler.utils import vertical_stack_config
+    layout_spec, plot_config = vertical_stack_config(cols)  # preset
 
 Author: ChronoTagger Team
 """
 
 from __future__ import annotations
 
-from typing import Dict, Callable, Any
+from typing import Any, Callable, Dict, List, Sequence, Tuple
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -153,7 +165,17 @@ def generate_plot_fn(plot_config: Dict[str, Dict[str, Any]]) -> Callable:
                     ax.scatter(x_data, y_data, s=3, c=color, alpha=0.7)
                 else:  # line
                     ax.plot(x_data, y_data, color=color, linewidth=1.0)
-                
+
+                # Axis scale (Pack 7 W7). The runtime function and the
+                # emitted driver must be able to express the SAME
+                # figure, and a log y is the first thing a density or
+                # flux panel needs. An absent key leaves matplotlib's
+                # default untouched, so every existing plot_config
+                # renders byte-identically.
+                yscale = config.get('yscale')
+                if yscale:
+                    ax.set_yscale(yscale)
+
                 # Labels
                 ylabel = config.get('ylabel', y_col)
                 ax.set_ylabel(ylabel, fontsize=9)
@@ -216,7 +238,12 @@ def generate_plot_fn(plot_config: Dict[str, Dict[str, Any]]) -> Callable:
                     ax.plot(x_data, y_data, color=color, linewidth=1.0)
                 else:  # scatter
                     ax.scatter(x_data, y_data, s=5, c=color, alpha=0.6)
-                
+
+                # Axis scale (Pack 7 W7), same key as the time branch.
+                yscale = config.get('yscale')
+                if yscale:
+                    ax.set_yscale(yscale)
+
                 # Labels
                 xlabel = config.get('xlabel', x_col)
                 ylabel = config.get('ylabel', y_col)
@@ -235,96 +262,148 @@ def generate_plot_fn(plot_config: Dict[str, Dict[str, Any]]) -> Callable:
                 # Equal aspect for position plots (optional)
                 if config.get('equal_aspect', False):
                     ax.set_aspect('equal', adjustable='box')
-    
+
     return generated_plot_fn
 
 
-def generate_plot_code(plot_config: Dict[str, Dict[str, Any]]) -> str:
-    """
-    Generate Python code for a plot function from configuration.
-    
-    This is useful for users who want to see what the auto-generated function
-    does, or who want to start with generated code and customize it.
-    
+def vertical_stack_config(
+    selected_columns: Sequence[str],
+    *,
+    hspace: float = 0.15,
+    wspace: float = 0.12,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Build (layout_spec, plot_config) for one time panel per column.
+
+    This is the wizard's "Vertical Stack" choice, expressed as a PRESET
+    over this module's vocabulary rather than as a second generator
+    (Pack 7 W1). What the deleted `quickstart.plot_builder` produced and
+    what this produces differ in four measured ways, all of them the
+    designer's shape winning:
+
+    - keys are `panel_1..panel_N`, not `panel0..panel_{N-1}`;
+    - `rowspan` / `colspan` are emitted only when they exceed 1;
+    - `hspace` / `wspace` are present;
+    - a `plot_config` comes back too, so the same columns can drive a
+      generated driver file and not just a runtime closure.
+
+    The labels strip is appended in the bottom row, spanning the single
+    column the stack occupies. No `labels` entry is put in plot_config:
+    the labeler holds that strip separately from `axs`, and a config
+    entry for it is what made the old code emitter raise KeyError.
+
     Args:
-        plot_config: Same format as generate_plot_fn()
-    
+        selected_columns: Column names, one time panel each, in order.
+        hspace / wspace: GridSpec spacing, matching the designer's
+            defaults so a stack and a designed grid look alike.
+
     Returns:
-        Python code as a string that defines a plot_fn function
-    
-    Example:
-        >>> code = generate_plot_code(plot_config)
-        >>> print(code)
-        >>> # User can copy-paste and modify this code
+        (layout_spec, plot_config), the same pair `build_layout()`
+        returns.
+
+    Raises:
+        ValueError: If no columns were selected.
     """
-    lines = [
-        "def plot_fn(axs, df, t0, t1):",
-        "    \"\"\"Auto-generated plotting function.\"\"\"",
-        "",
-    ]
-    
-    for panel_key, config in plot_config.items():
-        role = config.get('role', 'time')
-        
-        lines.append(f"    # Panel: {panel_key}")
-        lines.append(f"    ax = axs['{panel_key}']")
-        lines.append(f"    ax.clear()")
-        lines.append("")
-        
-        if role == 'time':
-            y_col = config.get('y_column', 'COLUMN_NAME')
-            style = config.get('style', 'line')
-            color = config.get('color', '#1f77b4')
-            ylabel = config.get('ylabel', y_col)
-            
-            if style == 'scatter':
-                lines.append(f"    ax.scatter(df.index, df['{y_col}'], s=3, c='{color}', alpha=0.7)")
-            else:
-                lines.append(f"    ax.plot(df.index, df['{y_col}'], color='{color}', linewidth=1.0)")
-            
-            lines.append(f"    ax.set_ylabel('{ylabel}')")
-            lines.append(f"    ax.grid(alpha=0.3)")
-            
-        else:  # not-time
-            x_col = config.get('x_column', 'X_COLUMN')
-            y_col = config.get('y_column', 'Y_COLUMN')
-            style = config.get('style', 'scatter')
-            color = config.get('color', '#2ca02c')
-            xlabel = config.get('xlabel', x_col)
-            ylabel = config.get('ylabel', y_col)
-            
-            if style == 'line':
-                lines.append(f"    ax.plot(df['{x_col}'], df['{y_col}'], color='{color}', linewidth=1.0)")
-            else:
-                lines.append(f"    ax.scatter(df['{x_col}'], df['{y_col}'], s=5, c='{color}', alpha=0.6)")
-            
-            lines.append(f"    ax.set_xlabel('{xlabel}')")
-            lines.append(f"    ax.set_ylabel('{ylabel}')")
-            lines.append(f"    ax.grid(alpha=0.3)")
-        
-        lines.append("")
-    
-    return "\n".join(lines)
+    columns = list(selected_columns)
+    if not columns:
+        raise ValueError(
+            "vertical_stack_config needs at least one column; got none.")
+
+    areas: list = []
+    plot_config: Dict[str, Any] = {}
+    for i, col in enumerate(columns, start=1):
+        key = 'panel_%d' % i
+        areas.append({
+            'key': key,
+            'row': i - 1,
+            'col': 0,
+            'role': 'time',
+        })
+        plot_config[key] = {'role': 'time', 'y_column': col}
+
+    areas.append({
+        'key': 'labels',
+        'row': len(columns),
+        'col': 0,
+        'role': 'labels',
+    })
+
+    layout_spec = {
+        'nrows': len(columns) + 1,
+        'ncols': 1,
+        'hspace': hspace,
+        'wspace': wspace,
+        'areas': areas,
+    }
+    return layout_spec, plot_config
 
 
-def print_plot_code(plot_config: Dict[str, Dict[str, Any]]) -> None:
+def normalize_time_columns(layout_spec: Dict[str, Any]) -> None:
     """
-    Print the generated plot function code to console.
-    
-    Convenience function for users who want to see and copy the generated code.
-    
+    Coerce every 'time' and 'labels' area in layout_spec to share the same
+    column extent as the FIRST 'time' area found. Modifies layout_spec in
+    place. No-op if layout_spec has no 'time' areas.
+
+    Within a single pane, the user expects time-series panels and the
+    labels strip to be horizontally aligned. The interactive layout
+    designer doesn't enforce this constraint as the user designs, so we
+    coerce after the fact: whatever the user picked for the first time
+    panel's col/colspan becomes the target, and every other time/labels
+    area is moved/resized to match.
+
+    Cross-plot ('not-time') areas are left alone -- those are typically
+    side panels with their own column layout.
+
+    (Moved here from the deleted `quickstart.plot_builder` in Pack 7 W1,
+    byte-for-byte. It is a layout helper, not a wizard screen, and the
+    designer's preview already documents it as the export-time rule.)
+
     Args:
-        plot_config: Same format as generate_plot_fn()
-    
-    Example:
-        >>> layout_spec, plot_config = build_layout(df)
-        >>> print_plot_code(plot_config)
-        >>> # Copy the printed code and modify as needed
+        layout_spec: A layout_spec dict (as produced by build_layout()) with
+            an 'areas' list. Each area must have at minimum 'role' and 'col';
+            'colspan' defaults to 1 if absent.
     """
-    code = generate_plot_code(plot_config)
-    print("=" * 60)
-    print("Generated Plot Function Code:")
-    print("=" * 60)
-    print(code)
-    print("=" * 60)
-    print("\nCopy this code and modify as needed!")
+    areas = layout_spec.get("areas", [])
+    if not areas:
+        return
+
+    # Pick the first 'time' area's column extent as the target
+    target_col = None
+    target_colspan = None
+    for area in areas:
+        if str(area.get("role", "")).lower() == "time":
+            target_col = int(area.get("col", 0))
+            target_colspan = int(area.get("colspan", 1))
+            break
+
+    if target_col is None:
+        return  # No time panels to normalize against
+
+    # Apply the target to every 'time' and 'labels' area
+    for area in areas:
+        role = str(area.get("role", "")).lower()
+        if role in ("time", "labels"):
+            area["col"] = target_col
+            area["colspan"] = target_colspan
+
+
+def validate_plot_inputs(df: pd.DataFrame, selected_columns: List[str]) -> None:
+    """
+    Validate that selected columns exist in DataFrame.
+
+    (Moved here from the deleted `quickstart.plot_builder` in Pack 7 W1,
+    byte-for-byte.)
+
+    Args:
+        df: DataFrame containing the data
+        selected_columns: List of column names to validate
+
+    Raises:
+        ValueError: If any selected column is missing from DataFrame
+    """
+    missing_columns = [col for col in selected_columns if col not in df.columns]
+
+    if missing_columns:
+        raise ValueError(
+            f"Selected columns not found in DataFrame: {missing_columns}. "
+            f"Available columns: {list(df.columns)}"
+        )

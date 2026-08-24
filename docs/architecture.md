@@ -14,8 +14,7 @@ src/chronotagger/
 │   ├── wizard.py
 │   ├── file_loader.py
 │   ├── tab_planner.py
-│   ├── plot_builder.py
-│   └── config.py
+│   └── driver_export.py        # Emits a runnable driver file
 └── labeler/
     ├── app.py                  # TimeIntervalLabeler (composes all mixins)
     ├── tab_pane.py             # Per-pane state for multi-pane mode
@@ -60,6 +59,10 @@ src/chronotagger/
 - **Multi-pane mode** is mediated by `labeler.tab_pane.TabPane` (per-pane figure/canvas/axes state) and `labeler.sync.PaneSyncManager` (broadcasts interval changes and window-time changes across panes).
 
 - **`utils.layout_builder`** is the interactive grid designer reachable from the wizard's Custom Grid path. It produces the same `layout_spec` dict you'd write by hand and a corresponding `plot_config` that `utils.plot_generator.generate_plot_fn` can compile into a runnable `plot_fn`.
+
+- **`utils.plot_generator`** is the package's ONE plot generator. Both wizard layout types reach it: `vertical_stack_config` is the preset the Vertical Stack radio uses, `build_layout` is the designer's output, and `generate_plot_fn` compiles either into a `plot_fn`. Cross-plot areas carry `x_col` / `y_col` so box-select filters the dataframe instead of scanning artists.
+
+- **`quickstart.driver_export`** turns what the wizard collected into a **driver file**: a standalone script that loads the data, defines `LAYOUT` and `plot_fn`, and constructs the labeler. It is forward-only -- nothing parses a driver back, and regenerating writes a complete fresh file. The `[GEN]` / `[YOURS]` markers in that file are comments telling a human which half a rewrite would replace.
 
 ## Tk root invariant
 

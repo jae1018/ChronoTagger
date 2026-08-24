@@ -32,6 +32,11 @@ class QuickStartWizard:
         # 'layout_type', and (for custom_grid) 'layout_spec' +
         # 'plot_config'. See chronotagger.quickstart.tab_planner.
         self.tabs_config: Optional[list] = None
+        # Filled by _launch_labeler: one {'title', 'layout_spec',
+        # 'plot_config'} per pane, i.e. everything a driver file needs
+        # about the FIGURE. Kept separate from tabs_config because that
+        # one holds the user's raw answers, not the resolved spec.
+        self.pane_specs: list = []
 
     def run(self):
         """
@@ -100,18 +105,25 @@ class QuickStartWizard:
 
     def _build_tab_plot(self, tab: dict):
         """
-        Build (plot_fn, layout_spec) for a single tab config dict.
+        Build (layout_spec, plot_config, plot_fn) for one tab config dict.
 
-        For 'vertical_stack' tabs, generates the plot function and layout
-        spec from the column selection on the fly. For 'custom_grid' tabs,
-        the user pre-designed the layout in the planner -- we reuse the
-        stored layout_spec / plot_config and just normalize.
+        Both layout types now end at the SAME generator (Pack 7 W1).
+        'vertical_stack' is a preset that produces a designer-shaped
+        (layout_spec, plot_config) pair; 'custom_grid' reuses the pair
+        the user designed in the planner. Either way the runnable
+        plot_fn comes from `plot_generator.generate_plot_fn`, so the
+        live figure and a driver file emitted from the same state are
+        the same figure.
+
+        The pair is returned alongside the plot_fn because the driver
+        emitter needs the plot_config, and a closure cannot be read
+        back out of a plot_fn.
         """
-        from chronotagger.quickstart.plot_builder import (
-            build_layout_spec,
-            build_plot_function,
+        from chronotagger.labeler.utils.plot_generator import (
+            generate_plot_fn,
             normalize_time_columns,
             validate_plot_inputs,
+            vertical_stack_config,
         )
 
         columns = tab["columns"]
@@ -119,37 +131,45 @@ class QuickStartWizard:
 
         if layout_type == "vertical_stack":
             validate_plot_inputs(self.df, columns)
-            plot_fn = build_plot_function(columns)
-            layout_spec = build_layout_spec(columns, layout_type)
+            layout_spec, plot_config = vertical_stack_config(columns)
         elif layout_type == "custom_grid":
-            from chronotagger.labeler.utils.plot_generator import (
-                generate_plot_fn,
-            )
             layout_spec = tab["layout_spec"]
             plot_config = tab["plot_config"]
+            # Only the designed layout needs coercing: the preset builds
+            # every time area in column 0 already, and normalizing it
+            # would write colspan=1 onto areas that deliberately omit it.
             normalize_time_columns(layout_spec)
-            plot_fn = generate_plot_fn(plot_config)
         else:
             raise ValueError(
                 f"Unknown layout type: {layout_type!r}. "
                 f"Expected 'vertical_stack' or 'custom_grid'."
             )
 
-        return plot_fn, layout_spec
+        plot_fn = generate_plot_fn(plot_config)
+        return plot_fn, layout_spec, plot_config
 
     def _launch_labeler(self):
         """Launch TimeIntervalLabeler with the configured tabs."""
         from chronotagger import TimeIntervalLabeler
 
         try:
-            # Build (plot_fn, layout_spec) for each tab
+            # Build (plot_fn, layout_spec) for each tab. The plot_config
+            # is kept beside them on self.pane_specs so a later screen
+            # can hand the pair to the driver emitter -- the labeler
+            # itself never sees it (Pack 7 W1/W5).
             pane_configs = []
+            self.pane_specs = []
             for tab in self.tabs_config:
-                plot_fn, layout_spec = self._build_tab_plot(tab)
+                plot_fn, layout_spec, plot_config = self._build_tab_plot(tab)
                 pane_configs.append({
                     "title": tab["title"],
                     "plot_fn": plot_fn,
                     "layout_spec": layout_spec,
+                })
+                self.pane_specs.append({
+                    "title": tab["title"],
+                    "layout_spec": layout_spec,
+                    "plot_config": plot_config,
                 })
 
             # Calculate a reasonable default window (10% of data range)
