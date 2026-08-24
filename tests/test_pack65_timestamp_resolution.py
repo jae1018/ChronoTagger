@@ -108,18 +108,41 @@ def labeler_factory(tmp_path):
 # R65-1 -- the crash, and the cap that fixes it
 # =====================================================================
 
-def test_default_pandas_index_is_microsecond():
-    """The premise. If this ever goes red the rest of the file is about a
-    resolution pandas no longer hands out, not about a live bug."""
-    assert make_frame().index.unit == "us"
+def test_end_cap_matches_the_environments_default_unit(labeler_factory):
+    """The premise, restated so it holds on every pandas line CI builds.
+
+    pandas 3.x makes MICROSECOND the default resolution -- for
+    pd.date_range, for CSV through pd.to_datetime and for parquet -- and
+    that shift is what this whole file is about. pandas 2.x, which is what
+    still installs on python 3.9, defaults to NANOSECOND. So the premise
+    cannot be "the default is us". It is the CANARY: whatever unit the
+    environment's default construction yields, the epsilon is one step of
+    THAT unit and the tail end stays placeable in the index.
+
+    If this ever goes red the rest of the file is about a resolution
+    pandas no longer hands out, not about a live bug."""
+    lbl = labeler_factory()
+    idx = lbl.df.index
+    unit = idx.unit
+    assert unit in UNIT_STEP, "unrecognised default resolution %r" % unit
+    assert lbl._index_unit_epsilon() == UNIT_STEP[unit]
+
+    end = lbl._end_after_inclusive(idx[-1])
+    assert end == idx[-1] + UNIT_STEP[unit]
+    assert end.as_unit(unit, round_ok=False) == end
+    assert int(idx.searchsorted(end, side="left")) == len(idx)
 
 
 def test_tail_box_select_then_export_per_sample_does_not_raise(
         labeler_factory, tmp_path):
     """R65-1, the headline. Box-select to the END of a MICROSECOND frame,
     commit, then export per-sample. Before Pack 6.5 both the id series and
-    the export raised ValueError('Cannot losslessly convert units')."""
-    lbl = labeler_factory()
+    the export raised ValueError('Cannot losslessly convert units').
+
+    The microsecond frame is FORCED with as_unit instead of taken from
+    pandas' construction default: that default is us on pandas 3.x but ns
+    on pandas 2.x, and this pin is about the us frame specifically."""
+    lbl = labeler_factory(unit="us")
     df = lbl.df
     assert df.index.unit == "us"
     lbl.t0 = df.index[90]
@@ -131,7 +154,14 @@ def test_tail_box_select_then_export_per_sample_does_not_raise(
 
     iv = lbl.intervals[0]
     assert iv.contains(df.index[-1])
-    assert iv.end.unit == "us"
+    # REPRESENTABLE in the index's own microseconds -- the property the
+    # crash was actually about -- stated as a lossless round trip rather
+    # than as iv.end.unit == "us". pandas 2.x builds every numeric
+    # Timedelta at ns resolution (pd.Timedelta(1, unit="us").unit ==
+    # "ns"), so it labels the correctly-VALUED end "ns"; pandas 3.x labels
+    # it "us". The round trip holds on both lines and a +1ns end raises on
+    # both lines (measured).
+    assert iv.end.as_unit("us", round_ok=False) == iv.end
 
     ids = lbl._compute_label_id_series()          # raised before Pack 6.5
     assert int(ids.iloc[-1]) != -1
@@ -144,15 +174,22 @@ def test_tail_box_select_then_export_per_sample_does_not_raise(
 @pytest.mark.parametrize("unit", ["ns", "us", "ms", "s"])
 def test_end_cap_is_one_step_of_the_index_resolution(labeler_factory, unit):
     """R65-1 across every pandas datetime64 resolution: the cap is one step
-    of the index's own unit, and the capped end stays IN that unit, so
-    searchsorted and get_indexer both accept it."""
+    of the index's own unit, and the capped end stays REPRESENTABLE in that
+    unit, so searchsorted and get_indexer both accept it.
+
+    Representability is a lossless as_unit round trip, not end.unit ==
+    unit, because pandas 2.x builds every numeric Timedelta at ns
+    resolution: the same correct VALUE is labelled "ns" there and
+    "us"/"ms"/"s" on pandas 3.x. The round trip and the searchsorted below
+    both hold on either line, and both go red on either line if the cap
+    reverts to a hardcoded +1ns (measured on pandas 2.3.3 and 3.0.2)."""
     lbl = labeler_factory(unit=unit)
     idx = lbl.df.index
     assert idx.unit == unit
 
     end = lbl._end_after_inclusive(idx[-1])
     assert end == idx[-1] + UNIT_STEP[unit]
-    assert end.unit == unit
+    assert end.as_unit(unit, round_ok=False) == end
     # the whole point: the index can place it
     assert int(idx.searchsorted(end, side="left")) == len(idx)
 
@@ -184,8 +221,10 @@ def test_ns_frame_end_cap_is_bit_exact_one_nanosecond(labeler_factory):
 def test_us_frame_end_cap_is_one_microsecond_not_one_nanosecond(
         labeler_factory):
     """The behaviour change, stated as a value: on a microsecond index the
-    epsilon is 1us, and the old 1ns end is NOT what is produced."""
-    lbl = labeler_factory()
+    epsilon is 1us, and the old 1ns end is NOT what is produced. The us
+    frame is FORCED -- pandas 2.x would otherwise hand this test an ns
+    index, on which 1ns IS the right answer."""
+    lbl = labeler_factory(unit="us")
     idx = lbl.df.index
     end = lbl._end_after_inclusive(idx[-1])
     assert end == idx[-1] + pd.Timedelta(microseconds=1)
@@ -193,11 +232,14 @@ def test_us_frame_end_cap_is_one_microsecond_not_one_nanosecond(
 
 
 def test_runs_converter_tail_is_representable_on_a_us_frame(labeler_factory):
-    """The second converter (two-click / rule runs) shares the cap."""
-    lbl = labeler_factory()
+    """The second converter (two-click / rule runs) shares the cap. The us
+    frame is FORCED for the same reason, and 'representable' is a lossless
+    as_unit round trip rather than e.unit, which pandas 2.x reports as
+    'ns' even when the VALUE is an exact microsecond."""
+    lbl = labeler_factory(unit="us")
     idx = lbl.df.index
     (s, e), = lbl._runs_to_half_open_intervals(idx, [(115, len(idx) - 1)])
-    assert e.unit == "us"
+    assert e.as_unit("us", round_ok=False) == e
     lbl.intervals = [Interval(s, e, lbl.classes[0])]
     assert int(lbl._compute_label_id_series().iloc[-1]) != -1
 
