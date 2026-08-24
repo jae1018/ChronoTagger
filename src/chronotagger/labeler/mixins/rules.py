@@ -446,9 +446,17 @@ class RulesMixin:
             padded_start = start_ts - pd.Timedelta(seconds=start_pad_seconds)
             padded_end = end_ts + pd.Timedelta(seconds=end_pad_seconds)
             
-            # Clamp to data bounds
+            # Clamp to data bounds. The end cap sits ONE INDEX-UNIT past
+            # data_end so a rule matching through the FINAL sample still
+            # labels it under half-open [start, end). Without it the padded
+            # end lands exactly ON the final sample and that sample exports
+            # as -1 (Pack 6 census F10b, measured). This is the same cap
+            # Pack 3 put on the box-select padding lane in
+            # _apply_localized_padding_to_intervals (selection.py, T4);
+            # R65-2 extends THAT cap here rather than the whole-span
+            # converter, which was measured to widen overlap carves too.
             padded_start = max(padded_start, self.data_start)
-            padded_end = min(padded_end, self.data_end)
+            padded_end = min(padded_end, self._end_after_inclusive(self.data_end))
             
             # Ensure start <= end after padding
             if padded_start > padded_end:

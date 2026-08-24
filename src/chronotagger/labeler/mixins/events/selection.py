@@ -1467,7 +1467,7 @@ class SelectionMixin:
                 padded_start = start_time - (start_local_med / 2)
                 padded_end = end_time + (end_local_med / 2)
 
-            # Clamp to data bounds. The end cap sits 1ns PAST data_end so a
+            # Clamp to data bounds. The end cap sits ONE INDEX-UNIT past
             # tail interval still labels the final sample under half-open
             # [start, end) semantics (T4).
             padded_start = max(padded_start, self.data_start)

@@ -177,13 +177,38 @@ class EventsBaseMixin:
         # Show point highlights during strip editing preview
         self._show_selected_point_highlights(redraw=True)  # Force redraw to ensure highlights appear
 
+    def _index_unit_epsilon(self) -> pd.Timedelta:
+        """
+        ONE step of self.df.index's own datetime64 resolution.
+
+        pandas 3.0 hands out MICROSECOND DatetimeIndexes by default -- from
+        pd.date_range, from CSV through pd.to_datetime, and from parquet. On
+        such an index a hardcoded +1ns end cap is UNREPRESENTABLE: the
+        Timestamp promotes to ns, and idx.searchsorted(end) then raises
+        ValueError("Cannot losslessly convert units"), which was a live
+        crash on the export path (Pack 6 census F-NEW; Pack 6.5 R65-1).
+
+        pd.Timedelta(1, unit="ns") is bit-identical to
+        pd.Timedelta(nanoseconds=1), so a NANOSECOND index -- every cached
+        ARTEMIS frame -- keeps the Pack 3 cap unchanged to the bit.
+        """
+        unit = getattr(getattr(getattr(self, "df", None), "index", None),
+                       "unit", None)
+        if unit not in ("ns", "us", "ms", "s"):
+            unit = "ns"
+        return pd.Timedelta(1, unit=unit)
+
     def _end_after_inclusive(self, last_ts: pd.Timestamp) -> pd.Timestamp:
         """
         Return an end timestamp that is just after `last_ts` so [start, end)
         includes the last selected sample without guessing sampling cadence.
+
+        The step is one unit of the INDEX'S OWN resolution, so the end is
+        always representable in the index and every downstream searchsorted /
+        get_indexer works (Pack 6.5, R65-1).
         """
         try:
-            return last_ts + pd.Timedelta(nanoseconds=1)
+            return last_ts + self._index_unit_epsilon()
         except Exception:
             # ultra-conservative fallback
             return last_ts + pd.Timedelta(microseconds=1)
@@ -211,8 +236,9 @@ class EventsBaseMixin:
             else:
                 e = self._end_after_inclusive(pd.Timestamp(idx[i1]))
 
-            # allow at most an epsilon beyond data_end
-            cap = self.data_end + pd.Timedelta(nanoseconds=1)
+            # allow at most an epsilon beyond data_end -- one step of the
+            # index's own resolution, so the cap stays representable (R65-1)
+            cap = self._end_after_inclusive(self.data_end)
             if e > cap:
                 e = cap
 
@@ -225,7 +251,7 @@ class EventsBaseMixin:
     ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
         """
         Convert closed spans whose end sits ON a sample into half-open:
-          [s, e_on_sample]  ->  [s, next_sample)   (or e + 1ns past data_end)
+          [s, e_on_sample]  ->  [s, next_sample)   (or one unit past data_end)
         Ends that fall BETWEEN samples are already half-open-correct and pass
         through unchanged. Span-level twin of _runs_to_half_open_intervals;
         successor of the retired crud._normalize_preview_spans_to_half_open
@@ -259,7 +285,7 @@ class EventsBaseMixin:
             # keeps the output a valid (possibly empty) span even for input
             # entirely past data_end.
             try:
-                cap = self.data_end + pd.Timedelta(nanoseconds=1)
+                cap = self._end_after_inclusive(self.data_end)
                 if e2 > cap:
                     e2 = max(cap, s)
             except Exception:

@@ -389,7 +389,17 @@ class MouseEventsMixin:
         iv = self.selected_interval
         self._drag_mode = mode
         self._drag_iv = iv
-        self._drag_initial = (iv.start, iv.end)
+        # A drag works in CLOSED geometry; the interval is stored HALF-OPEN.
+        # A tail interval's stored end is data_end PLUS one index unit -- the
+        # cap _on_strip_release applies below -- and carrying that epsilon
+        # into the drag width RATCHETS: move a tail interval to the interior
+        # with snapping OFF and it covers one extra sample for the rest of the
+        # session (measured 10 -> 11 -> 11, 11, 11 on all four resolutions).
+        # Undo the cap HERE, at the one place it leaks, so the cap applies
+        # only to the commit that actually reaches the final sample. The min()
+        # is byte-for-byte _apply_snap_clamp's own end clamp, so an interval
+        # that has never been to the tail is handed through unchanged.
+        self._drag_initial = (iv.start, min(iv.end, self.data_end))
         if mode == "move":
             self._drag_offset = click_ts - iv.start
             self._set_cursor("fleur")
@@ -454,6 +464,17 @@ class MouseEventsMixin:
         if self._drag_iv is not None and self._drag_preview is not None:
             from chronotagger.core.commands import ResizeIntervalCommand
             s_new, e_new = self._drag_preview
+            # _apply_snap_clamp pins a right-edge drag AT data_end, and a
+            # half-open [s, e) that ENDS at the final sample does not label
+            # it: the sample under the handle exports as -1 (Pack 6 census
+            # F10c, measured). Cap the tail exactly as the Pack 3 commit
+            # paths do. It lands HERE, after the snap, because
+            # _snap_to_samples would pull a capped end back onto data_end;
+            # and it is the TAIL ONLY, because routing the whole span
+            # through _exact_spans_to_half_open grows a repeatedly moved or
+            # left-resized interval by one sample per drag -- measured.
+            if e_new == self.data_end:
+                e_new = self._end_after_inclusive(e_new)
             cmd = ResizeIntervalCommand(self, self._drag_iv, s_new, e_new)
             self._execute_command(cmd)
 

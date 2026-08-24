@@ -376,12 +376,16 @@ def test_snap_off_box_commit_is_padded_and_labels_same_samples():
 
 
 def test_box_commit_labels_the_last_sample_snap_on():
-    """T4: a tail box labels the final sample; the end is the +1ns cap."""
+    """T4: a tail box labels the final sample; the end is the one-index-unit
+    cap. make_df's index is the pandas-3.0 default, MICROSECOND, so the
+    literal +1ns this asserted before Pack 6.5 was an end the index cannot
+    represent (R65-1)."""
     df = make_df()
     host, fig, ax = make_crossplot_host(df, snap=True)
     _finalize(host, df, 115, 119)
     (s, e), = host._commit_spans
-    assert e == df.index[119] + pd.Timedelta(nanoseconds=1)
+    assert e == df.index[119] + pd.Timedelta(1, unit=df.index.unit)
+    assert e.unit == df.index.unit
     assert Interval(s, e, "PS").contains(df.index[-1])
 
 
@@ -450,9 +454,10 @@ def test_exact_spans_to_half_open_converter():
     # end BETWEEN samples -> unchanged (already exclusive-correct)
     mid = idx[10] + pd.Timedelta(seconds=7)
     assert host._exact_spans_to_half_open([(idx[5], mid)]) == [(idx[5], mid)]
-    # end ON the final sample -> 1ns past data_end
+    # end ON the final sample -> one unit of the index's resolution past
+    # data_end (R65-1; make_df's index is microsecond)
     assert (host._exact_spans_to_half_open([(idx[115], idx[119])])
-            == [(idx[115], idx[119] + pd.Timedelta(nanoseconds=1))])
+            == [(idx[115], idx[119] + pd.Timedelta(1, unit=idx.unit))])
 
 
 def test_add_interval_door_converts_current_selection():
@@ -504,7 +509,7 @@ def test_box_select_then_add_is_one_gesture_and_labels_tail(labeler):
     """Pack 1 interaction pin + T4 on the real app: a snap-ON box over the
     DATA TAIL commits through the real door as ONE undo entry and labels the
     final sample of the dataset (the mid-window box this test used to draw
-    exercised neither the tail clamp nor the +1ns cap)."""
+    exercised neither the tail clamp nor the end cap)."""
     df = labeler.df
     labeler.t0 = df.index[90]
     labeler.t1 = labeler.data_end
@@ -518,5 +523,5 @@ def test_box_select_then_add_is_one_gesture_and_labels_tail(labeler):
     assert len(labeler.undo_stack) == depth_before + 1
     assert len(labeler.intervals) == 1
     iv = labeler.intervals[0]
-    assert iv.end == df.index[-1] + pd.Timedelta(nanoseconds=1)
+    assert iv.end == df.index[-1] + pd.Timedelta(1, unit=df.index.unit)
     assert iv.contains(df.index[-1])
