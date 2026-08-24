@@ -47,8 +47,9 @@ machine-readable regions.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+import ntpath
+import posixpath
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
@@ -76,8 +77,19 @@ EPOCH_UNITS = ("s", "ms", "us", "ns")
 # `autosave_folder="."` is the constructor default and it drops a
 # fingerprinted JSON plus a log file into whatever directory the user
 # happened to launch from.  A generated driver always names a folder.
-# These are the spellings `os.path.normpath` cannot collapse for us.
+# These are the spellings a normpath cannot collapse for us.
 _BARE_CWD_TOKENS = {"$PWD", "%CD%", "$(pwd)", "`pwd`"}
+
+# ...and these are the two rulebooks for the ones it CAN.  A driver file
+# is PORTABLE TEXT: the AUTOSAVE_FOLDER literal emitted here is read by
+# whatever platform RUNS the driver, which need not be the one that
+# generated it.  `os.path` only knows the flavour of the generating
+# machine -- on POSIX it reads a backslash as an ordinary filename
+# character, so r".\out\.." sails through emission and lands in the CWD
+# the moment the driver is opened on Windows, which is the one thing this
+# guard exists to prevent.  Checking BOTH flavours makes the refusal --
+# and therefore the emitted bytes -- the same on every platform.
+_PATH_FLAVOURS = (posixpath, ntpath)
 
 # The roles the runtime generator actually draws.  Anything else it
 # ignores in silence, so the emitter emits nothing for it -- same
@@ -268,6 +280,25 @@ def _area_lit(area: Mapping[str, Any]) -> str:
 # ---------------------------------------------------------------------
 # input normalisation
 # ---------------------------------------------------------------------
+
+def _is_bare_cwd(folder: str) -> bool:
+    """Does `folder` name the process CWD under EITHER path flavour?
+
+    Deliberately stricter than `os.path.normpath`: a spelling that is the
+    CWD under Windows rules is refused on POSIX too, and the reverse --
+    `a\\b/..` is the folder `a` to nt and the CWD to posix -- because the
+    emitted literal outlives the machine that wrote it.  The price is
+    that a POSIX directory whose NAME contains a backslash and collapses
+    under Windows rules (`out\\..`) cannot hold autosaves; naming it
+    something else costs nothing, and being handed a Windows path is by
+    far the commoner shape for this user base.
+    """
+    if not folder:
+        return True
+    if folder in _BARE_CWD_TOKENS:
+        return True
+    return any(flavour.normpath(folder) == "." for flavour in _PATH_FLAVOURS)
+
 
 def _is_pane_list(config: Any) -> bool:
     """Is this a LIST OF PANES rather than one pane's config pair?
@@ -756,13 +787,14 @@ def generate_driver(
             "pass time_is_epoch=True with it, or drop it if "
             "%r holds dates rather than integers" % (time_column,))
 
-    folder = str(autosave_folder).strip()
-    if folder in _BARE_CWD_TOKENS or os.path.normpath(folder or ".") == ".":
+    if _is_bare_cwd(str(autosave_folder).strip()):
         raise ValueError(
             "autosave_folder must name a folder, not the process CWD "
-            "(got %r, which resolves to the CWD).  A driver that "
-            "autosaves into whatever directory it was launched from "
-            "loses its own recovery file." % (autosave_folder,))
+            "(got %r, which resolves to the CWD under POSIX or Windows "
+            "path rules).  A driver that autosaves into whatever "
+            "directory it was launched from loses its own recovery file, "
+            "and a driver file is portable text -- it can be run on the "
+            "platform where that spelling collapses." % (autosave_folder,))
 
     layout_spec, plot_config = _split_config(config)
     panels = _drawable_areas(layout_spec, plot_config)
@@ -776,7 +808,16 @@ def generate_driver(
             for i, name in enumerate(classes)
         }
     if source_name is None:
-        source_name = Path(str(data_path)).stem
+        # NOT `Path(...).stem`: pathlib takes the flavour of the machine
+        # RUNNING the emitter, so on POSIX a Windows data_path carries no
+        # separator at all and the WHOLE PATH becomes the stem --
+        # SOURCE_NAME = 'C:\\data\\peif' instead of 'peif', measured on
+        # the Dell.  "Same inputs, same bytes" is this module's
+        # advertised contract, so both separators are separators
+        # everywhere.  splitdrive first, so a drive-relative "C:x.csv"
+        # still reads as "x" exactly as it does on Windows today.
+        _, tail = ntpath.splitdrive(str(data_path).replace("\\", "/"))
+        source_name = PurePosixPath(tail).stem
 
     sections = [
         _HEADER.rstrip("\n") % {"basename": _comment(file_name)},

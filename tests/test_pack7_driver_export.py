@@ -503,16 +503,28 @@ def test_a_bare_cwd_autosave_folder_is_refused(folder):
 
 
 @pytest.mark.parametrize("folder", ["./.", ".//", ".\\.", "./x/..",
-                                    "  ./  ", ".\\out\\.."])
+                                    "  ./  ", ".\\out\\..", "a\\b/.."])
 def test_other_spellings_of_the_cwd_are_refused_too(folder):
     """v2 / V1 MINOR-2.  The refusal used to be membership in a literal
     set, so the pin above was coextensive with the implementation and
-    could not discover a leak.  These six all resolve to exactly the
-    process CWD and NONE of them is in that set -- `os.path.normpath`
-    is what closes them."""
-    import os.path
+    could not discover a leak.  These seven all resolve to exactly the
+    process CWD under at least one path flavour, and none of them is in
+    that set -- a normpath is what closes them.
 
-    assert os.path.normpath(folder.strip()) == "."
+    WHICH normpath is not a detail.  `os.path` alone leaves the backslash
+    spellings open on POSIX (a backslash is an ordinary filename
+    character there) and leaves `a\\b/..` open on Windows (nt reads it as
+    the folder `a`), so a suite written against `os.path` passes on the
+    machine that wrote it and fails on the other one -- measured, five
+    reds on ubuntu CI.  A driver file is portable text, so the emitter
+    refuses a spelling that is the CWD under EITHER rulebook and this
+    parametrization is identical on every platform."""
+    import ntpath
+    import posixpath
+
+    stripped = folder.strip()
+    assert (posixpath.normpath(stripped) == "."
+            or ntpath.normpath(stripped) == ".")
     with pytest.raises(ValueError, match="autosave_folder"):
         generate_driver(vertical_stack_config(["BX"]),
                         data_path="/d/x.csv", fmt="csv", time_column="t",
@@ -556,12 +568,47 @@ def test_config_accepts_both_shapes_the_package_hands_around():
     assert as_tuple == as_mapping
 
 
-def test_source_name_defaults_to_the_data_file_stem():
+@pytest.mark.parametrize("data_path", [r"E:\a\peif_with_labels.parquet",
+                                      "E:/a/peif_with_labels.parquet",
+                                      "/data/a/peif_with_labels.parquet"])
+def test_source_name_defaults_to_the_data_file_stem(data_path):
+    """Both separators are separators, on both platforms.
+
+    `Path(...).stem` takes the flavour of the machine running the
+    emitter, so on POSIX the Windows spelling has no separator to split
+    on and the WHOLE PATH becomes the identity:
+    SOURCE_NAME = 'E:\\a\\peif_with_labels' -- measured, and the same
+    defect is what turned the full-file golden red."""
     text = generate_driver(vertical_stack_config(["BX"]),
-                           data_path=r"E:\a\peif_with_labels.parquet",
+                           data_path=data_path,
                            fmt="parquet", time_column="t",
                            autosave_folder="./out")
     assert 'SOURCE_NAME = "peif_with_labels"' in text
+
+
+def test_a_drive_relative_data_path_still_reads_as_the_file_stem():
+    """FOLD-1: the pin for EDIT 292's `ntpath.splitdrive`.
+
+    `C:x.csv` is DRIVE-RELATIVE -- "x.csv in the current directory of
+    drive C" -- and it is the one spelling that tells EDIT 292's two
+    tokens apart.  `splitdrive` is what strips the `C:`; without it
+    `PurePosixPath("C:x.csv").stem` is `C:x`, on BOTH platforms, and the
+    claim that the stem fix is a ONE-WAY POSIX correction stops being
+    true -- Windows answered `x` here at 9ad8770 and has to keep
+    answering `x`.
+
+    Every other pin in this file is blind to that token: the adversarial
+    verifier dropped `splitdrive` and all 472 tests stayed green on
+    Windows AND on the Dell.  This one is red on both platforms without
+    it, which is the whole reason it exists.
+
+    It is a test of its own rather than a fourth param of the sibling
+    above because its expected stem differs; folding it in would have
+    forced (path, expected) pairs and renamed three ids."""
+    text = generate_driver(vertical_stack_config(["BX"]),
+                           data_path="C:x.csv", fmt="parquet",
+                           time_column="t", autosave_folder="./out")
+    assert 'SOURCE_NAME = "x"' in text
 
 
 def test_window_and_step_round_trip_through_pandas():
