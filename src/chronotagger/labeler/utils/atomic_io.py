@@ -33,14 +33,22 @@ node; see edit_pack/evidence/pack2_dell_crossplatform_report.md):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import time
 from pathlib import Path
 from typing import Any, Callable, Union
 
+logger = logging.getLogger(__name__)
+
 _REPLACE_TRIES = 5
 _REPLACE_DELAY_S = 0.05
+
+# Pack 6 F7: warn-once per SESSION, module level -- the fastdraw.py:9-11
+# shape. A directory-fsync failure is a property of the volume, so a
+# per-write record would spam an autosave loop on a failing disk.
+_dirsync_warn_logged = False
 
 
 def _tmp_for(target: Path) -> Path:
@@ -103,7 +111,25 @@ def _sync_dir(target: Path) -> None:
     try:
         os.fsync(fd)
     except OSError:
-        pass
+        # Pack 6 F7. On POSIX an EIO here means the rename may not be
+        # durable -- exactly the guarantee sync_dir=True was added (Pack 5
+        # R8) to give a USER-initiated save. Before this line the failure
+        # was completely invisible: injecting errno 5 at this call
+        # produced no exception, no log record, and a user told the save
+        # had succeeded. Still never raises -- a durability nicety may not
+        # fail a save whose bytes are already on disk -- but it is on the
+        # record now.
+        #
+        # Deliberately NOT around the os.open above: that raises
+        # PermissionError on EVERY Windows call by design (0.0675 ms per
+        # call, measured over 2,000), so a warning there would fire once
+        # per session on every Windows box and mean nothing.
+        global _dirsync_warn_logged
+        if not _dirsync_warn_logged:
+            _dirsync_warn_logged = True
+            logger.warning(
+                "directory fsync failed for %s; the rename may not be "
+                "durable on this filesystem", target.parent, exc_info=True)
     finally:
         os.close(fd)
 

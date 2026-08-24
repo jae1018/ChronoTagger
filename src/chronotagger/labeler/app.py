@@ -7,11 +7,12 @@ implementation details live in small, testable files.
 
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple, Any
+from typing import Callable, Dict, List, Optional, Tuple, Any
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -42,6 +43,7 @@ from .mixins.stats import StatsMixin
 from .mixins.io_export import IOExportMixin
 from .mixins.labels import LabelsMixin
 
+logger = logging.getLogger(__name__)
 
 
 class TimeIntervalLabeler(
@@ -85,6 +87,50 @@ class TimeIntervalLabeler(
         # --- Validate inputs ---
         if not isinstance(df.index, pd.DatetimeIndex):
             raise TypeError("DataFrame must have a DatetimeIndex.")
+
+        # Pack 6 R9. An unsorted index used to be accepted in silence and
+        # produce nonsense: data_start / data_end are read blind from
+        # index[0] / index[-1], so data_end lands BEFORE data_start, t1 <
+        # t0, and df.loc[t0:t1] falls back to a boolean mask that returns
+        # the WHOLE dataset -- every "window" contains everything. Measured
+        # on a fully shuffled 200-row frame: constructor accepted,
+        # _build_gui, _update_plot, _next_window and the redraw after it
+        # all succeeded, with no exception anywhere.
+        #
+        # Sorting rather than raising: the quick-start wizard already
+        # refuses such a frame (file_loader.py:457), but the EXPORT path
+        # handles non-monotonic frames correctly and deliberately
+        # (io_export.py:303-324, Pack 5 R7), so raising here would reject
+        # data one half of the package gets right. Sorting is what a caller
+        # means. Loud, because silently reordering someone's frame is its
+        # own surprise -- and once per construction, not per frame, so a
+        # plain warning is the right level (Pack 4 doctrine).
+        #
+        # IDENTITY CONSEQUENCE, and the reason the warning below carries a
+        # second sentence. dataset_fingerprint() (io_export.py:38) hashes
+        # index[0] and index[-1]; on an unsorted frame those are arbitrary
+        # rows, and after the sort they are the true bounds. So the Pack-2
+        # autosave FILENAME moves -- measured A/B on one shuffled 200-row
+        # frame, chronotagger_autosave_b1179b6c4918.json before and
+        # chronotagger_autosave_fb09764d0822.json after -- and Pack 2 made
+        # the fingerprinted name the only name _check_autosave consults.
+        # An autosave written from the unsorted frame is therefore not
+        # offered for recovery after this change. Correct on the merits --
+        # the old fingerprint encoded nonsense bounds and those sessions
+        # were already windowing over the whole dataset -- but the user has
+        # to be TOLD, not left to discover it.
+        #
+        # Scope: monotonicity only. Duplicate and NaT index entries are NOT
+        # in this pack.
+        if not df.index.is_monotonic_increasing:
+            logger.warning(
+                "DataFrame index is not monotonically increasing (%d rows); "
+                "sorting by index. Windowing, navigation and per-sample "
+                "export all assume ascending time. This also changes the "
+                "dataset fingerprint, so an autosave written from the "
+                "unsorted frame will not be offered for recovery.",
+                len(df.index))
+            df = df.sort_index()
 
         # Validate panes vs plot_fn usage
         if panes is not None and plot_fn is not None:
@@ -271,8 +317,9 @@ class TimeIntervalLabeler(
         except Exception:
             # Gates interval validation; a silent 1 s changes the
             # minimum-length rule's meaning (Pack 4 A9).
-            import logging as _logmod
-            _logmod.getLogger(__name__).warning(
+            # (Pack 6: same logger, same name -- EDIT 185 gave the module
+            # one, so the function-local import is redundant.)
+            logger.warning(
                 "min_duration inference failed; defaulting to 1 s",
                 exc_info=True)
             self.min_duration = pd.Timedelta(seconds=1)
@@ -291,9 +338,17 @@ class TimeIntervalLabeler(
 
         # Per-axis zoom state for Y-zoom and cross-plot X/Y zoom.
         # Keyed by matplotlib Axes so they survive plot rebuilds.
+        # (Pack 6 R4: a `self._manual_zooms` lived here too, recording
+        # which axes the user had zoomed and in which direction across 13
+        # sites. Every read in the tree was `if ax not in self._manual_
+        # zooms:` immediately before a write; nothing iterated it, tested
+        # membership to make a decision, or read the set contents. The two
+        # reset paths that look like consumers -- plotting.py:496 and
+        # zoom.py:226 -- iterate _auto_ylims / _auto_xlims and reset
+        # EVERYTHING, then clear a record they never consulted. Selective
+        # reset would be a feature; this was not scaffolding for one.)
         self._auto_xlims: Dict[plt.Axes, Tuple[float, float]] = {}  # Auto X limits for cross-plots
         self._auto_ylims: Dict[plt.Axes, Tuple[float, float]] = {}  # Auto Y limits for all plots
-        self._manual_zooms: Dict[plt.Axes, Set[str]] = {}           # Track manual zoom: {ax: {'x', 'y'}}
         self._time_range_dirty: bool = False                        # Flag: time range changed
 
     # -------- Pane configuration properties --------

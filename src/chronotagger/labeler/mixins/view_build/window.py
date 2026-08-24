@@ -11,8 +11,72 @@ This mixin provides the top-level _build_gui method that creates the entire UI.
 
 from __future__ import annotations
 
+import logging
+import time
 import tkinter as tk
 from tkinter import ttk
+
+logger = logging.getLogger(__name__)
+
+# Pack 6 R10 -- bounded retry around tk.Tk().
+#
+# MEASURED on this Windows box (conda chronotagger_test, Tk/Tcl 8.6.15):
+# tk.Tk() raises TclError in the first seconds of a process at a rate of
+# 16 of 18 full-suite runs (89%) and 14 of 20 single-module runs (70%).
+# It is ALWAYS a setup-time error, never a test failure, and it is NOT a
+# multi-root problem: 106 roots are created per suite run, peak
+# simultaneous live roots is 1, all 106 are destroyed, and the failing
+# root ordinals cluster in the first six and never appear past the 37th.
+# The four error strings ("Can't find a usable init.tcl", "Can't find a
+# usable tk.tcl", 'invalid command name "tcl_findLibrary"', and -- the
+# tell -- "couldn't read file .../ttk/sizegrip.tcl: no such file or
+# directory" on a file that demonstrably exists) are one transient
+# file-read fault while Tcl sources an already-located library.  It
+# self-clears within 250 ms.
+#
+# Measured alternatives: exporting TCL_LIBRARY/TK_LIBRARY -> 9 of 20,
+# still broken; consolidating to a single session root -> does not fix it
+# and converts a one-test flake into a whole-suite flake.  The bounded
+# retry measured 0 of 20 single-module runs and 0 of 5 full-suite runs,
+# with every recovery inside two attempts.  It lives in src rather than
+# in tests/conftest.py because the SHIPPED app hits this too on this
+# machine, not only the suite.
+_TK_ROOT_ATTEMPTS = 5
+_TK_ROOT_BACKOFF_S = (0.05, 0.10, 0.15, 0.25)
+
+# Deliberately NOT warn-once.  Every recovery is signal: a rising count
+# is the only thing that distinguishes "the retry is catching a live
+# fault" from "the machine went quiet and the fix is unproven".
+tk_root_retry_recoveries = 0
+
+
+def _new_tk_root() -> tk.Tk:
+    """tk.Tk(), retried on the transient startup TclError (Pack 6 R10).
+
+    At most _TK_ROOT_ATTEMPTS attempts with a short backoff between them.
+    ONLY tkinter.TclError is retried -- anything else propagates on the
+    first raise -- and the LAST TclError propagates unchanged when every
+    attempt fails, so a genuinely broken Tk install still fails loudly
+    instead of being masked by the workaround.
+    """
+    global tk_root_retry_recoveries
+    last_exc = None
+    for attempt in range(_TK_ROOT_ATTEMPTS):
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            last_exc = exc
+            if attempt + 1 < _TK_ROOT_ATTEMPTS:
+                time.sleep(_TK_ROOT_BACKOFF_S[attempt])
+            continue
+        if attempt:
+            tk_root_retry_recoveries += 1
+            logger.warning(
+                "tk.Tk() raised TclError on %d attempt(s) before "
+                "succeeding; recovery #%d this session. Last error: %s",
+                attempt, tk_root_retry_recoveries, last_exc)
+        return root
+    raise last_exc
 
 
 class WindowMixin:
@@ -49,7 +113,9 @@ class WindowMixin:
         if parent is not None:
             self.root = tk.Toplevel(parent)
         else:
-            self.root = tk.Tk()
+            # Pack 6 R10: bounded retry -- see _new_tk_root above for the
+            # measurement (89% of full-suite runs errored here before it).
+            self.root = _new_tk_root()
         self.root.title("ChronoTagger - Time Interval Labeler")
         self.root.geometry("1600x900")
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -130,9 +196,16 @@ class WindowMixin:
         self._time_axis_keys = pane.time_axis_keys
         self._primary_time_key = pane.primary_time_key
 
-        # Redraw if the newly active pane is dirty
-        if self.active_pane.needs_update(self.t0, self.t1):
-            self._update_plot()
+        # Redraw the newly active pane.
+        #
+        # Pack 6 R8: this used to be guarded by
+        # `self.active_pane.needs_update(self.t0, self.t1)`, which could
+        # never return False. mark_clean() had ZERO production callers, so
+        # `dirty` was never cleared and `last_window` was never set, and
+        # needs_update() returned True on its first branch every time.
+        # Measured on a live two-pane app after building, plotting and tab
+        # churn: dirty = [True, True], last_window = [None, None].
+        self._update_plot()
 
         # Update sidebar to show intervals in current window
         if hasattr(self, 'update_intervals_list'):
@@ -203,17 +276,12 @@ class WindowMixin:
         if not self.multi_pane_mode:
             return
 
-        self.active_pane.mark_dirty()
         self._update_plot()
 
     def _refresh_all_tabs(self) -> None:
         """Force refresh of all tabs."""
         if not self.multi_pane_mode:
             return
-
-        # Mark all dirty
-        for pane in self.panes:
-            pane.mark_dirty()
 
         # Update active pane immediately
         self._update_plot()

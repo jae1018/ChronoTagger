@@ -8,9 +8,8 @@ while sharing interval/label state with other panes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Any, List, Optional, Set, Tuple
+from typing import Callable, Dict, Any, List, Optional, Tuple
 
-import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
@@ -43,37 +42,18 @@ class TabPane:
     time_axis_keys: List[str] = field(default_factory=list)
     primary_time_key: Optional[str] = None
 
-    # Rendering state (for lazy updates)
-    dirty: bool = True  # Needs redraw?
-    last_window: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None
-
     # Zoom state (per-pane, allows independent zoom on each tab)
+    # (Pack 6 R4: manual_zooms was declared here and referenced exactly
+    # once in the whole repo -- this declaration. Pack 6 R8: `dirty` and
+    # `last_window` drove a lazy-update system whose mark_clean() had zero
+    # production callers, so `dirty` was never cleared and needs_update()
+    # could never return False. The state that DOES drive reset behaviour
+    # is auto_xlims / auto_ylims below, read at plotting.py:501-506 and
+    # zoom.py:232-237.)
     auto_xlims: Dict[plt.Axes, Tuple[float, float]] = field(default_factory=dict)
     auto_ylims: Dict[plt.Axes, Tuple[float, float]] = field(default_factory=dict)
-    manual_zooms: Dict[plt.Axes, Set[str]] = field(default_factory=dict)
 
     # Event connections (matplotlib cids for this pane)
+    # NOTE: this one IS populated (canvas.py:317/336) -- unlike the
+    # same-named dict on the labeler. See canvas.py.
     rect_selectors: Dict[str, Any] = field(default_factory=dict)
-
-    def needs_update(self, t0: pd.Timestamp, t1: pd.Timestamp) -> bool:
-        """
-        Check if this pane needs replotting for the given time window.
-
-        Returns True if:
-        - Pane is marked dirty, OR
-        - Time window changed since last render
-        """
-        if self.dirty:
-            return True
-        if self.last_window is None:
-            return True
-        return self.last_window != (t0, t1)
-
-    def mark_clean(self, t0: pd.Timestamp, t1: pd.Timestamp) -> None:
-        """Mark pane as up-to-date for the given time window."""
-        self.dirty = False
-        self.last_window = (t0, t1)
-
-    def mark_dirty(self) -> None:
-        """Mark pane as needing redraw (e.g., intervals changed)."""
-        self.dirty = True

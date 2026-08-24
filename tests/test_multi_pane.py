@@ -131,7 +131,6 @@ class TestPaneCreation:
         assert pane.title == "Test Pane"
         assert pane.plot_fn is plot_function_1
         assert pane.layout_spec == layout_spec
-        assert pane.dirty is True  # Initial state
 
     def test_active_pane_property(self, sample_dataframe, plot_function_1, plot_function_2, layout_spec):
         """active_pane property returns correct pane."""
@@ -280,67 +279,6 @@ class TestSynchronization:
         assert labeler.intervals[0].start == t0
         assert labeler.intervals[0].end == t1
 
-    def test_pane_dirty_tracking(self, sample_dataframe, plot_function_1, layout_spec):
-        """Panes track dirty state correctly."""
-        from chronotagger.labeler import TimeIntervalLabeler
-
-        panes = [
-            {"title": "Pane 1", "plot_fn": plot_function_1, "layout_spec": layout_spec},
-            {"title": "Pane 2", "plot_fn": plot_function_1, "layout_spec": layout_spec},
-        ]
-
-        labeler = TimeIntervalLabeler(
-            df=sample_dataframe,
-            panes=panes,
-            window=pd.Timedelta("1h"),
-        )
-
-        # Initially all panes are dirty
-        assert all(pane.dirty for pane in labeler.panes)
-
-        # Mark clean
-        for pane in labeler.panes:
-            pane.mark_clean(labeler.t0, labeler.t1)
-
-        assert not any(pane.dirty for pane in labeler.panes)
-
-        # Mark dirty
-        for pane in labeler.panes:
-            pane.mark_dirty()
-
-        assert all(pane.dirty for pane in labeler.panes)
-
-    def test_pane_needs_update_logic(self, sample_dataframe, plot_function_1, layout_spec):
-        """Pane needs_update() checks dirty flag and time window."""
-        from chronotagger.labeler import TimeIntervalLabeler
-
-        panes = [
-            {"title": "Pane 1", "plot_fn": plot_function_1, "layout_spec": layout_spec},
-        ]
-
-        labeler = TimeIntervalLabeler(
-            df=sample_dataframe,
-            panes=panes,
-            window=pd.Timedelta("1h"),
-        )
-
-        pane = labeler.panes[0]
-        t0 = labeler.t0
-        t1 = labeler.t1
-
-        # Clean pane for current window - should not need update
-        pane.mark_clean(t0, t1)
-        assert not pane.needs_update(t0, t1)
-
-        # Clean pane but different window - should need update
-        new_t0 = t0 + pd.Timedelta("1h")
-        new_t1 = t1 + pd.Timedelta("1h")
-        assert pane.needs_update(new_t0, new_t1)
-
-        # Dirty pane - should need update regardless
-        pane.mark_dirty()
-        assert pane.needs_update(t0, t1)
-
 
 # ============================================================================
 # TEST SUITE 4: CONTEXT MENU
@@ -388,29 +326,6 @@ class TestContextMenu:
         labeler.active_pane.title = "New Name"
 
         assert labeler.active_pane.title == "New Name"
-
-    def test_refresh_marks_pane_dirty(self, sample_dataframe, plot_function_1, layout_spec):
-        """Refresh operations mark panes dirty."""
-        from chronotagger.labeler import TimeIntervalLabeler
-
-        panes = [
-            {"title": "Pane 1", "plot_fn": plot_function_1, "layout_spec": layout_spec},
-            {"title": "Pane 2", "plot_fn": plot_function_1, "layout_spec": layout_spec},
-        ]
-
-        labeler = TimeIntervalLabeler(
-            df=sample_dataframe,
-            panes=panes,
-            window=pd.Timedelta("1h"),
-        )
-
-        # Mark all clean
-        for pane in labeler.panes:
-            pane.mark_clean(labeler.t0, labeler.t1)
-
-        # Refresh active pane
-        labeler.active_pane.mark_dirty()
-        assert labeler.active_pane.dirty
 
 
 # ============================================================================

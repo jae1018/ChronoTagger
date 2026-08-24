@@ -269,12 +269,27 @@ class FileLoaderDialog:
         if isinstance(df.index, pd.DatetimeIndex):
             return df.index.name if df.index.name else "index"
 
-        # Check common column names
+        # Check common column names.
+        #
+        # Pack 6 F8: the numeric gate Pack 5's amended R8 put on the
+        # last-resort VALUE probe belongs here too. This loop runs FIRST
+        # and had no gate at all, so a float column merely NAMED 'time'
+        # won outright: pd.to_datetime read it as nanoseconds since 1970,
+        # the whole dataset collapsed into a single 1970 instant, and
+        # _validate_data passed. Measured on
+        # ['time' float64, 'Bx_nT' float64, 'epoch' datetime64]:
+        # detected 'time', index 1970-01-01 00:00:00 through
+        # 1970-01-01 00:00:00.000005970, ok=True. A numeric column is
+        # never a time axis -- not by VALUE, and now not by NAME either.
+        skipped_numeric = 0
         common_names = ['time', 'timestamp', 'datetime', 'date', 'dt']
         for name in common_names:
             if name in df.columns:
                 # Verify it can be converted to datetime
                 try:
+                    if pd.api.types.is_numeric_dtype(df[name]):
+                        skipped_numeric += 1
+                        continue
                     pd.to_datetime(df[name])
                     return name
                 except Exception:
@@ -299,7 +314,8 @@ class FileLoaderDialog:
         # coerce, even unsorted: the downstream validator owns the
         # "must be sorted" message, and refusing them here handed the
         # win to a numeric column (verifier B4).
-        skipped_numeric = 0
+        # (Pack 6 F8: skipped_numeric is initialised before the NAME loop
+        # above now, so the warning below reports refusals from BOTH.)
         for col in df.columns:
             try:
                 if pd.api.types.is_numeric_dtype(df[col]):

@@ -68,11 +68,6 @@ class ZoomMixin:
         # Apply
         ax.set_ylim(new_ymin, new_ymax)
 
-        # Track manual zoom
-        if ax not in self._manual_zooms:
-            self._manual_zooms[ax] = set()
-        self._manual_zooms[ax].add('y')
-
         # Fast redraw (no replot) - use pane canvas
         pane.canvas.draw_idle()
     
@@ -107,11 +102,6 @@ class ZoomMixin:
         # Apply
         ax.set_xlim(new_xmin, new_xmax)
 
-        # Track manual zoom
-        if ax not in self._manual_zooms:
-            self._manual_zooms[ax] = set()
-        self._manual_zooms[ax].add('x')
-
         # Fast redraw (no replot) - use pane canvas
         pane.canvas.draw_idle()
     
@@ -145,12 +135,6 @@ class ZoomMixin:
         new_y_range = y_range * zoom_factor
         half_y = new_y_range / 2
         ax.set_ylim(center_y - half_y, center_y + half_y)
-
-        # Track manual zoom
-        if ax not in self._manual_zooms:
-            self._manual_zooms[ax] = set()
-        self._manual_zooms[ax].add('x')
-        self._manual_zooms[ax].add('y')
 
         # Fast redraw (no replot) - use pane canvas
         pane.canvas.draw_idle()
@@ -234,10 +218,7 @@ class ZoomMixin:
         
         for ax, (xmin, xmax) in self._auto_xlims.items():
             ax.set_xlim(xmin, xmax)
-        
-        # Clear manual zoom tracking
-        self._manual_zooms.clear()
-        
+
         # Redraw
         self.canvas.draw_idle()
         

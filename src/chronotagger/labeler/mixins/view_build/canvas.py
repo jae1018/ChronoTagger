@@ -165,15 +165,22 @@ class CanvasMixin:
                     raise ValueError("layout_spec.height_ratios must have length == nrows")
                 hrs = list(map(float, height_ratios))
 
-            # Lane gutter behavior unchanged (kept off unless user provides it)
-            use_lane_gutter = isinstance(spec.get("time_lane_cbar_gutter", None), dict)
-            use_constrained = not use_lane_gutter
-
-            pane.fig = plt.Figure(figsize=(14, 8), constrained_layout=use_constrained)
+            # Pack 6 R6: the layout_spec key "time_lane_cbar_gutter" is
+            # gone with the module it fed. utils/colorbar.py was imported
+            # by nothing, and the figure attribute it read
+            # (fig._chrono_lane_gutter) was never set by anything, so even
+            # a direct call took its no-gutter fallback branch. Setting the
+            # key therefore switched constrained_layout OFF in exchange for
+            # a gutter that was never drawn -- a pure downgrade. Repo-wide
+            # census: zero emitters in src/, tests/, examples/, docs/ or
+            # the README. Every figure now gets the solver.
+            pane.fig = plt.Figure(figsize=(14, 8), constrained_layout=True)
             # Pack 5 R4a: remember whether this figure HAS a solver, so the
-            # freeze/re-solve pair can never install one on a figure the
-            # user opted out of (time_lane_cbar_gutter).
-            pane._layout_constrained = bool(use_constrained)
+            # freeze/re-solve pair can never install one on a figure that
+            # does not. KEPT DELIBERATELY: plotting.py:222-259 reads it and
+            # tests/test_performance_behavior.py:629-687 pins it, including
+            # a test that sets it False by hand.
+            pane._layout_constrained = True
             pane._layout_frozen = False
             gs = pane.fig.add_gridspec(
                 nrows, ncols,  # Use nrows directly - no +1
@@ -469,31 +476,23 @@ class CanvasMixin:
         to extend to axes edges when the mouse leaves the axes during a drag.
         Called once during plot setup after all rectangle selectors are created.
         """
-        # Connect press/release callbacks to track drag state
-        # These work across all axes since we store which axes was pressed
-        for key, rs in self.rect_selectors.items():
-            # Use the selector's internal callback mechanism
-            # Store original callbacks if they exist
-            original_press = getattr(rs, '_on_press_callback', None)
-            original_release = getattr(rs, '_on_release_callback', None)
-
-            # Wrap to call both our tracking and any existing callbacks
-            def make_press_wrapper(orig_cb):
-                def wrapper(event):
-                    self._on_rect_selector_press(event)
-                    if orig_cb is not None:
-                        orig_cb(event)
-                return wrapper
-
-            def make_release_wrapper(orig_cb):
-                def wrapper(event):
-                    self._on_rect_selector_release(event)
-                    if orig_cb is not None:
-                        orig_cb(event)
-                return wrapper
-
-            # Note: RectangleSelector doesn't expose press/release callbacks directly,
-            # so we connect to the figure-level events and track state manually
+        # Pack 6 R5: a wrapper loop used to sit here. It was dead twice
+        # over. It iterated self.rect_selectors, which is a permanently
+        # EMPTY dict on the labeler -- the real selectors are created on
+        # the PANE (canvas.py:317/336) and there is no property delegate
+        # for this name -- and its body only DEFINED make_press_wrapper /
+        # make_release_wrapper and never called them. Its own closing
+        # comment said as much: RectangleSelector exposes no press/release
+        # callbacks, so the figure-level connects below are what work.
+        #
+        # NOT touched here (PARKED for a Pack 7 selection pass): the three
+        # live guards that also read the always-empty self.rect_selectors
+        # -- selection.py:694-706, selection.py:890-893 and
+        # overlays.py:58-64. They have never fired. Pointing them at the
+        # pane would turn on behaviour that has never run, which is not a
+        # cleanup. self.rect_selectors itself (app.py:236) therefore STAYS:
+        # those guards must keep finding an empty dict rather than an
+        # AttributeError.
 
         # Connect figure-level motion handler for edge clamping
         # This runs on ALL motion events, but only acts during active drags

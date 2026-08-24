@@ -37,7 +37,6 @@ src/chronotagger/
     │   ├── stats.py                # Coverage statistics
     │   └── zoom.py                 # Zoom / pan
     └── utils/
-        ├── colorbar.py
         ├── fastdraw.py
         ├── layout_builder/         # Interactive grid designer (build_layout)
         ├── overlays.py

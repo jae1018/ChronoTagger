@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Example Driver: Interactive Layout Builder → TimeIntervalLabeler
+Example Driver: Interactive Layout Builder -> TimeIntervalLabeler
 
 This script demonstrates the complete workflow:
 1. Load sample data
@@ -28,7 +28,7 @@ def create_sample_data() -> pd.DataFrame:
     Returns:
         DataFrame with datetime index and multiple numeric columns
     """
-    print("📊 Creating sample data...")
+    print("Creating sample data...")
     
     # Create datetime index (1 hour intervals for 7 days)
     dates = pd.date_range('2024-01-01', periods=168, freq='h')
@@ -60,7 +60,7 @@ def create_sample_data() -> pd.DataFrame:
         'E': E
     }, index=dates)
     
-    print(f"✓ Created DataFrame with {len(df)} rows and {len(df.columns)} columns")
+    print(f"[ok] Created DataFrame with {len(df)} rows and {len(df.columns)} columns")
     print(f"  Columns: {', '.join(df.columns)}")
     print(f"  Date range: {df.index[0]} to {df.index[-1]}")
     
@@ -79,7 +79,7 @@ def main():
     print()
     
     # Step 2: Launch interactive layout builder
-    print("🎨 Launching Layout Builder...")
+    print("Launching Layout Builder...")
     print("   • Click and drag on grid cells to create panels")
     print("   • Click existing panels to select and edit them")
     print("   • Use 'Preview' to see your layout")
@@ -90,24 +90,24 @@ def main():
     
     # Check if user cancelled
     if layout_spec is None or plot_config is None:
-        print("❌ Layout builder cancelled by user")
+        print("[cancelled] Layout builder cancelled by user")
         print("   Exiting...")
         return
     
     print()
-    print("✓ Layout created successfully!")
+    print("[ok] Layout created successfully!")
     print(f"  Grid: {layout_spec['nrows']} rows × {layout_spec['ncols']} columns")
     print(f"  Panels: {len(layout_spec['areas'])} panels configured")
     print()
     
     # Step 3: Generate plot function from config
-    print("🔧 Generating plot function from layout...")
+    print("Generating plot function from layout...")
     plot_fn = generate_plot_fn(plot_config)
-    print("✓ Plot function generated")
+    print("[ok] Plot function generated")
     print()
     
     # Step 4: Launch TimeIntervalLabeler
-    print("🚀 Launching TimeIntervalLabeler...")
+    print("Launching TimeIntervalLabeler...")
     print("   • Use the labeling interface to mark time intervals")
     print("   • Press 'q' to quit when done")
     print()
@@ -134,9 +134,9 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n❌ Interrupted by user")
+        print("\n\n[interrupted] Interrupted by user")
         print("   Exiting...")
     except Exception as e:
-        print(f"\n\n❌ Error: {e}")
+        print(f"\n\n[error] Error: {e}")
         import traceback
         traceback.print_exc()

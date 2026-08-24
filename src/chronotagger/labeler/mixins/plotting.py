@@ -427,10 +427,24 @@ class PlottingMixin:
         # --- Keep two-click preview overlays alive across redraws (existing logic) ---
         if getattr(self, "two_click_mode", False):
             try:
+                # Pack 6 R3: an `_update_time_overlays(self._two_click_t0,
+                # last)` used to follow, with `last` read from
+                # _two_click_last_x. That name is written in four places
+                # and EVERY write is None, so the read always produced
+                # None and the call raised TypeError at `min(x0, x1)` --
+                # before touching a single artist -- straight into the
+                # `except Exception: pass` below. The feature ("the
+                # two-click preview band survives a zoom/pan redraw") has
+                # never once run. Making it work is a FEATURE and belongs
+                # in a feature pack, not here.
+                #
+                # The rebuild call BELOW stays. It is this block's only
+                # live statement and that method's only caller in the tree:
+                # it recreates the preview patches after a redraw that
+                # cleared the axes. Measured -- delete it and every
+                # two-click band detaches on the first redraw (3/3 attached
+                # with the call, 0/3 without), with the whole suite green.
                 self._rebuild_time_overlays_if_needed()
-                if getattr(self, "_two_click_active", False) and getattr(self, "_two_click_t0", None) is not None:
-                    last = getattr(self, "_two_click_last_x", self._two_click_t0)
-                    self._update_time_overlays(self._two_click_t0, last)
             except Exception:
                 pass
         
@@ -503,10 +517,7 @@ class PlottingMixin:
         
         for ax, (xmin, xmax) in self._auto_xlims.items():
             ax.set_xlim(xmin, xmax)
-        
-        # Clear manual zoom tracking
-        self._manual_zooms.clear()
-        
+
     def _apply_time_xlabel_policy(self) -> None:
         """
         Keep Matplotlib defaults everywhere, except:

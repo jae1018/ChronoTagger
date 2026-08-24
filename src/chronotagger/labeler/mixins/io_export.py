@@ -56,6 +56,41 @@ def dataset_fingerprint(df: pd.DataFrame) -> str:
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
 
 
+def write_label_map_sidecar(classes, data_path: str, what: str) -> None:
+    """Write ``<stem>_label_map.json`` beside ``data_path``.
+
+    Pack 6 F14. Pack 5's R7 made ``export_per_sample`` write integer ids,
+    which was right -- it separated class 0 ``UNKNOWN`` from unlabelled
+    ``-1``, which the old string column could not -- but the id -> name
+    mapping then lived only in ``self.classes``, in memory, and was
+    written nowhere. A programmatic export was a column of integers with
+    nothing on disk saying what they meant.
+
+    The GUI "Export Labels" path already did the right thing; this is
+    that block, lifted so both callers share one implementation.
+
+    Written AFTER the data file, so the only reachable partial state is
+    "complete data, missing or stale map" -- and that state is reported
+    rather than swallowed. The mapping follows the current class
+    ordering, for stability.
+
+    Module-level, not a method, deliberately: tests/test_persistence_
+    safety.py binds a NAMED LIST of mixin methods onto a GUI-free host,
+    so a new method would have had to be added to that list. A free
+    function keeps that harness untouched, which is part of the evidence
+    that this refactor changes nothing.
+    """
+    label_to_id = {label: i for i, label in enumerate(classes)}
+    sidecar = Path(data_path).with_name(
+        Path(data_path).stem + "_label_map.json")
+    try:
+        atomic_write_json(sidecar, label_to_id, sync_dir=True)
+    except Exception as e:
+        raise RuntimeError(
+            f"The {what} was written to {data_path}, but the label "
+            f"map sidecar failed: {e}") from e
+
+
 class IOExportMixin:
     def _dataset_fingerprint(self) -> str:
         """Fingerprint of the currently loaded DataFrame (see
@@ -123,6 +158,8 @@ class IOExportMixin:
         else:
             atomic_write_path(path, lambda p: df_export.to_csv(p),
                               sync_dir=True)
+        # Pack 6 F14: both branches write ids, so the map is not optional.
+        write_label_map_sidecar(self.classes, path, "per-sample export")
         logger.info("Exported per-sample labels to %s", path)
 
     # ---- GUI-connected ops ----
@@ -558,18 +595,13 @@ class IOExportMixin:
         # valid-looking truncated training set)
         atomic_write_path(csv_path, lambda p: out.to_csv(p), sync_dir=True)
 
-        # Write sidecar mapping, atomically, AFTER the CSV -- so the only
-        # possible partial state is "complete CSV, old/missing sidecar",
-        # which is reported honestly below.
-        # NOTE: Mapping follows the current class ordering for stability.
-        label_to_id = {label: i for i, label in enumerate(self.classes)}
-        sidecar = Path(csv_path).with_name(Path(csv_path).stem + "_label_map.json")
-        try:
-            atomic_write_json(sidecar, label_to_id, sync_dir=True)
-        except Exception as e:
-            raise RuntimeError(
-                f"The labels CSV was written to {csv_path}, but the label "
-                f"map sidecar failed: {e}") from e
+        # Write the sidecar mapping, atomically, AFTER the CSV.
+        # (Pack 6 F14: this block moved into the module-level
+        # write_label_map_sidecar() so export_per_sample could share
+        # it. The RuntimeError text is
+        # unchanged -- "The labels CSV was written to ..." -- because it
+        # is what a user reads when a save half-fails.)
+        write_label_map_sidecar(self.classes, csv_path, "labels CSV")
         return True
 
     def _generate_export_preview(self, scope: str, content: str, limit: int = 10):

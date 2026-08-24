@@ -10,40 +10,40 @@ This module contains methods for:
 
 from __future__ import annotations
 
-from typing import Optional
-from contextlib import contextmanager
-
-import pandas as pd
-import matplotlib.dates as mdates
-import matplotlib.patches as mpatches
-from matplotlib.patches import Rectangle
-from matplotlib.transforms import blended_transform_factory
-
 
 class StripInteractionMixin:
     """
-    Mixin class containing strip-related interaction methods.
+    The strip PREVIEW machinery: the animated rectangles a drag paints on
+    the Labels strip, and the pool they are recycled from.
 
-    These methods were extracted from:
-    - src/chronotagger/labeler/mixins/events.py (_draw_strip_preview_spans, _ensure_strip_preview_pool, _ts_from_event)
-    - src/chronotagger/labeler/mixins/plotting.py (_update_strip)
+    Both are load-bearing and stay. Pack 6 re-measured the blit path they
+    feed at 79-81x (2.34 ms against 187.2 ms per preview frame at 2,000
+    intervals, flat in interval count) -- it fires per motion_notify_event
+    during a drag, so without it the app would run at roughly 5 fps
+    mid-gesture. Pack 5's R14 fixed a DIFFERENT cost (the full-strip
+    redraw) and did not subsume this one.
+
+    Everything ELSE this class used to carry was a copy the MRO never
+    reached -- PlottingMixin (position 7) and MouseEventsMixin (position
+    10) both precede StripInteractionMixin (position 12) -- and Pack 6
+    deleted all four:
+
+    - _squelch_xlim_events   live at plotting.py:50, identical body
+    - _apply_time_axis_format live at plotting.py:59; the copy here was a
+                             docstring and `pass`
+    - _ts_from_event         live at events/mouse.py:306, byte-identical
+    - _update_strip          live at plotting.py:714; the copy here was the
+                             PRE-R14 one-Rectangle-per-interval version,
+                             measured 1,419.9 ms against 27.0 ms at 2,000
+                             intervals
+
+    The last two were landmines rather than clutter: reordering the bases
+    in app.py:48-58 would have silently switched to a no-op time-axis
+    formatter and a ~50x slower strip, with no error and no test able to
+    see it. The module-level imports went with them; the two matplotlib
+    names the survivors need are imported function-locally below, which is
+    where they already were.
     """
-
-    @contextmanager
-    def _squelch_xlim_events(self):
-        """Context manager to temporarily suppress xlim change events."""
-        prev = getattr(self, "_squelch_xlim", False)
-        self._squelch_xlim = True
-        try:
-            yield
-        finally:
-            self._squelch_xlim = prev
-
-    def _apply_time_axis_format(self, ax) -> None:
-        """Apply time-based axis formatting (implementation depends on external utility)."""
-        # This would normally call: apply_time_axis_format(ax)
-        # from ..utils.timeaxis import apply_time_axis_format
-        pass
 
     def _ensure_strip_preview_pool(self, needed: int) -> list:
         """
@@ -135,97 +135,3 @@ class StripInteractionMixin:
             canvas = pane.canvas if hasattr(pane, 'canvas') else getattr(self, "canvas", None)
             if canvas is not None:
                 canvas.draw_idle()
-
-
-
-
-
-    # === Helpers for strip editing ===
-
-    def _ts_from_event(self, event) -> Optional[pd.Timestamp]:
-        """Convert Matplotlib event.xdata to a naive pd.Timestamp (or None)."""
-        if event.xdata is None:
-            return None
-        dt = mdates.num2date(event.xdata)
-        if getattr(dt, "tzinfo", None) is not None:
-            dt = dt.replace(tzinfo=None)
-        return pd.Timestamp(dt)
-
-    def _update_strip(self) -> None:
-        """Redraw annotation strip (intervals + current selection preview)."""
-        import matplotlib.dates as mdates
-
-        ax = self.strip_ax  # type: ignore[assignment]
-        with self._squelch_xlim_events():
-            ax.clear()
-            ax.set_ylim(0, 1)
-            ax.set_yticks([])
-            ax.set_ylabel("Labels", fontsize=9)
-
-            # Reset limits/formatting because clearing resets formatter
-            ax.set_xlim(self.t0, self.t1, emit=False)
-            self._apply_time_axis_format(ax)
-
-            # zero horizontal padding so the strip matches time panels exactly
-            try:
-                ax.set_xmargin(0.0)
-            except Exception:
-                pass
-            try:
-                ax.margins(x=0.0)
-            except Exception:
-                pass
-
-        # Labeled intervals in strip
-        for iv in self.intervals:
-            if iv.end <= self.t0 or iv.start >= self.t1:
-                continue
-            s = max(iv.start, self.t0)
-            e = min(iv.end, self.t1)
-
-            color = self.class_colors.get(iv.label, "#cccccc")
-            alpha = 0.8 if iv == self.selected_interval else 0.6
-            edgecolor = "red" if iv == self.selected_interval else "black"
-            lw = 2 if iv == self.selected_interval else 0.5
-
-            rect = Rectangle(
-                (mdates.date2num(s), 0.1),
-                mdates.date2num(e) - mdates.date2num(s),
-                0.8,
-                facecolor=color,
-                edgecolor=edgecolor,
-                linewidth=lw,
-                alpha=alpha,
-                picker=True,
-            )
-            ax.add_patch(rect)
-
-        # single-span preview
-        if self.current_selection:
-            s, e = self.current_selection
-            rect = Rectangle(
-                (mdates.date2num(s), 0.05),
-                mdates.date2num(e) - mdates.date2num(s),
-                0.9,
-                facecolor="yellow",
-                edgecolor="orange",
-                linewidth=2,
-                alpha=0.3,
-                linestyle="--",
-            )
-            ax.add_patch(rect)
-
-        # multi-span preview
-        if getattr(self, "current_spans", None):
-            for (s, e) in self.current_spans:
-                rect = Rectangle(
-                    (mdates.date2num(s), 0.05),
-                    mdates.date2num(e) - mdates.date2num(s),
-                    0.9,
-                    facecolor="yellow",
-                    edgecolor="orange",
-                    linewidth=2,
-                    alpha=0.3,
-                    linestyle="--",
-                )
-                ax.add_patch(rect)

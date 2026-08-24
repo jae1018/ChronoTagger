@@ -152,7 +152,6 @@ class KeyboardEventsMixin:
         # Clear two-click state
         self._two_click_active = False
         self._two_click_t0 = None
-        self._two_click_last_x = None
 
         # Clear point highlights
         if hasattr(self, '_clear_selected_point_highlights'):

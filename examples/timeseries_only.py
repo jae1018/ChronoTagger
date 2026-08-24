@@ -34,14 +34,19 @@ def plot_fn(axs, df, t0, t1):
 if __name__ == "__main__":
     df = make_df()
 
-    # Grid-only layout: at least one role='time' axis in column 0.
+    # Grid-only layout: at least one role='time' axis in column 0, plus
+    # the role='labels' strip. The labels panel became mandatory in
+    # 584f705 (2025-11-04, "Added labels plot as mandatory to
+    # layout_builder"); this example was last touched before that and had
+    # been raising ValueError at build time ever since.
     layout_spec = {
-        "nrows": 2,
+        "nrows": 3,
         "ncols": 1,
-        #"height_ratios": [3.0, 3.0],  # optional
+        #"height_ratios": [3.0, 3.0, 1.0],  # optional
         "areas": [
             {"key": "top",    "row": 0, "col": 0, "role": "time"},
             {"key": "bottom", "row": 1, "col": 0, "role": "time"},
+            {"key": "labels", "row": 2, "col": 0, "role": "labels"},
         ],
     }
 

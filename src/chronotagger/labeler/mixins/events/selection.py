@@ -828,6 +828,40 @@ class SelectionMixin:
             if x_start is None or y_start is None:
                 return
 
+            # Pack 6 R1, ported from the shadowed copy in overlays.py
+            # before it was deleted. The affine clamp above is WRONG on an
+            # inverted axis: with ylim = (4.2, -0.2), max(ymin, min(ymax,
+            # y)) collapses to the constant 4.2 no matter where the mouse
+            # is, so the rectangle snaps to the wrong edge on every
+            # out-of-axes motion event. Adjudicated by executing both
+            # arithmetics over 400 mouse positions on four axis kinds:
+            # identical on linear-y (0/100) and datetime-x (0/100),
+            # different on log-y (3/100, where the non-affine inverse
+            # transform returns a garbage x) and inverted-y (40/100).
+            # ax.invert_yaxis() is routine for altitude, pressure and
+            # energy panels, so this is not an exotic case.
+            #
+            # Screen-space bbox comparison, so it is immune to whatever the
+            # data transform does. Wrapped: if bbox access fails the
+            # affine values above still stand.
+            try:
+                bbox = axes.bbox  # axes bounding box in SCREEN coordinates
+
+                # Mouse above the axes -> the top edge, whichever end of
+                # get_ylim() that happens to be.
+                if event.y > bbox.y1:
+                    y_clamped = ymax
+                elif event.y < bbox.y0:
+                    y_clamped = ymin
+
+                if event.x > bbox.x1:
+                    x_clamped = xmax
+                elif event.x < bbox.x0:
+                    x_clamped = xmin
+
+            except Exception:
+                pass
+
             # Calculate rectangle extents
             left = min(x_start, x_clamped)
             right = max(x_start, x_clamped)
@@ -932,19 +966,29 @@ class SelectionMixin:
         x_vals = []
         y_vals = []
 
-        # Get the windowed index and dataframe (cached from last plot)
-        windowed_idx = getattr(self, '_last_windowed_index', None)
-        windowed_df = getattr(self, '_last_windowed_df', None)
-
-        if windowed_idx is None or windowed_df is None or len(windowed_idx) == 0:
-            # Fallback: create windowed data on the fly
-            try:
-                windowed_df = self.df.loc[self.t0:self.t1].copy()
-                windowed_idx = windowed_df.index
-                if windowed_df.empty:
-                    return x_vals, y_vals
-            except Exception as e:
+        # Build the windowed view this extraction reads.
+        #
+        # Pack 6 D11. There used to be a `_last_windowed_df` read above
+        # this, and a guard on it. NOTHING in the tree ever assigned that
+        # name, so the guard was unconditionally true and the block below
+        # was the only path that ever ran -- which is why deleting the
+        # GUARD as well as the read is what preserves behaviour.
+        #
+        # Keeping the guard on `_last_windowed_index` alone would NOT be
+        # equivalent, and the suite cannot see the difference: that name IS
+        # written (plotting.py:342), so the guard would be FALSE in the
+        # normal case, this block would be skipped, `windowed_df` would be
+        # unbound, and the NameError at the role == "not-time" branch below
+        # would be swallowed by its own `except Exception`. Measured on a
+        # real two-axis app: cross-plot highlights drop from 5 points to 0
+        # with the suite still green.
+        try:
+            windowed_df = self.df.loc[self.t0:self.t1].copy()
+            windowed_idx = windowed_df.index
+            if windowed_df.empty:
                 return x_vals, y_vals
+        except Exception:
+            return x_vals, y_vals
 
         # CRITICAL: Instead of extracting from ALL artists (which includes boundary markers),
         # extract directly from the cached windowed dataframe data
@@ -1386,7 +1430,6 @@ class SelectionMixin:
         # also cancel overlay two-click state
         self._two_click_active = False
         self._two_click_t0 = None
-        self._two_click_last_x = None
         self._hide_time_overlays()
 
     def _apply_localized_padding_to_intervals(self, intervals: list[tuple[pd.Timestamp, pd.Timestamp]]) -> list[tuple[pd.Timestamp, pd.Timestamp]]:

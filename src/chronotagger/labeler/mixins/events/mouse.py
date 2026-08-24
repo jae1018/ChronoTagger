@@ -169,7 +169,6 @@ class MouseEventsMixin:
 
         self._two_click_active = False
         self._two_click_t0 = None
-        self._two_click_last_x = None
         # keep preview visible at final span (user can press Enter to add)
         # Use yellow for completed selections to match dragbox behavior
         self._update_time_overlays(t0, t1, color="yellow")

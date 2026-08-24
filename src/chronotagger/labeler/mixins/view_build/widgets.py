@@ -41,8 +41,16 @@ class WidgetsMixin:
             # Use stored text (which may have been updated)
             current_text = getattr(widget, 'tooltip_text', text)
 
-            # Create tooltip window
-            tooltip = tk.Toplevel()
+            # Create tooltip window.
+            #
+            # Pack 6: parented. A bare tk.Toplevel() binds to tkinter's
+            # implicit DEFAULT root, which in a multi-root process is
+            # whichever root happened to be created first -- not
+            # necessarily the window the tooltip is annotating. It is the
+            # only unparented Toplevel left in the package (eleven others
+            # already pass a master) and the suite never reaches it,
+            # because it fires on mouse-enter.
+            tooltip = tk.Toplevel(widget)
             tooltip.wm_overrideredirect(True)
             tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
 

@@ -1,7 +1,23 @@
 """
 Synchronization manager for multi-pane mode.
 
-Handles marking panes dirty when shared state changes.
+Pack 6 R8 emptied this module: it used to mark panes "dirty" when shared
+state changed, and the dirty flag it wrote is gone -- TabPane.mark_clean()
+had zero production callers, so nothing ever became clean, `dirty` was
+permanently True, and the single consumer (view_build/window.py) always
+took its redraw branch regardless.
+
+Pack 6 PART C then deleted the four hooks that had no caller at all --
+sync_time_window, sync_labels_changed, sync_selection_changed and
+mark_all_dirty. A census of sync_manager attribute uses over src/ and
+tests/ returns 8 hits and every one of them is sync_intervals_changed, so
+those four deletions cost zero call-site edits and touch no other file.
+
+sync_intervals_changed SURVIVES, as a declared no-op, because those 8 live
+call sites (app.py:384, intervals/commands.py x2, intervals/crud.py x4,
+labels.py) would all have to change with it -- and where multi-pane
+invalidation should live is a design question, not a cleanup. It is Pack 7
+item 5.
 """
 
 from __future__ import annotations
@@ -9,23 +25,14 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .app import TimeIntervalLabeler
-    import pandas as pd
 
 
 class PaneSyncManager:
     """
-    Manages synchronization of shared state across panes.
+    Notification hook for interval changes in multi-pane mode.
 
-    Shared state that triggers sync:
-    - Time window (t0, t1)
-    - Intervals (add, delete, modify)
-    - Labels (add, delete, rename, recolor)
-    - Selection (optional - could be per-pane or shared)
-
-    Per-pane state (no sync needed):
-    - Figure/canvas/axes
-    - Zoom levels
-    - Dirty flag
+    Nothing here carries state any more. The redraw that the callers of
+    sync_intervals_changed rely on comes from their own _update_plot().
     """
 
     def __init__(self, labeler: TimeIntervalLabeler):
@@ -37,52 +44,14 @@ class PaneSyncManager:
         """
         self.labeler = labeler
 
-    def sync_time_window(self, t0: pd.Timestamp, t1: pd.Timestamp) -> None:
-        """
-        Time window changed - mark all panes dirty.
-
-        Called when user navigates, zooms, or manually changes time range.
-        """
-        self.labeler.t0 = t0
-        self.labeler.t1 = t1
-
-        # Mark all panes as needing update
-        for pane in self.labeler.panes:
-            pane.mark_dirty()
-
     def sync_intervals_changed(self) -> None:
         """
-        Intervals modified - mark all panes dirty.
+        Intervals modified (add, delete, modify, relabel, merge, split).
 
-        Called after: add, delete, modify, relabel, merge, split, etc.
+        Pack 6 R8: a declared no-op. EIGHT live call sites keep calling
+        it (app.py:384, intervals/commands.py x2, intervals/crud.py x4,
+        labels.py), so the hook stays; what it used to do -- mark every
+        pane dirty -- was a write to a flag that was already True and that
+        nothing ever cleared. The redraw those callers rely on comes from
+        their own _update_plot(), not from here.
         """
-        for pane in self.labeler.panes:
-            pane.mark_dirty()
-
-    def sync_labels_changed(self) -> None:
-        """
-        Label schema changed - mark all panes dirty.
-
-        Called after: add label, delete label, rename, recolor, reorder.
-        """
-        for pane in self.labeler.panes:
-            pane.mark_dirty()
-
-    def sync_selection_changed(self) -> None:
-        """
-        Selection changed - update active pane only.
-
-        Selection preview only needs to show on active pane since
-        it's a transient state before adding an interval.
-
-        Alternative design: Could mark all panes dirty to show selection
-        on all tabs, but that's probably overkill.
-        """
-        self.labeler.active_pane.mark_dirty()
-
-    def mark_all_dirty(self) -> None:
-        """
-        Mark all panes dirty (for any other global state change).
-        """
-        for pane in self.labeler.panes:
-            pane.mark_dirty()

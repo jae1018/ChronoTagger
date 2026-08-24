@@ -113,6 +113,12 @@ def plot_velocity(axs, df, t0, t1):
 
 def plot_positions(axs, df, t0, t1):
     """Position plots in GSE coordinates."""
+    # Geocentric distance vs time -- this pane's role="time" panel
+    r_gse = np.sqrt(df['X_gse']**2 + df['Y_gse']**2 + df['Z_gse']**2)
+    axs['r_gse'].plot(df.index, r_gse, 'k-', linewidth=1)
+    axs['r_gse'].set_ylabel('R (RE)')
+    axs['r_gse'].grid(alpha=0.3)
+
     # XY GSE (Earth-centered)
     axs['xy_gse'].scatter(df['X_gse'], df['Y_gse'], s=2, c='blue', alpha=0.5)
     axs['xy_gse'].set_xlabel('X (RE)')
@@ -165,11 +171,18 @@ layout_velocity = {
 }
 
 layout_positions = {
+    # Every pane needs at least one role="time" area (canvas.py:151).
+    # This one had only a cross-plot and a labels strip, so building the
+    # fourth tab raised ValueError and took the whole example down with
+    # it. Widened to two columns: a time panel on the left, which the
+    # labels strip lines up under, and the GSE cross-plot on the right.
     "nrows": 2,
-    "ncols": 1,
+    "ncols": 2,
     "hspace": 0.1,
+    "wspace": 0.15,
     "areas": [
-        {"key": "xy_gse", "row": 0, "col": 0, "role": "not-time"},
+        {"key": "r_gse", "row": 0, "col": 0, "role": "time"},
+        {"key": "xy_gse", "row": 0, "col": 1, "role": "not-time"},
         {"key": "labels", "row": 1, "col": 0, "role": "labels"},
     ]
 }
@@ -234,7 +247,10 @@ if __name__ == "__main__":
         classes=classes,
         window=pd.Timedelta("2h"),
         step=pd.Timedelta("30min"),
-        autosave_path="magnetosphere_session.json",
+        # There is no autosave_path parameter and never has been -- this
+        # raised TypeError. The autosave file NAME is derived from a
+        # dataset fingerprint; the caller chooses only the folder.
+        autosave_folder=".",
     )
 
     labeler.run()

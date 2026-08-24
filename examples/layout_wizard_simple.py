@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple Example: Load CSV → Layout Wizard → Labeler
+Simple Example: Load CSV -> Layout Wizard -> Labeler
 
 This is the minimal example showing how to use the layout wizard
 with your own CSV data.
@@ -31,12 +31,12 @@ def load_data(csv_path: str = None) -> pd.DataFrame:
         DataFrame with datetime index
     """
     if csv_path:
-        print(f"📂 Loading data from: {csv_path}")
+        print(f"Loading data from: {csv_path}")
         # Load CSV - assumes first column is datetime
         df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
-        print(f"✓ Loaded {len(df)} rows, {len(df.columns)} columns")
+        print(f"[ok] Loaded {len(df)} rows, {len(df.columns)} columns")
     else:
-        print("📊 Creating sample data...")
+        print("Creating sample data...")
         # Create simple sample data
         dates = pd.date_range('2024-01-01', periods=100, freq='h')
         df = pd.DataFrame({
@@ -44,7 +44,7 @@ def load_data(csv_path: str = None) -> pd.DataFrame:
             'Humidity': 60 + 10 * np.cos(np.linspace(0, 4*np.pi, 100)) + np.random.randn(100),
             'Pressure': 1013 + np.random.randn(100)
         }, index=dates)
-        print(f"✓ Created sample data with {len(df)} rows")
+        print(f"[ok] Created sample data with {len(df)} rows")
     
     return df
 
@@ -59,7 +59,7 @@ def main():
     print()
     
     # Launch layout builder
-    print("🎨 Opening Layout Builder...")
+    print("Opening Layout Builder...")
     print("   Build your layout visually, then click 'Done'")
     print()
     
@@ -70,11 +70,11 @@ def main():
         print("Cancelled by user.")
         return
     
-    print("✓ Layout created!")
+    print("[ok] Layout created!")
     print()
     
     # Generate plot function and launch labeler
-    print("🚀 Starting labeler...")
+    print("Starting labeler...")
     plot_fn = generate_plot_fn(plot_config)
     
     app = TimeIntervalLabeler(
@@ -84,7 +84,7 @@ def main():
     )
     
     app.run()
-    print("\n✓ Done!")
+    print("\n[ok] Done!")
 
 
 if __name__ == "__main__":

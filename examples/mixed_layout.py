@@ -38,8 +38,13 @@ def make_df():
     return df
 
 layout_spec = {
-    "nrows": 3, "ncols": 2,
-    "height_ratios": [1.0, 1.0, 1.0],
+    # Row 3 is the role="labels" strip. It became mandatory in 584f705
+    # (2025-11-04, "Added labels plot as mandatory to layout_builder");
+    # this example was last touched before that and had been raising
+    # ValueError at build time ever since. It sits in column 0 so it lines
+    # up with the time panels it annotates.
+    "nrows": 4, "ncols": 2,
+    "height_ratios": [1.0, 1.0, 1.0, 0.4],
     "width_ratios": [2.0, 1.5],
     "hspace": 0.15, "wspace": 0.12,
     "areas": [
@@ -47,12 +52,15 @@ layout_spec = {
         {"key": "n",      "row": 0, "col": 0, "role": "time"},
         {"key": "b",      "row": 1, "col": 0, "role": "time"},
         {"key": "bmag",   "row": 2, "col": 0, "role": "time"},
-        
+
         # Right column: position plots (role="not-time")
         # Box selection on these axes will map point order -> timestamps
         {"key": "pos_xy", "row": 0, "col": 1, "role": "not-time"},
         {"key": "pos_xz", "row": 1, "col": 1, "role": "not-time"},
         {"key": "pos_yz", "row": 2, "col": 1, "role": "not-time"},
+
+        # Labels strip, under the time column
+        {"key": "labels", "row": 3, "col": 0, "role": "labels"},
     ],
 }
 

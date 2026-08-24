@@ -536,7 +536,6 @@ See the `examples/` directory for complete demonstrations:
 - `mixed_layout.py` — Combined time and position plots
 - `layout_wizard_demo.py` — Interactive layout builder with sample data
 - `layout_wizard_simple.py` — Minimal layout builder for CSV files
-- `simple_layout_test.py` — Testing layout specifications
 - `dual_pane_demo.py` — Simple 2-tab multi-pane example
 - `multi_pane_magnetosphere.py` — Comprehensive 4-tab space physics example
 - `spectrogram_multipane.py` — Real-world cislunar plasma classification driver: ion energy spectrogram (pcolormesh), B-field components, and orbital cross-plots in both Earth- and Moon-centered frames. Optional `geospacefronts` overlay for bow-shock / magnetopause boundaries. Bring your own dataset via the `CHRONOTAGGER_EXAMPLE_DATA` env var.
@@ -619,7 +618,10 @@ app.export_intervals(path: str, fmt="parquet")  # Per-interval rows: start, end,
 app.export_per_sample(path: str, fmt="parquet")
                                            # One integer label_id per row of df.index:
                                            # the index into app.classes, or -1 where no
-                                           # interval covers the row
+                                           # interval covers the row.
+                                           # Also writes <stem>_label_map.json beside it
+                                           # ({label: id}), so the ids stay readable
+                                           # away from the session that made them.
 
 # Navigation
 app.go_to_window(t0: pd.Timestamp)         # Jump the visible window so it begins at t0
