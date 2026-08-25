@@ -78,7 +78,7 @@ class UIBuilderMixin:
         # Instructions
         instructions = ttk.Label(
             left,
-            text="📌 Click panel to select • Drag empty cells to create new panel\nBottom row (Labels) is auto-managed",
+            text="Click panel to select | Drag empty cells to create new panel\nBottom row (Labels) is auto-managed",
             font=('', 9, 'italic'),
             foreground='#666',
             justify=tk.LEFT

@@ -62,7 +62,17 @@ def build_layout(df: pd.DataFrame, parent: Optional[tk.Tk] = None) -> Tuple[Opti
     # Create temporary root if needed
     owns_root = False
     if parent is None:
-        parent = tk.Tk()
+        # Pack 8 R16: Pack 6 R10's bounded retry. tk.Tk() raises a
+        # transient TclError on this machine often enough to matter (89%
+        # of full-suite runs before the retry landed), and this branch is
+        # the entry point the docstring above and both shipped examples
+        # use -- the wizard itself always passes a parent, so this was
+        # the last unprotected root reachable from documented usage.
+        # Imported here rather than at module scope so the designer stays
+        # importable without dragging in the labeler's mixin tree.
+        from ...mixins.view_build.window import _new_tk_root
+
+        parent = _new_tk_root()
         parent.withdraw()  # Hide root window
         owns_root = True
 

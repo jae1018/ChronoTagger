@@ -649,7 +649,9 @@ def test_regeneration_writes_a_complete_fresh_file(tmp_path):
     path.write_text(edited, encoding="ascii")
     assert "my own hook" in path.read_text(encoding="ascii")
 
-    write_driver(_stack_csv_driver(), path)
+    # Pack 8 R6: the rewrite is exactly the decision write_driver now
+    # refuses to make on its own, so the second write says so explicitly.
+    write_driver(_stack_csv_driver(), path, overwrite=True)
     assert "my own hook" not in path.read_text(encoding="ascii")
     assert "NO merge-on-regenerate" in path.read_text(encoding="ascii")
 
@@ -661,7 +663,7 @@ def test_write_driver_normalises_line_endings(tmp_path):
     raw = path.read_bytes()
     assert raw == b"a = 1\r\nb = 2\r\nc = 3\r\n"
 
-    write_driver(mixed, path, newline="\n")
+    write_driver(mixed, path, newline="\n", overwrite=True)
     assert path.read_bytes() == b"a = 1\nb = 2\nc = 3\n"
 
 
@@ -864,28 +866,27 @@ def test_a_role_the_runtime_generator_never_draws_emits_nothing():
 
 
 # ---------------------------------------------------------------------
-# v2 / V1 MINOR-3 -- the multi-pane refusal names its cause
+# Pack 8 R1/R2 -- what became of v2's multi-pane refusal
 # ---------------------------------------------------------------------
 
-def test_a_multi_pane_session_is_refused_by_name():
-    """EDIT 277 hands a Pack 8 implementer `wizard.pane_specs`, a LIST.
-    A two-element list used to unpack as (layout_spec, plot_config) and
-    die claiming the first pane had no 'areas' -- a misleading error at
-    exactly the seam where multi-pane is parked."""
+def test_a_multi_pane_session_is_no_longer_refused():
+    """Pack 7 v2 refused a pane LIST by name and pointed at Pack 8; Pack
+    8 R1 emits it.  This test is the same fixture as the refusal pin it
+    replaces, asserting the opposite outcome, so the transition is
+    visible in one place rather than inferred from a deletion."""
     layout, cfg = vertical_stack_config(["BX"])
     panes = [{"title": "Fields", "layout_spec": layout, "plot_config": cfg},
              {"title": "Position", "layout_spec": layout, "plot_config": cfg}]
 
     for shape in (panes, tuple(panes), panes + panes[:1]):
-        with pytest.raises(ValueError) as exc:
-            generate_driver(shape, data_path="/d/x.csv", fmt="csv",
-                            time_column="t", autosave_folder="./out")
-        message = str(exc.value)
-        assert "multi-pane" in message
-        assert "Pack 8" in message
-        assert "%d panes" % len(shape) in message
-        assert "pane_specs[0]" in message
-        assert "areas" not in message
+        text = generate_driver(shape, data_path="/d/x.csv", fmt="csv",
+                               time_column="t", autosave_folder="./out")
+        assert "multi-pane sessions cannot be emitted" not in text
+        for i in range(1, len(shape) + 1):
+            assert "LAYOUT_%d = {" % i in text
+            assert "def plot_fn_%d(axs, df, t0, t1):" % i in text
+        assert "        panes=PANES," in text
+        assert "        plot_fn=plot_fn," not in text
 
     # ...and one pane out of that same list still works.
     text = generate_driver(panes[0], data_path="/d/x.csv", fmt="csv",

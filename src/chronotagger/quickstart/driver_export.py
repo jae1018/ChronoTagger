@@ -31,11 +31,21 @@ lines, overlays -- are NOT emitted.  They are what the `[YOURS]` blocks
 in the generated file are for: the driver is a starting point you own,
 not a round-tripped configuration.
 
-ONE PANE.  A driver file describes a single pane.  A multi-tab wizard
-session is refused BY NAME rather than half-emitted; emitting a pane list
-is a Pack 8 decision (one driver per tab, or one driver carrying a
-`PANES` list) that has not been made.  Pass one pane's
-`(layout_spec, plot_config)` pair -- e.g. `wizard.pane_specs[0]`.
+PANES.  One driver file describes the WHOLE session.  Handed one pane's
+`(layout_spec, plot_config)` pair it emits `LAYOUT` and `plot_fn` and
+launches single-pane, byte for byte as it always has.  Handed a LIST of
+panes -- `wizard.pane_specs` -- it emits `LAYOUT_1` / `plot_fn_1`,
+`LAYOUT_2` / `plot_fn_2`, ... and a `PANES` list, and launches with
+`panes=PANES`: one labeler tab per entry.  A ONE-entry list is a single
+pane and emits the single-pane shape, because the wizard builds a
+one-tab session through the single-pane constructor API too.
+
+Every pane is STRUCTURALLY VALIDATED here, at emission.  The labeler
+refuses a pane with no `role="time"` area, and one with no
+`role="labels"` area, while BUILDING ITS CANVAS -- which in a driver is
+after `load_dataframe()` has already read the file.  Refusing at
+emission, naming the pane, is the doctrine this module applies to a
+panel with no column.
 
 FORWARD-ONLY
 ------------
@@ -54,7 +64,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
-__all__ = ["generate_driver", "write_driver"]
+__all__ = ["generate_driver", "portable_stem", "write_driver"]
 
 
 # The labeler's own defaults, spelled out because a driver file states
@@ -65,7 +75,12 @@ DEFAULT_COLORS: List[str] = [
     "#edc949", "#af7aa1", "#ff9da7", "#9c755f", "#bab0ac",
 ]
 
-SUPPORTED_FORMATS = ("csv", "parquet")
+# "csv.gz" IS a csv: `pd.read_csv` decompresses by extension.  The
+# wizard's loader accepts one too (Pack 8 R12), and the two accepted sets
+# are kept in step deliberately -- a wizard that opens a file the driver
+# it writes cannot open is the shape of bug this arc exists to close.
+SUPPORTED_FORMATS = ("csv", "csv.gz", "parquet")
+_CSV_FORMATS = ("csv", "csv.gz")
 
 # `pd.to_datetime(int_column)` reads NANOSECONDS.  A driver whose epoch
 # is in any other unit and does not say so silently relocates the whole
@@ -281,6 +296,32 @@ def _area_lit(area: Mapping[str, Any]) -> str:
 # input normalisation
 # ---------------------------------------------------------------------
 
+def portable_stem(data_path: Any) -> str:
+    """The dataset's stable human identity, spelled the same everywhere.
+
+    NOT `Path(...).stem`: pathlib takes the flavour of the machine
+    RUNNING it, so on POSIX a Windows data_path carries no separator at
+    all and the WHOLE PATH becomes the stem -- 'C:\\data\\peif' instead of
+    'peif', measured on the Dell (Pack 7b).  "Same inputs, same bytes" is
+    this module's advertised contract, so both separators are separators
+    everywhere.  splitdrive first, so a drive-relative "C:x.csv" still
+    reads as "x" exactly as it does on Windows.
+
+    Public because the WIZARD calls it too (Pack 8 R4): a live session
+    and a driver generated from that session must carry ONE identity.
+    `source_name` is what `_check_autosave` compares when two datasets
+    share a fingerprint, so two spellings meant two identities.
+
+    A trailing ".gz" is dropped as well, so 'peif.csv.gz' and 'peif.csv'
+    are the same dataset by name.
+    """
+    _, tail = ntpath.splitdrive(str(data_path).replace("\\", "/"))
+    stem = PurePosixPath(tail).stem
+    if stem.lower().endswith(".csv"):
+        stem = stem[:-4]
+    return stem
+
+
 def _is_bare_cwd(folder: str) -> bool:
     """Does `folder` name the process CWD under EITHER path flavour?
 
@@ -328,13 +369,6 @@ def _split_config(config: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     the tab planner stores the same pair under those two names.  Both
     are accepted so no caller has to repackage.
     """
-    if _is_pane_list(config):
-        raise ValueError(
-            "multi-pane sessions cannot be emitted yet (planned: Pack 8); "
-            "got %d panes. Pass ONE pane's (layout_spec, plot_config) "
-            "pair -- e.g. wizard.pane_specs[0] -- to emit a driver for "
-            "that pane." % len(config))
-
     if isinstance(config, Mapping):
         if "layout_spec" not in config or "plot_config" not in config:
             raise ValueError(
@@ -356,6 +390,102 @@ def _split_config(config: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     if not layout_spec.get("areas"):
         raise ValueError("layout_spec has no 'areas'")
     return dict(layout_spec), dict(plot_config)
+
+
+class _Pane(object):
+    """One emitted pane: tab title, layout, plot config, drawable panels.
+
+    `suffix` is "" for a single-pane driver and "_1" / "_2" / ...
+    otherwise, and every emitted identifier for this pane is built from
+    it -- `LAYOUT%(suffix)s`, `plot_fn%(suffix)s` -- so the layout block
+    and the plot function for one pane cannot drift apart.
+    """
+
+    def __init__(self, index: int, title: Any,
+                 layout_spec: Dict[str, Any],
+                 plot_config: Dict[str, Any], suffix: str) -> None:
+        self.index = index
+        self.title = (title if isinstance(title, str) and title.strip()
+                      else "Pane %d" % index)
+        self.layout_spec = layout_spec
+        self.plot_config = plot_config
+        self.suffix = suffix
+        self.panels: List[Tuple[str, Dict[str, Any]]] = []
+
+    def where(self) -> str:
+        """How an error message names this pane."""
+        if not self.suffix:
+            return "the layout"
+        return 'pane %d ("%s")' % (self.index, _comment(self.title))
+
+
+def _pane_list(config: Any) -> List["_Pane"]:
+    """Normalise ANY accepted config shape into a list of `_Pane`.
+
+    A pane LIST (`wizard.pane_specs`) becomes one `_Pane` per entry; a
+    `(layout_spec, plot_config)` pair or mapping becomes a list of one.
+    A ONE-entry pane list also becomes a list of one, so it emits the
+    single-pane shape (Pack 8 R2).
+
+    An error raised for a pane inside a MULTI-pane list is re-raised
+    carrying that pane's index and title: "layout_spec has no 'areas'"
+    does not say which of six tabs is broken.  Single-pane messages are
+    left exactly as they were.
+    """
+    if _is_pane_list(config):
+        panes: List[_Pane] = []
+        suffixed = len(config) > 1
+        for i, entry in enumerate(config, start=1):
+            suffix = "_%d" % i if suffixed else ""
+            pane = _Pane(i, entry.get("title"), {}, {}, suffix)
+            try:
+                layout_spec, plot_config = _split_config(entry)
+            except (TypeError, ValueError) as exc:
+                if suffixed:
+                    raise type(exc)("%s: %s" % (pane.where(), exc)) from None
+                raise
+            pane.layout_spec = layout_spec
+            pane.plot_config = plot_config
+            panes.append(pane)
+        return panes
+    layout_spec, plot_config = _split_config(config)
+    return [_Pane(1, None, layout_spec, plot_config, "")]
+
+
+def _check_pane_structure(pane: "_Pane") -> None:
+    """Refuse a pane the labeler would refuse -- but at EMISSION.
+
+    `view_build/canvas.py` raises "layout_spec must have at least one
+    role='time' axis" and "layout_spec missing Labels panel
+    (role='labels')" from `_build_plot_impl`, PER PANE, while the GUI is
+    being built -- in a driver, after `load_dataframe()` has read the
+    whole file.  Both conditions are visible in the layout_spec the
+    emitter is already holding, so they are answered here.
+
+    Role defaulting matches the labeler's: an area with no `role` is a
+    time axis (`canvas.py`: `a.get("role", "time")`).  "Exactly one"
+    labels area is stricter than the labeler, which takes the first of
+    several -- a second labels strip is a layout the designer cannot
+    build and the runtime would silently half-honour.
+    """
+    areas = list(pane.layout_spec.get("areas", []))
+    times = [a for a in areas
+             if str(a.get("role", "time")).lower() == "time"]
+    labels = [a for a in areas
+              if str(a.get("role", "")).lower() == "labels"]
+    if not times:
+        raise ValueError(
+            '%s has no role="time" area. The labeler refuses such a pane '
+            "while building its canvas -- in a driver that is AFTER "
+            "load_dataframe() has read the whole file -- so it is refused "
+            "here instead. Give the pane at least one time panel, or drop "
+            "the pane." % pane.where())
+    if len(labels) != 1:
+        raise ValueError(
+            '%s has %d role="labels" areas; exactly one is required. The '
+            "labels strip is where the labeler draws intervals: with none "
+            "it refuses to build the pane, and it silently honours only "
+            "the first of several." % (pane.where(), len(labels)))
 
 
 def _drawable_areas(layout_spec: Mapping[str, Any],
@@ -382,6 +512,25 @@ def _drawable_areas(layout_spec: Mapping[str, Any],
     for area in layout_spec.get("areas", []):
         key = area.get("key")
         if not key:
+            continue
+        # Pack 8 F11: the AREA decides whether a key is DRAWABLE; the
+        # plot_config role decides only HOW a drawable key is drawn.
+        # Resolving the two together let a plot_config entry promote the
+        # labels strip to a panel -- plot_config["labels"] =
+        # {"role": "time", "y_column": "BX"} emitted ax = axs["labels"],
+        # and the labeler keeps that strip OUTSIDE axs (canvas.py holds
+        # it as strip_ax), so the driver raised KeyError at the first
+        # render.  _check_pane_structure could not catch it: it reads the
+        # AREA and still counted exactly one labels area.
+        #
+        # Skipping in silence is what _DRAWN_ROLES already does with any
+        # role the generator does not draw -- "same figure, same
+        # non-behaviour" -- so every existing refusal message is
+        # byte-unchanged on every layout the designer or the wizard can
+        # build.  Only the hostile input above moves, and it moves from
+        # one refusal to another.  Lowercased and None-tolerant to match
+        # canvas.py, which reads a.get("role", "time") and lowercases.
+        if str(area.get("role") or "").lower() == "labels":
             continue
         cfg = dict(plot_config.get(key) or {})
         role = str(cfg.get("role") or area.get("role") or "time")
@@ -438,15 +587,23 @@ _HEADER = '''\
 # [GEN] stable human-readable identity; the fingerprint is not.
 # ============================================================
 
-import pandas as pd                                        # [GEN]
+%(stdlib_imports)simport pandas as pd                                        # [GEN]
 
 from chronotagger.labeler import TimeIntervalLabeler       # [GEN]
 '''
 
+# The generated file imports from the standard library ONLY when
+# something in it needs to (Pack 8 A8-2: `os`, for an AUTOSAVE_FOLDER
+# derived from DATA_PATH at runtime).  Empty otherwise, which is what
+# keeps emission byte-identical for every caller who does not ask for
+# the derived form -- including both design mocks.
+_NO_STDLIB_IMPORTS = ""
+_OS_IMPORT = "%-59s# [GEN]\n" % "import os"
+
 
 def _data_section(data_path: Any, fmt: str, time_column: Optional[str],
                   time_is_epoch: bool, time_unit: Optional[str]) -> str:
-    reader = "pd.read_csv" if fmt == "csv" else "pd.read_parquet"
+    reader = "pd.read_csv" if fmt in _CSV_FORMATS else "pd.read_parquet"
     rows = [
         "# ---------------- DATA ------------------------------------- [GEN]",
         "# The driver OWNS data loading, so `python this_file.py` is",
@@ -515,14 +672,22 @@ def _schema_section(classes: Sequence[str],
     return "\n".join(rows)
 
 
-def _layout_section(layout_spec: Mapping[str, Any]) -> str:
+def _layout_section(panes: Sequence["_Pane"]) -> str:
     rows = [
         "# ---------------- LAYOUT ----------------------------------- [GEN]",
         "# x_col / y_col on a cross-plot area are what let a box drag on",
         "# that panel select rows by DATAFRAME FILTER instead of by",
-        "# scanning drawn artists.  Keep them in step with plot_fn below.",
-        "LAYOUT = %s" % _layout_lit(layout_spec),
+        "# scanning drawn artists.  Keep them in step with %s below."
+        % ("the plot functions" if len(panes) > 1 else "plot_fn"),
     ]
+    for i, pane in enumerate(panes):
+        if pane.suffix:
+            if i:
+                rows.append("")
+            rows.append("# [GEN] pane %d: %s"
+                        % (pane.index, _comment(pane.title)))
+        rows.append("LAYOUT%s = %s"
+                    % (pane.suffix, _layout_lit(pane.layout_spec)))
     return "\n".join(rows)
 
 
@@ -645,9 +810,9 @@ _YOURS_PLOT = '''\
     # ------------------------------------------------------------'''
 
 
-def _plot_section(panels: Sequence[Tuple[str, Dict[str, Any]]]) -> str:
-    rows = [_PLOT_HELPERS.rstrip("\n"), "", "",
-            "def plot_fn(axs, df, t0, t1):"]
+def _plot_fn_block(panels: Sequence[Tuple[str, Dict[str, Any]]],
+                   suffix: str) -> str:
+    rows = ["def plot_fn%s(axs, df, t0, t1):" % suffix]
     for i, (key, cfg) in enumerate(panels):
         if i:
             rows.append("")
@@ -664,12 +829,65 @@ def _plot_section(panels: Sequence[Tuple[str, Dict[str, Any]]]) -> str:
     return "\n".join(rows)
 
 
-def _launch_section(window: Any, step: Any, autosave_folder: Any,
-                    source_name: str, decimate: bool) -> str:
+def _plot_section(panes: Sequence["_Pane"]) -> str:
+    """The two helpers ONCE, then one plot function per pane.
+
+    `_clear_panel` and `_have` are module-level in the generated file, so
+    six tabs do not mean six copies of the same two functions.
+    """
+    rows = [_PLOT_HELPERS.rstrip("\n")]
+    for pane in panes:
+        rows.append("")
+        rows.append("")
+        if pane.suffix:
+            rows.append("# [GEN] pane %d: %s"
+                        % (pane.index, _comment(pane.title)))
+        rows.append(_plot_fn_block(pane.panels, pane.suffix))
+    return "\n".join(rows)
+
+
+def _launch_section(panes: Sequence["_Pane"], window: Any, step: Any,
+                    autosave_folder: Any, source_name: str,
+                    decimate: bool, beside_data: bool = False) -> str:
+    multi = len(panes) > 1
     rows = [
         "# ---------------- LAUNCH ----------------------------------- [GEN]",
-        "AUTOSAVE_FOLDER = %s" % _path_lit(autosave_folder),
-        "SOURCE_NAME = %s" % _lit(source_name),
+    ]
+    if beside_data:
+        # Pack 8 A8-2.  DERIVED, not written as a literal: the wizard
+        # session that produced this file autosaves beside the data too
+        # (R9), so a session and its own driver share ONE autosave
+        # lineage and either can offer the other's recovery file.
+        # Measured before this: session <data dir>\chronotagger_autosave
+        # against driver ./chronotagger_autosave, same_folder false, so
+        # the user was not offered their own autosave unless they
+        # happened to be standing in the data directory.  Deriving it
+        # also keeps the text portable in the only sense available here
+        # -- no SECOND machine-specific path is added, and DATA_PATH is
+        # already absolute.
+        rows.extend([
+            "AUTOSAVE_FOLDER = os.path.join(os.path.dirname(DATA_PATH),",
+            '                               "chronotagger_autosave")',
+        ])
+    else:
+        rows.append("AUTOSAVE_FOLDER = %s" % _path_lit(autosave_folder))
+    rows.append("SOURCE_NAME = %s" % _lit(source_name))
+    if multi:
+        rows.extend([
+            "",
+            "# One entry per TAB in the labeler window.  Each pane owns its",
+            "# own figure and its own axes dict, so panel keys may repeat",
+            "# across panes without colliding: panel_1 in PANES[0] and",
+            "# panel_1 in PANES[1] are different axes.",
+            "PANES = [",
+        ])
+        for pane in panes:
+            rows.append(
+                '    {"title": %s, "plot_fn": plot_fn%s, '
+                '"layout_spec": LAYOUT%s},'
+                % (_lit(pane.title), pane.suffix, pane.suffix))
+        rows.append("]")
+    rows.extend([
         "",
         "",
         'if __name__ == "__main__":',
@@ -687,8 +905,13 @@ def _launch_section(window: Any, step: Any, autosave_folder: Any,
         "",
         "    app = TimeIntervalLabeler(",
         "        df=df,",
-        "        plot_fn=plot_fn,",
-        "        layout_spec=LAYOUT,",
+    ])
+    if multi:
+        rows.append("        panes=PANES,")
+    else:
+        rows.append("        plot_fn=plot_fn,")
+        rows.append("        layout_spec=LAYOUT,")
+    rows.extend([
         "        classes=CLASSES,",
         "        class_colors=COLORS,",
         "        window=%s," % _timedelta_lit(window),
@@ -698,7 +921,7 @@ def _launch_section(window: Any, step: Any, autosave_folder: Any,
         "        decimate=%s," % ("True" if decimate else "False"),
         "    )",
         "    app.run()",
-    ]
+    ])
     return "\n".join(rows)
 
 
@@ -719,6 +942,7 @@ def generate_driver(
     window: Union[str, pd.Timedelta] = "30min",
     step: Union[str, pd.Timedelta] = "15min",
     autosave_folder: Any = "./chronotagger_autosave",
+    autosave_beside_data: bool = False,
     source_name: Optional[str] = None,
     decimate: bool = True,
     file_name: str = "chronotagger_driver.py",
@@ -727,11 +951,13 @@ def generate_driver(
 
     Args:
         config: `(layout_spec, plot_config)`, or a mapping carrying both
-            under those names.  Exactly what `build_layout()` and
-            `vertical_stack_config()` return.  A LIST of pane specs is
-            refused by name -- one driver describes one pane.
+            under those names -- exactly what `build_layout()` and
+            `vertical_stack_config()` return -- or a LIST of such
+            mappings, one per pane, each optionally carrying a "title".
+            That is `wizard.pane_specs` unchanged.  A list of one emits
+            the single-pane shape.
         data_path: Path to the data file the driver will load.
-        fmt: "csv" or "parquet".
+        fmt: "csv", "csv.gz" or "parquet".
         time_column: Column to convert into the DatetimeIndex.  `None`
             means the file already carries one (parquet only).
         time_is_epoch: True when `time_column` holds INTEGERS counting
@@ -748,6 +974,23 @@ def generate_driver(
         autosave_folder: Where autosaves and the forensic log go.  A
             bare CWD is refused -- a generated driver must not scatter
             state into whatever directory it happens to be run from.
+            Still validated, but not EMITTED, when
+            `autosave_beside_data` is True.
+        autosave_beside_data: Emit `AUTOSAVE_FOLDER` as an expression
+            over `DATA_PATH` -- os.path.join(os.path.dirname(DATA_PATH),
+            "chronotagger_autosave") -- instead of as a literal, so a
+            driver written from a wizard session autosaves where that
+            session did (Pack 8 A8-2).  Default False: every caller
+            without session context gets the literal, byte for byte as
+            before.  CAVEAT, stated rather than discovered: `os.path`
+            knows only the flavour of the machine RUNNING the driver, so
+            a Windows `DATA_PATH` opened on POSIX yields "" as its
+            dirname and the folder becomes the relative
+            "chronotagger_autosave".  That driver cannot read its data
+            file on that platform either, so it dies in
+            `load_dataframe()` long before an autosave matters -- and a
+            named subfolder is not the bare CWD, so nothing
+            `_is_bare_cwd` guards is re-opened.
         source_name: Stable human identity for the dataset.  Defaults to
             the data file's stem.
         decimate: The constructor's draw-only decimation flag.
@@ -760,7 +1003,7 @@ def generate_driver(
     if fmt not in SUPPORTED_FORMATS:
         raise ValueError(
             "fmt must be one of %s; got %r" % (SUPPORTED_FORMATS, fmt))
-    if fmt == "csv" and time_column is None:
+    if fmt in _CSV_FORMATS and time_column is None:
         raise ValueError(
             "a csv driver needs time_column: pd.read_csv produces a "
             "RangeIndex, so there is nothing to fall back on")
@@ -796,8 +1039,17 @@ def generate_driver(
             "and a driver file is portable text -- it can be run on the "
             "platform where that spelling collapses." % (autosave_folder,))
 
-    layout_spec, plot_config = _split_config(config)
-    panels = _drawable_areas(layout_spec, plot_config)
+    panes = _pane_list(config)
+    for pane in panes:
+        try:
+            pane.panels = _drawable_areas(pane.layout_spec, pane.plot_config)
+        except (TypeError, ValueError) as exc:
+            # A single-pane message is left EXACTLY as it was; only a
+            # multi-pane one needs to say which tab.
+            if pane.suffix:
+                raise type(exc)("%s: %s" % (pane.where(), exc)) from None
+            raise
+        _check_pane_structure(pane)
 
     classes = list(classes) if classes else list(DEFAULT_CLASSES)
     if colors:
@@ -808,30 +1060,26 @@ def generate_driver(
             for i, name in enumerate(classes)
         }
     if source_name is None:
-        # NOT `Path(...).stem`: pathlib takes the flavour of the machine
-        # RUNNING the emitter, so on POSIX a Windows data_path carries no
-        # separator at all and the WHOLE PATH becomes the stem --
-        # SOURCE_NAME = 'C:\\data\\peif' instead of 'peif', measured on
-        # the Dell.  "Same inputs, same bytes" is this module's
-        # advertised contract, so both separators are separators
-        # everywhere.  splitdrive first, so a drive-relative "C:x.csv"
-        # still reads as "x" exactly as it does on Windows today.
-        _, tail = ntpath.splitdrive(str(data_path).replace("\\", "/"))
-        source_name = PurePosixPath(tail).stem
+        source_name = portable_stem(data_path)
 
     sections = [
-        _HEADER.rstrip("\n") % {"basename": _comment(file_name)},
+        _HEADER.rstrip("\n") % {
+            "basename": _comment(file_name),
+            "stdlib_imports": (_OS_IMPORT if autosave_beside_data
+                               else _NO_STDLIB_IMPORTS),
+        },
         _data_section(data_path, fmt, time_column, time_is_epoch, time_unit),
         _schema_section(classes, colors),
-        _layout_section(layout_spec),
-        _plot_section(panels),
-        _launch_section(window, step, autosave_folder, source_name,
-                        decimate),
+        _layout_section(panes),
+        _plot_section(panes),
+        _launch_section(panes, window, step, autosave_folder, source_name,
+                        decimate, autosave_beside_data),
     ]
     return "\n\n\n".join(sections) + "\n"
 
 
-def write_driver(text: str, path: Any, *, newline: str = "\r\n") -> Path:
+def write_driver(text: str, path: Any, *, newline: str = "\r\n",
+                 overwrite: bool = False) -> Path:
     """Write `text` to `path`, normalising line endings.  No dialogs.
 
     The text is normalised to "\\n" first and then re-emitted with
@@ -841,9 +1089,23 @@ def write_driver(text: str, path: Any, *, newline: str = "\r\n") -> Path:
     ASCII-only rule: a non-ASCII byte raises here instead of crashing a
     cp1252 console later.  `generate_driver` already guarantees ASCII, so
     this catches hand-assembled text, not its own output.
+
+    `overwrite=False` REFUSES an existing target (Pack 8 R6).  A driver
+    file is a file the user owns -- its `[YOURS]` blocks are hand-written
+    and W11 says regeneration writes a complete fresh file over them --
+    so replacing one is a decision a human makes, not a side effect of
+    calling this function.  The wizard passes `overwrite=True` because
+    the native save-as dialog has already asked.
     """
     normalised = text.replace("\r\n", "\n").replace("\r", "\n")
     target = Path(path)
+    if target.exists() and not overwrite:
+        raise FileExistsError(
+            "%s already exists and overwrite=False. A driver file is "
+            "yours once you have edited a [YOURS] block, and regeneration "
+            "replaces the WHOLE file. Pass overwrite=True after asking "
+            "(the native save-as dialog asks for you), or write "
+            "elsewhere." % target)
     if target.parent and not target.parent.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "w", encoding="ascii", newline="") as fh:

@@ -130,7 +130,7 @@ class GridCanvasMixin:
 
         # Different label text for Labels panel
         if panel.role == "labels":
-            label_text = "⏱️ Labels Strip\n(Auto-managed)"
+            label_text = "Labels Strip\n(Auto-managed)"
         else:
             label_text = panel.key
             if panel.role == "time" and panel.y_column:
@@ -142,7 +142,7 @@ class GridCanvasMixin:
 
             # Add span info if not 1x1
             if panel.rowspan > 1 or panel.colspan > 1:
-                label_text += f"\n[{panel.rowspan}×{panel.colspan}]"
+                label_text += f"\n[{panel.rowspan}x{panel.colspan}]"
 
         self.canvas.create_text(
             cx, cy,
@@ -256,7 +256,7 @@ class GridCanvasMixin:
         for panel in self.panels:
             if panel.locked:
                 continue  # Skip Labels panel
-            span_info = f"{panel.rowspan}×{panel.colspan}" if (panel.rowspan > 1 or panel.colspan > 1) else "1×1"
+            span_info = f"{panel.rowspan}x{panel.colspan}" if (panel.rowspan > 1 or panel.colspan > 1) else "1x1"
             display = f"{panel.key} [{panel.row},{panel.col}] {span_info} ({panel.role})"
             self.panel_listbox.insert(tk.END, display)
 

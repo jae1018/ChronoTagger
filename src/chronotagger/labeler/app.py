@@ -97,14 +97,20 @@ class TimeIntervalLabeler(
         # _build_gui, _update_plot, _next_window and the redraw after it
         # all succeeded, with no exception anywhere.
         #
-        # Sorting rather than raising: the quick-start wizard already
-        # refuses such a frame (file_loader.py:457), but the EXPORT path
-        # handles non-monotonic frames correctly and deliberately
+        # Sorting rather than raising: the EXPORT path handles
+        # non-monotonic frames correctly and deliberately
         # (io_export.py:303-324, Pack 5 R7), so raising here would reject
         # data one half of the package gets right. Sorting is what a caller
         # means. Loud, because silently reordering someone's frame is its
         # own surprise -- and once per construction, not per frame, so a
         # plain warning is the right level (Pack 4 doctrine).
+        #
+        # The sentence this comment used to open with -- "the quick-start
+        # wizard already refuses such a frame (file_loader.py:457)" -- was
+        # stale twice over: the refusal had moved to file_loader.py:473,
+        # and Pack 8 R14 REMOVED it. All three paths now sort. This
+        # constructor warns, the wizard loader says so on its status line,
+        # and an emitted driver sorts unconditionally.
         #
         # IDENTITY CONSEQUENCE, and the reason the warning below carries a
         # second sentence. dataset_fingerprint() (io_export.py:38) hashes

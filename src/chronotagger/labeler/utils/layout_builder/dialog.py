@@ -34,7 +34,7 @@ class LayoutBuilderDialog(
     Interactive dialog for building plot layouts.
 
     This dialog presents a visual grid where users can:
-    1. Set grid dimensions (rows × columns)
+    1. Set grid dimensions (rows x columns)
     2. Drag on cells to create spanning panels OR click to select existing panels
     3. Assign DataFrame columns to each panel
     4. Set panel roles (time-series vs cross-plot)

@@ -62,8 +62,22 @@ class PreviewMixin:
         # Generate layout spec from current panels
         layout_spec = self._generate_layout_spec()
 
-        # Create matplotlib figure with GridSpec
-        fig = plt.figure(figsize=(10, 8))
+        # Create matplotlib figure with GridSpec.
+        #
+        # plt.Figure (the CLASS), not plt.figure (the pyplot factory) --
+        # Pack 8 R15. pyplot builds a figure MANAGER, and under TkAgg the
+        # manager builds its own root: `tk.Tk(className="matplotlib")` at
+        # backends/_backend_tk.py. Measured: one extra live tk.Tk and one
+        # extra Tcl interpreter PER PREVIEW CLICK (5 roots after 4
+        # clicks), surviving the wizard root's own destroy(), plus one
+        # leaked figure per click (1.00 per click over 25, ~0.75 MiB
+        # each, matplotlib's own "more than 20 figures" warning firing at
+        # click 21). None of it is visible: the manager withdraws its
+        # window. The class allocates neither -- it never enters the
+        # pyplot registry -- and the canvas this method builds two dozen
+        # lines below was always the one actually displayed. The same
+        # form is already used at view_build/canvas.py.
+        fig = plt.Figure(figsize=(10, 8))
         gs = GridSpec(
             nrows=layout_spec['nrows'],
             ncols=layout_spec['ncols'],
@@ -118,7 +132,7 @@ class PreviewMixin:
             # Build info text to display in panel
             if panel.role == "labels":
                 # Special rendering for Labels panel
-                info_lines = ["⏱️ Labels Strip", "(Auto-managed)"]
+                info_lines = ["Labels Strip", "(Auto-managed)"]
             else:
                 info_lines = [panel.key]
 
@@ -134,7 +148,7 @@ class PreviewMixin:
 
                 # Add span info if not 1x1
                 if panel.rowspan > 1 or panel.colspan > 1:
-                    info_lines.append(f"[{panel.rowspan}×{panel.colspan}]")
+                    info_lines.append(f"[{panel.rowspan}x{panel.colspan}]")
 
             # Display text in center of panel
             info_text = "\n".join(info_lines)
