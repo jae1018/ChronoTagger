@@ -5,6 +5,8 @@ This module provides utility functions for ChronoTagger, including:
 - Interactive layout builder (build_layout)
 - The vertical-stack preset (vertical_stack_config)
 - Automatic plot function generation (generate_plot_fn)
+- Spectrogram / image panels (draw_spectrogram, attach_colorbar; the
+  pure rebin core is chronotagger.labeler.utils.spectrogram.rebin)
 
 The layout builder and plot generator simplify the process of creating
 TimeIntervalLabeler instances by providing visual tools and automatic
@@ -25,9 +27,12 @@ from .plot_generator import (
     validate_plot_inputs,
     vertical_stack_config,
 )
+from .spectrogram import attach_colorbar, draw_spectrogram
 
 __all__ = [
+    'attach_colorbar',
     'build_layout',
+    'draw_spectrogram',
     'generate_plot_fn',
     'normalize_time_columns',
     'validate_plot_inputs',

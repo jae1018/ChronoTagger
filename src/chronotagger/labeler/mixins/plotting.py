@@ -23,6 +23,7 @@ register_matplotlib_converters()
 from ..utils.timeaxis import apply_time_axis_format
 from ..utils.overlays import draw_interval_bands
 from ..utils.decimate import plan_decimation
+from ..utils.spectrogram import refresh_colorbars
 
 logger = logging.getLogger(__name__)
 
@@ -369,6 +370,27 @@ class PlottingMixin:
                 if getattr(self, "status_var", None) is not None:
                     self.status_var.set(
                         "Plot error -- details in chronotagger.log")
+
+        # --- Re-point registered colorbars (Pack 8.5 SP-R5) ---
+        # The ax.clear() at the top of this method destroyed the artist
+        # every registered colorbar was built from -- measured: the
+        # artist leaves ax.get_children() and its .figure goes None. The
+        # colorbar, its axes and its geometry all survive (position
+        # byte-identical across redraws, a pan, a zoom and a
+        # constrained-layout re-solve); only the pointer is stale. One
+        # generic sweep here, after plot_fn drew the new artist and
+        # before canvas.draw(), closes it with no per-frame user code,
+        # and is a no-op on every pane that never called
+        # utils.spectrogram.attach_colorbar.
+        try:
+            refresh_colorbars(self.user_axes.values())
+        except Exception:
+            # A colour scale may never take the redraw down (Pack 5
+            # doctrine, and the decimation fallback above).
+            self._warn_once(
+                "colorbar-refresh",
+                "re-pointing a registered colorbar failed; its colour "
+                "scale may be stale")
 
         # Capture auto limits after plot_fn() completes
         self._capture_auto_limits()

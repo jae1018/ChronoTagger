@@ -3,9 +3,11 @@ Multi-pane labeler example with an ion-flux spectrogram.
 
 Demonstrates a richer ChronoTagger setup than the bundled wizard:
     * Two panes (`First Set`, `Second Set`) labelled in lockstep.
-    * Pane 1 has a 32-channel ion energy-flux spectrogram (pcolormesh)
-      alongside time-series and two cross-plot ("not-time") panels for
-      spacecraft position in the GSE and SSE (Moon-centered) frames.
+    * Pane 1 has a 32-channel ion energy-flux spectrogram -- drawn with
+      the Pack 8.5 image helpers, on a real energy axis, with a colorbar
+      that survives the redraw loop -- alongside time-series and two
+      cross-plot ("not-time") panels for spacecraft position in the GSE
+      and SSE (Moon-centered) frames.
     * Pane 2 has a complementary set of derived quantities + the same
       cross-plots, so labels created in either tab stay consistent.
     * Four placeholder classes (``label_1`` ... ``label_4``) -- swap
@@ -51,6 +53,10 @@ import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LogNorm
+from matplotlib.ticker import FixedFormatter, FixedLocator
+
+from chronotagger.labeler.utils import attach_colorbar, draw_spectrogram
 
 # Optional bow-shock / magnetopause overlay.  Install `geospacefronts`
 # to enable; the example still runs without it.
@@ -64,6 +70,53 @@ except ImportError:
         "overlays disabled.  pip install geospacefronts to enable.",
         stacklevel=2,
     )
+
+
+# ---------------------------------------------------------------------------
+# Spectrogram conventions
+# ---------------------------------------------------------------------------
+
+#: Channel centres for C0..C31, in eV.  These are the `plasma_E`
+#: coordinate of an ARTEMIS/THEMIS-B survey product (thb, 2011-08-14):
+#: a UNIFORM LOG GRID the product was regridded onto (1 eV .. 30 keV,
+#: geometric to 5e-8), NOT the ESA instrument's native sweep, whose
+#: reduced-mode ion range is narrower and not exactly geometric.  It is
+#: here because it is the right SHAPE for a demo energy axis -- do not
+#: cite it as an instrument table.  Thinned from its 56
+#: native channels to the 32 this example carries by
+#: ``round(linspace(0, 55, 32))``, so the full 1 eV .. 30 keV range is
+#: spanned.  If your own file ships its energies, drop them in here --
+#: they are what puts the image at the right height on the axis.
+CHANNEL_ENERGIES_EV = (
+    1.0, 1.4548, 2.1165, 2.5528, 3.7138, 5.4028, 7.8600, 9.4804,
+    13.7921, 20.0648, 29.1904, 42.4663, 51.2208, 74.5162, 108.4064,
+    157.7101, 190.2224, 276.7363, 402.5970, 585.6996, 706.4431,
+    1027.7360, 1495.1542, 2175.1560, 3164.4250, 3816.7788, 5552.6641,
+    8078.0366, 11751.9580, 14174.6533, 20621.3379, 30000.0,
+)
+
+#: The house energy-flux colour convention: LogNorm from 1e3 to 1e8 with
+#: `jet`.  Everything about a spectrogram people argue over is in these
+#: two lines, so they are named rather than buried in the call.
+EFLUX_NORM = LogNorm(vmin=1e3, vmax=1e8)
+EFLUX_CMAP = "jet"
+
+#: Decades to tick the energy axis at.  The axis carries log10(E) on a
+#: LINEAR scale ON PURPOSE: `imshow` maps its extent through the axes
+#: transform by the corners only, so a genuine log scale would stretch
+#: the image linearly and put every channel at the wrong height.  Ticking
+#: log10 values with energy labels gives the reader a log energy axis and
+#: keeps the picture correct.
+ENERGY_TICKS_EV = (1e0, 1e1, 1e2, 1e3, 1e4)
+
+
+def _format_energy_axis(ax) -> None:
+    """Label a log10(E) axis with the energies themselves."""
+    ax.yaxis.set_major_locator(
+        FixedLocator([np.log10(e) for e in ENERGY_TICKS_EV]))
+    ax.yaxis.set_major_formatter(
+        FixedFormatter(["%g" % e for e in ENERGY_TICKS_EV]))
+    ax.set_ylabel("E (eV)")
 
 
 # ---------------------------------------------------------------------------
@@ -113,14 +166,30 @@ def first_pane_plot_fn(axs, df: pd.DataFrame, t0: pd.Timestamp, t1: pd.Timestamp
     axs["n"].plot(df.index, np.log10(df["n"]), marker=marker, ms=ms)
     axs["n"].set_ylabel("log10 n")
 
-    # 32-channel ion energy-flux spectrogram
+    # 32-channel ion energy-flux spectrogram.
+    #
+    # draw_spectrogram rebins the window onto the panel's pixel columns
+    # (default aggregator "max" -- a burst narrower than a pixel is drawn
+    # at its true magnitude, at the cost of about +0.30 dex of overall
+    # brightness; pass aggregator="logmean" for an unbiased level) and
+    # draws the result with imshow, which is exact on the uniform grid
+    # the rebin manufactures and costs a few ms regardless of how wide
+    # the window is.
     channel_cols = [f"C{i}" for i in range(32)]
     Z = df[channel_cols].to_numpy(dtype=float).T  # (channels, time)
-    axs["spectrogram"].pcolormesh(
-        df.index, np.arange(32), np.log10(Z + 1),
-        shading="auto", cmap="viridis", vmin=0, vmax=9,
+    ax_spec = axs["spectrogram"]
+    im = draw_spectrogram(
+        ax_spec, df.index, Z,
+        y_centers=np.log10(CHANNEL_ENERGIES_EV),
+        norm=EFLUX_NORM, cmap=EFLUX_CMAP,
     )
-    axs["spectrogram"].set_ylabel("E (keV)")
+    _format_energy_axis(ax_spec)
+    # Idempotent: creates the bar on the first redraw and re-points it on
+    # every later one.  It steals width from the whole shared-x group --
+    # the time panels AND the Labels strip -- so the x axes stay
+    # identical, and _update_plot's sweep keeps it pointed at the live
+    # image without any per-frame code here.
+    attach_colorbar(ax_spec, im, label="ion eflux (eV/cm^2-s-sr-eV)")
 
     axs["scpot"].plot(df.index, df["SCPot"], marker=marker, ms=ms)
     axs["scpot"].set_ylabel("SCPot (V)")
@@ -215,6 +284,16 @@ LAYOUT_FIRST = {
     "nrows": 6,
     "ncols": 2,
     "hspace": 0.05,
+    # A colorbar has to come from somewhere.  `attach_colorbar` takes its
+    # width off the shared-x group -- the time panels and the Labels
+    # strip -- which keeps every x axis identical but puts the bar and
+    # its label in the gap between the two columns.  On a two-column
+    # layout that gap has to be wide enough to hold them, and this is
+    # where it comes from.  (The alternative, if you want the width
+    # stated explicitly rather than taken: declare an extra narrow
+    # gridspec column with no area in it -- `layout_spec` already accepts
+    # `ncols` and `width_ratios` -- and hand its axes to the helper.)
+    "wspace": 0.32,
     "areas": [
         {"key": "n",           "row": 0, "col": 0, "role": "time"},
         {"key": "spectrogram", "row": 1, "col": 0, "role": "time"},
@@ -253,7 +332,13 @@ LAYOUT_SECOND = {
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main(data_path: Optional[Path] = None) -> None:
+def main(data_path: Optional[Path] = None, run: bool = True):
+    """Build the two-pane labeler and (by default) run it.
+
+    ``run=False`` returns the constructed labeler without entering the
+    Tk main loop, which is how the smoke test drives this file headlessly
+    -- an example nobody can execute is an example nobody can trust.
+    """
     from chronotagger.labeler import TimeIntervalLabeler
 
     if data_path is None:
@@ -276,7 +361,9 @@ def main(data_path: Optional[Path] = None) -> None:
         step=pd.Timedelta("30min"),
         autosave_folder=str(autosave_folder),
     )
-    labeler.run()
+    if run:
+        labeler.run()
+    return labeler
 
 
 if __name__ == "__main__":
