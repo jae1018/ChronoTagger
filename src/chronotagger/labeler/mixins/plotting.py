@@ -23,7 +23,7 @@ register_matplotlib_converters()
 from ..utils.timeaxis import apply_time_axis_format
 from ..utils.overlays import draw_interval_bands
 from ..utils.decimate import plan_decimation
-from ..utils.spectrogram import refresh_colorbars
+from ..utils.spectrogram import refresh_colorbars, take_layout_dirty
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +342,17 @@ class PlottingMixin:
         # has been decimated.
         self._last_windowed_index = sub_df.index.copy()
 
+        # Pack 8.5-B B1: cache the FRAME beside its index. The highlight
+        # extractor (selection.py `_extract_data_at_indices`) used to
+        # rebuild its own reference window from `self.df.loc[t0:t1]`,
+        # which is the FULL window even when this frame was decimated --
+        # so its artist-length gate rejected every drawn line and the red
+        # and blue marks silently vanished. Measured on the 1M-row frame
+        # at a 2-day window: 44,572 rows in the full window, 36,316 drawn,
+        # 0 marks extracted. The two names are written together here so
+        # they can never describe different frames.
+        self._last_windowed_frame = sub_df
+
         if len(sub_df.index) == 0:
             # Zoomed finer than the data cadence: say so instead of
             # handing user code an empty frame and calling the explosion
@@ -384,6 +395,14 @@ class PlottingMixin:
         # utils.spectrogram.attach_colorbar.
         try:
             refresh_colorbars(self.user_axes.values())
+            if take_layout_dirty(self.user_axes.values()):
+                # Pack 8.5-B B4: a gutter colorbar axes was just born,
+                # inside plot_fn, after the solver had already placed the
+                # panels -- so it is sitting in its raw gridspec cell.
+                # Ask for ONE more solve; the canvas.draw() at the end of
+                # this method performs it and _freeze_layout_after_draw
+                # locks the result. Once per bar, not once per frame.
+                self._invalidate_layout_freeze()
         except Exception:
             # A colour scale may never take the redraw down (Pack 5
             # doctrine, and the decimation fallback above).

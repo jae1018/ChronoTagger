@@ -14,10 +14,23 @@ Contract: BIT-EXACT, including the failure mode.
 - Same raise. On a NON-MONOTONIC index pandas raises the same
   ``ValueError: index must be monotonic increasing or decreasing`` from
   the same guard whether it is asked for one probe or a million (2e).
-- ``np.searchsorted`` is REJECTED even though it measured ~2x faster: it
-  does not validate sortedness and returned 500 confidently-wrong
-  positions (0/500 correct) on a real two-spacecraft frame (2e/S4). In a
-  labelling tool a loud failure is worth more than a fast wrong answer.
+- ``np.searchsorted`` is REJECTED AS A GENERAL SUBSTITUTE even though it
+  measured ~2x faster: it does not validate sortedness and returned 500
+  confidently-wrong positions (0/500 correct) on a real two-spacecraft
+  frame (2e/S4). In a labelling tool a loud failure is worth more than a
+  fast wrong answer. Pack 8.5-B B2 uses it at ONE site and only behind a
+  sortedness check -- ``positions_nearest`` on an index that is
+  duplicated AND monotonic increasing, which is the only shape
+  ``get_indexer`` refuses outright and the only shape a searchsorted
+  answer is provably right for. Every other index keeps the pandas call
+  and therefore keeps the pandas raise.
+
+DUPLICATED TIMESTAMPS ARE REAL DATA. A THEMIS ESA survey day carries
+them (1 repeated stamp in 22,282 for thb 2011-08-14, 0.0045 %), and one
+of them used to kill every rectangle select in the tool with
+``InvalidIndexError`` from ``positions_nearest`` -- five call sites, four
+of them unguarded, no dialog, no status change and no forensic log line
+(evidence ``pack85b_g1_regressions.md`` section 2).
 
 ``method="nearest"`` is load-bearing at exactly one site. The time-lane
 box path rebuilds its timestamps through ``mdates.num2date``, whose
@@ -71,9 +84,68 @@ def positions_nearest(idx: pd.Index, timestamps: Sequence) -> List[int]:
     """
     if timestamps is None or len(timestamps) == 0:
         return []
-    pos = idx.get_indexer(_probe_index(timestamps), method="nearest")
+    probes = _probe_index(timestamps)
+    if not idx.is_unique and idx.is_monotonic_increasing:
+        # Pack 8.5-B B2. get_indexer refuses a non-unique Index outright
+        # (InvalidIndexError), and this helper had no guard while its twin
+        # at :105 did -- so ONE repeated timestamp in a real survey day
+        # killed every rectangle select in the tool. A sorted index makes
+        # the answer well defined, so compute it instead of raising.
+        pos = _nearest_on_sorted_duplicates(idx, probes)
+    else:
+        # Unique, or non-monotonic: unchanged, INCLUDING the raise. A
+        # non-monotonic index still gets ValueError from pandas, and a
+        # non-monotonic DUPLICATED one still gets InvalidIndexError --
+        # searchsorted is exactly the tool that answers those confidently
+        # and wrongly (module docstring, 2e/S4).
+        pos = idx.get_indexer(probes, method="nearest")
     pos = pos[(pos >= 0) & (pos < len(idx))]
     return [int(j) for j in pos]
+
+
+def _nearest_on_sorted_duplicates(idx: pd.Index, probes: pd.Index):
+    """
+    ``get_indexer(method="nearest")`` for an index that REPEATS a value.
+
+    Only ever called on a monotonic-increasing index (the caller checks),
+    which is what makes ``searchsorted`` safe here and unsafe everywhere
+    else in this module.
+
+    Semantics, pinned value-identical to pandas on unique indexes:
+
+    * an exact hit resolves to the FIRST row carrying that value, which
+      is the same convention ``_scalar_exact_then_nearest`` takes from
+      ``slice.start``;
+    * a probe between two rows takes the closer one, and a TIE takes the
+      LATER one -- measured, that is what pandas does
+      (``np.where(left_dist < right_dist, left, right)`` in
+      ``Index._get_nearest_indexer``);
+    * a probe outside either end clamps to that end.
+
+    Units, not integers. ``asi8`` on a ``datetime64[us]`` index and on a
+    ``datetime64[ns]`` one differ by 1000x, and ``Index.searchsorted``
+    refuses the mix rather than converting, so both sides are promoted to
+    a common datetime64 unit first and compared as VALUES.
+    """
+    n = len(idx)
+    if n == 0:
+        return np.zeros(len(probes), dtype=np.int64) - 1
+    try:
+        iv = np.asarray(idx)
+        pv = np.asarray(probes)
+        common = np.promote_types(iv.dtype, pv.dtype)
+        iv = iv.astype(common, copy=False)
+        pv = pv.astype(common, copy=False)
+        right = np.searchsorted(iv, pv, side="left").astype(np.int64)
+    except Exception:
+        # An index this cannot be computed on (object dtype, mixed types)
+        # keeps today's behaviour, which is the pandas refusal.
+        return idx.get_indexer(probes, method="nearest")
+    left = right - 1
+    np.clip(right, 0, n - 1, out=right)
+    np.clip(left, 0, n - 1, out=left)
+    return np.where(np.abs(pv - iv[left]) < np.abs(pv - iv[right]),
+                    left, right)
 
 
 def positions_exact_then_nearest(idx: pd.Index,

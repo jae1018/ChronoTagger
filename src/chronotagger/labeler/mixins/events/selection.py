@@ -968,22 +968,44 @@ class SelectionMixin:
 
         # Build the windowed view this extraction reads.
         #
-        # Pack 6 D11. There used to be a `_last_windowed_df` read above
-        # this, and a guard on it. NOTHING in the tree ever assigned that
-        # name, so the guard was unconditionally true and the block below
-        # was the only path that ever ran -- which is why deleting the
-        # GUARD as well as the read is what preserves behaviour.
+        # Pack 8.5-B B1. It is the frame _update_plot ACTUALLY DREW
+        # (plotting.py `_last_windowed_frame`), not a fresh slice of
+        # self.df. Those are the same object whenever draw decimation is
+        # off; when it is on they are not, and rebuilding the window here
+        # broke the mapping at both ends at once:
         #
-        # Keeping the guard on `_last_windowed_index` alone would NOT be
-        # equivalent, and the suite cannot see the difference: that name IS
-        # written (plotting.py:342), so the guard would be FALSE in the
-        # normal case, this block would be skipped, `windowed_df` would be
-        # unbound, and the NameError at the role == "not-time" branch below
-        # would be swallowed by its own `except Exception`. Measured on a
-        # real two-axis app: cross-plot highlights drop from 5 points to 0
-        # with the suite still green.
+        #   * `_timestamps_to_indices` (:1301) returns positions into
+        #     `_last_windowed_index`, i.e. into the DECIMATED frame;
+        #   * every artist on a time panel has len == that decimated
+        #     count, so the `len(ys) != len(windowed_idx)` gate below
+        #     compared it against the FULL window count and rejected the
+        #     line -- measured on the 1M-row frame at a 2-day window,
+        #     44,572 full against 36,316 drawn, ZERO points extracted,
+        #     with the whole suite green.
+        #
+        # Reading the drawn frame makes the gate self-consistent and puts
+        # the marks on the vertices the user can actually see (WYSIWYG,
+        # Pack 3 `:1238`). The commit spans are untouched by any of this:
+        # decimation is draw-only (test_decimation_is_draw_only).
+        #
+        # Pack 6 D11 is preserved below in the fallback. There used to be
+        # a `_last_windowed_df` read here with a guard on it; NOTHING in
+        # the tree ever assigned that name, so the guard was
+        # unconditionally true and the slice was the only path that ever
+        # ran. That slice is now the fallback, taken by a host that has
+        # never redrawn (the suite's hand-built cross-plot hosts) -- for
+        # which it is exactly what it always was.
+        #
+        # The `.copy()` that used to sit on the slice is gone: it was a
+        # DEEP copy of the whole window, taken once per axes per highlight
+        # refresh, and nothing here writes to the frame.
+        windowed_df = getattr(self, "_last_windowed_frame", None)
+        if windowed_df is None:
+            try:
+                windowed_df = self.df.loc[self.t0:self.t1]
+            except Exception:
+                return x_vals, y_vals
         try:
-            windowed_df = self.df.loc[self.t0:self.t1].copy()
             windowed_idx = windowed_df.index
             if windowed_df.empty:
                 return x_vals, y_vals

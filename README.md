@@ -309,6 +309,18 @@ The "Label Unassigned..." button opens a dialog to:
   selected-interval MARKERS are the one thing computed against the drawn
   frame: under decimation they snap to the nearest drawn sample, which is
   bounded by one screen pixel.
+- **An image panel cannot show point highlights.** A spectrogram is an
+  image, and an image has no vertices to mark, so a pane made only of
+  spectrogram panels shows no red preview dots and no blue
+  selected-interval dots under any gesture. Add one line panel and the
+  marks appear there, for the same samples. This is a property of what
+  an image is, not a failure of the selection.
+- **A box drawn ON an image panel selects nothing** and says so: the
+  status bar reads "No points in selection". Box selection scans the
+  line and scatter artists in a panel, and an image is neither. Time
+  selection over a spectrogram works normally -- a full-height drag, the
+  two-click gesture and commit all behave exactly as they do on a line
+  panel; it is only the y-banded box that has nothing to read.
 
 ### Multi-Pane Interface
 

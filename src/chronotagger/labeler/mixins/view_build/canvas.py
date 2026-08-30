@@ -12,12 +12,15 @@ This mixin provides the core plotting infrastructure for the labeler.
 
 from __future__ import annotations
 
+import logging
 from typing import Dict
 import tkinter as tk
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.widgets import RectangleSelector
+
+logger = logging.getLogger(__name__)
 
 
 class CanvasMixin:
@@ -272,7 +275,9 @@ class CanvasMixin:
             self._freeze_layout_after_draw(pane)
             pane.canvas.mpl_connect(
                 "resize_event",
-                lambda event, p=pane: self._invalidate_layout_freeze(p))
+                self._guard_cb(
+                    "resize",
+                    lambda event, p=pane: self._invalidate_layout_freeze(p)))
             pane.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
             toolbar = NavigationToolbar2Tk(pane.canvas, parent)  # noqa: F841
             toolbar.update()
@@ -296,22 +301,32 @@ class CanvasMixin:
                 pane.canvas_connections = []
 
             # Wheel zoom/pan - wire for ALL panes, pass pane parameter
+            # Pack 8.5-B B3: every one of OUR handlers goes on through
+            # _guard_cb, so an exception inside it lands in the forensic
+            # log and turns the status bar red instead of being printed to
+            # a stderr nobody is reading.
             cid = pane.canvas.mpl_connect(
                 "scroll_event",
-                lambda event, p=pane: self._on_scroll_zoom(event, p)
+                self._guard_cb(
+                    "scroll_zoom",
+                    lambda event, p=pane: self._on_scroll_zoom(event, p))
             )
             pane.canvas_connections.append(cid)
 
             # Two-click selection wiring (coexists with drag-rectangle) - wire for ALL panes
             cid = pane.canvas.mpl_connect(
                 "button_release_event",
-                lambda event, p=pane: self._on_time_click(event, p)
+                self._guard_cb(
+                    "time_click",
+                    lambda event, p=pane: self._on_time_click(event, p))
             )
             pane.canvas_connections.append(cid)
 
             cid = pane.canvas.mpl_connect(
                 "motion_notify_event",
-                lambda event, p=pane: self._on_time_motion(event, p)
+                self._guard_cb(
+                    "time_motion",
+                    lambda event, p=pane: self._on_time_motion(event, p))
             )
             pane.canvas_connections.append(cid)
 
@@ -326,7 +341,10 @@ class CanvasMixin:
                 ax = pane.user_axes[k]
                 rs = RectangleSelector(
                     ax,
-                    onselect=lambda eclick, erelease, p=pane: self._on_rectangle_select(eclick, erelease, p),
+                    onselect=self._guard_cb(
+                        "rectangle_select",
+                        lambda eclick, erelease, p=pane:
+                            self._on_rectangle_select(eclick, erelease, p)),
                     useblit=True,
                     button=[1],
                     minspanx=5, minspany=5,
@@ -351,7 +369,11 @@ class CanvasMixin:
                     ax = pane.user_axes[k]
                     zs = RectangleSelector(
                         ax,
-                        onselect=lambda eclick, erelease, p=pane: self._on_zoom_box_complete(eclick, erelease, p),
+                        onselect=self._guard_cb(
+                            "zoom_box",
+                            lambda eclick, erelease, p=pane:
+                                self._on_zoom_box_complete(
+                                    eclick, erelease, p)),
                         useblit=True,
                         button=[3],  # RIGHT mouse button only
                         minspanx=0,  # No minimum - allow any zoom range
@@ -377,45 +399,60 @@ class CanvasMixin:
             # Strip interactions - wire for ALL panes, pass pane parameter
             cid = pane.canvas.mpl_connect(
                 "pick_event",
-                lambda event, p=pane: self._on_strip_click(event, p)
+                self._guard_cb(
+                    "strip_click",
+                    lambda event, p=pane: self._on_strip_click(event, p))
             )
             pane.canvas_connections.append(cid)
 
             cid = pane.canvas.mpl_connect(
                 "button_press_event",
-                lambda event, p=pane: self._on_strip_press(event, p)
+                self._guard_cb(
+                    "strip_press",
+                    lambda event, p=pane: self._on_strip_press(event, p))
             )
             pane.canvas_connections.append(cid)
 
             cid = pane.canvas.mpl_connect(
                 "motion_notify_event",
-                lambda event, p=pane: self._on_strip_motion(event, p)
+                self._guard_cb(
+                    "strip_motion",
+                    lambda event, p=pane: self._on_strip_motion(event, p))
             )
             pane.canvas_connections.append(cid)
 
             cid = pane.canvas.mpl_connect(
                 "button_release_event",
-                lambda event, p=pane: self._on_strip_release(event, p)
+                self._guard_cb(
+                    "strip_release",
+                    lambda event, p=pane: self._on_strip_release(event, p))
             )
             pane.canvas_connections.append(cid)
 
             # Right-click cancellation - wire for ALL panes, pass pane parameter
             cid = pane.canvas.mpl_connect(
                 "button_press_event",
-                lambda event, p=pane: self._on_right_click_cancel(event, p)
+                self._guard_cb(
+                    "right_click_cancel",
+                    lambda event, p=pane: self._on_right_click_cancel(
+                        event, p))
             )
             pane.canvas_connections.append(cid)
 
             # Drag gate - wire for ALL panes, pass pane parameter
             cid = pane.canvas.mpl_connect(
                 "button_press_event",
-                lambda event, p=pane: self._gate_press(event, p)
+                self._guard_cb(
+                    "gate_press",
+                    lambda event, p=pane: self._gate_press(event, p))
             )
             pane.canvas_connections.append(cid)
 
             cid = pane.canvas.mpl_connect(
                 "button_release_event",
-                lambda event, p=pane: self._gate_release(event, p)
+                self._guard_cb(
+                    "gate_release",
+                    lambda event, p=pane: self._gate_release(event, p))
             )
             pane.canvas_connections.append(cid)
 
@@ -466,6 +503,128 @@ class CanvasMixin:
         self._drag_active = False
         self._press_event = None
 
+    # ========== Callback error surfacing (Pack 8.5-B B3) ==========
+
+    #: Status-bar foreground while a callback failure stands.
+    _CB_ERROR_COLOUR = "#b00020"
+
+    def _guard_cb(self, name, fn):
+        """
+        Wrap ONE of our own canvas/widget callbacks so that a failure
+        inside it reaches the user AND the forensic log.
+
+        Matplotlib routes every callback exception through
+        ``cbook._exception_printer``, which under a running Tk mainloop
+        does ``traceback.print_exc()`` and returns. Measured on this tree
+        with a real duplicated-timestamp frame: a rectangle select died
+        at ``fastindex.py:74``, the status bar read "Ready" before and
+        "Ready" after, no dialog appeared, and the forensic log grew ZERO
+        bytes on a second identical gesture.
+
+        Nothing here monkeypatches matplotlib. The wrapper is installed on
+        OUR handlers at the point where we register them, so a matplotlib
+        widget's own callbacks keep matplotlib's behaviour exactly.
+        """
+        def _guarded(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:            # noqa: BLE001
+                self._report_callback_failure(name, exc)
+                return None
+
+        _guarded.__name__ = "guarded_%s" % name
+        return _guarded
+
+    def _report_callback_failure(self, name, exc) -> None:
+        """Full traceback to the forensic log, one red line on the status bar."""
+        logger.exception("callback %s raised", name)
+        try:
+            self._set_status_error(
+                "%s in %s -- details in chronotagger.log"
+                % (type(exc).__name__, name))
+        except Exception:
+            # The status bar is a nicety; the log line above is the record
+            # and it has already been written.
+            pass
+
+    def _status_widgets(self) -> list:
+        """
+        The widgets displaying ``status_var``, found once and cached.
+
+        ``sidebar.py`` builds the status bar as an anonymous
+        ``ttk.Label(parent, textvariable=self.status_var, ...)`` and keeps
+        no reference to it, so colouring it means finding it. The match is
+        exact: the widget's own ``textvariable`` option compared against
+        the StringVar's Tk name.
+        """
+        found = getattr(self, "_status_widgets_cache", None)
+        if found is not None:
+            return found
+        found = []
+        var = getattr(self, "status_var", None)
+        root = getattr(self, "root", None)
+        if var is not None and root is not None:
+            try:
+                want = str(var)
+            except Exception:
+                want = None
+            stack = [root] if want else []
+            while stack:
+                widget = stack.pop()
+                try:
+                    stack.extend(widget.winfo_children())
+                except Exception:
+                    pass
+                try:
+                    if str(widget.cget("textvariable")) == want:
+                        found.append(widget)
+                except Exception:
+                    continue
+        self._status_widgets_cache = found
+        return found
+
+    def _set_status_error(self, text: str) -> None:
+        """Put ``text`` on the status bar in red, and arm the reset."""
+        var = getattr(self, "status_var", None)
+        if var is None:
+            return
+        self._status_error_text = text
+        var.set(text)
+        for widget in self._status_widgets():
+            try:
+                widget.configure(foreground=self._CB_ERROR_COLOUR)
+            except Exception:
+                continue
+        self._arm_status_error_reset(var)
+
+    def _arm_status_error_reset(self, var) -> None:
+        """
+        Clear the red the moment anything else writes the status bar.
+
+        A status line that stays red forever is a status line nobody
+        reads, and the next successful gesture is the honest signal that
+        the failure is behind us. One trace per session.
+        """
+        if getattr(self, "_status_error_trace", None) is not None:
+            return
+
+        def _on_write(*_args):
+            try:
+                if var.get() == getattr(self, "_status_error_text", None):
+                    return
+            except Exception:
+                return
+            for widget in self._status_widgets():
+                try:
+                    widget.configure(foreground="")
+                except Exception:
+                    continue
+
+        try:
+            self._status_error_trace = var.trace_add("write", _on_write)
+        except Exception:
+            self._status_error_trace = None
+
     # ========== Rectangle Selector Edge Clamping Setup ==========
 
     def _setup_rectangle_edge_clamping(self) -> None:
@@ -499,20 +658,23 @@ class CanvasMixin:
         if not hasattr(self, '_rect_clamp_motion_cid') or self._rect_clamp_motion_cid is None:
             self._rect_clamp_motion_cid = self.canvas.mpl_connect(
                 'motion_notify_event',
-                self._on_rect_selector_motion
+                self._guard_cb("rect_clamp_motion",
+                               self._on_rect_selector_motion)
             )
 
         # Connect figure-level press/release for state tracking
         if not hasattr(self, '_rect_clamp_press_cid') or self._rect_clamp_press_cid is None:
             self._rect_clamp_press_cid = self.canvas.mpl_connect(
                 'button_press_event',
-                self._on_rect_selector_press
+                self._guard_cb("rect_clamp_press",
+                               self._on_rect_selector_press)
             )
 
         if not hasattr(self, '_rect_clamp_release_cid') or self._rect_clamp_release_cid is None:
             self._rect_clamp_release_cid = self.canvas.mpl_connect(
                 'button_release_event',
-                self._on_rect_selector_release
+                self._guard_cb("rect_clamp_release",
+                               self._on_rect_selector_release)
             )
 
         # CRITICAL: Add tkinter-level motion binding
@@ -532,20 +694,23 @@ class CanvasMixin:
         if not hasattr(self, '_zoom_clamp_motion_cid') or self._zoom_clamp_motion_cid is None:
             self._zoom_clamp_motion_cid = self.canvas.mpl_connect(
                 'motion_notify_event',
-                self._on_zoom_selector_motion
+                self._guard_cb("zoom_clamp_motion",
+                               self._on_zoom_selector_motion)
             )
 
         # Connect figure-level press/release for zoom state tracking
         if not hasattr(self, '_zoom_clamp_press_cid') or self._zoom_clamp_press_cid is None:
             self._zoom_clamp_press_cid = self.canvas.mpl_connect(
                 'button_press_event',
-                self._on_zoom_selector_press
+                self._guard_cb("zoom_clamp_press",
+                               self._on_zoom_selector_press)
             )
 
         if not hasattr(self, '_zoom_clamp_release_cid') or self._zoom_clamp_release_cid is None:
             self._zoom_clamp_release_cid = self.canvas.mpl_connect(
                 'button_release_event',
-                self._on_zoom_selector_release
+                self._guard_cb("zoom_clamp_release",
+                               self._on_zoom_selector_release)
             )
 
     def _on_tk_canvas_motion(self, tk_event) -> None:

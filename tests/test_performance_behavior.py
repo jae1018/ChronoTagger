@@ -365,6 +365,23 @@ def test_the_highlight_marker_cap_runs_before_the_mapping(big_labeler,
     # 15,000 timestamps -> step = 15000 // 1000 = 15 -> ~1000 probes
     assert 900 <= seen[0] <= 1100, "the ~1000-marker cap moved: %d" % seen[0]
 
+    # Pack 8.5-B B5. Everything above watches what goes INTO the mapping
+    # and nothing watched what came out, so this test drove the B1 defect
+    # on every run and passed on it: decimation active, 1000 timestamps
+    # in, ZERO highlight artists out. The fixture must stay in the
+    # decimating regime or this pin stops covering the thing it is for.
+    assert big_labeler._decim_active is True, (
+        "big_labeler no longer decimates; this pin covers the "
+        "under-decimation case and needs a frame that engages it")
+    marks = [c for ax in big_labeler.user_axes.values() for c in ax.collections
+             if (c.get_gid() or "") == "chronotagger:preview-highlight"]
+    assert len(marks) == 2, (
+        "one highlight artist per time panel; got %d" % len(marks))
+    total = sum(int(c.get_offsets().shape[0]) for c in marks)
+    assert total == 3 * seen[0], (
+        "three drawn lines x %d probes should be %d marks; got %d"
+        % (seen[0], 3 * seen[0], total))
+
 
 def test_redraw_decimates_and_the_window_cache_follows_the_artists(big_labeler):
     """The drawn frame is decimated and _last_windowed_index caches THAT

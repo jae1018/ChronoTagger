@@ -147,6 +147,15 @@ _ZERO_SPAN_DAYS = 1.0 / 86400.0
 # tests/test_pack6_cleanup.py and reviving them is not a silent option.
 _CB_ATTR = "_ct_colorbar"
 _SRC_ATTR = "_ct_colorbar_source"
+#: Set on the colorbar AXES this module creates in a gutter column, so
+#: the free-column scan does not count its own bars as occupants.
+_GUTTER_ATTR = "_ct_colorbar_gutter"
+#: Set on the OWNER axes when a gutter bar has just been created. The
+#: cax is born inside plot_fn, i.e. AFTER the constrained-layout solver
+#: has already placed the panels, so it keeps its raw gridspec cell until
+#: something asks for one more solve. `_update_plot` consumes this flag
+#: through `take_layout_dirty` and does exactly that, once.
+_DIRTY_ATTR = "_ct_colorbar_layout_dirty"
 
 
 # --------------------------------------------------------------- the core
@@ -510,11 +519,111 @@ def current_mappable(ax: Any) -> Optional[Any]:
     return None
 
 
+def gutter_column(owner_ax: Any) -> Optional[int]:
+    """
+    The gridspec column a per-owner colorbar for ``owner_ax`` may use, or
+    ``None`` if the pane reserved no room for one.
+
+    A GUTTER is a column of the pane's own gridspec that NO panel
+    occupies -- ``layout_spec`` has accepted ``ncols`` and
+    ``width_ratios`` all along, so reserving one is two keys and no new
+    schema::
+
+        "ncols": 3,
+        "width_ratios": [1.0, 0.05, 1.0],     # column 1 is the gutter
+        "areas": [ ... col 0 and col 2 only ... ]
+
+    The answer is the FIRST free column to the right of the owner, so a
+    bar lands beside the panel it belongs to rather than out past
+    whatever else the pane holds. Bars this module has already built in a
+    gutter do not count as occupants; every other axes on the same
+    gridspec does, including the Labels strip.
+
+    Returns ``None`` for a pane with no free column -- which is not an
+    error, it is the shape :func:`attach_colorbar` falls back to the
+    shared-x group for.
+    """
+    try:
+        ss = owner_ax.get_subplotspec()
+        if ss is None:
+            return None
+        gs = ss.get_gridspec()
+        ncols = int(gs.ncols)
+        first_free = int(ss.colspan.stop)
+    except Exception:
+        return None
+    if first_free >= ncols:
+        return None
+
+    occupied = set()
+    try:
+        siblings = list(getattr(owner_ax.get_figure(), "axes", ()))
+    except Exception:
+        return None
+    for other in siblings:
+        if getattr(other, _GUTTER_ATTR, False):
+            continue
+        try:
+            oss = other.get_subplotspec()
+            if oss is None or oss.get_gridspec() is not gs:
+                continue
+            occupied.update(range(int(oss.colspan.start),
+                                  int(oss.colspan.stop)))
+        except Exception:
+            continue
+
+    for col in range(first_free, ncols):
+        if col not in occupied:
+            return col
+    return None
+
+
+def _make_gutter_axes(owner_ax: Any, col: int) -> Any:
+    """A real subplot in ``col``, spanning exactly the owner's rows."""
+    ss = owner_ax.get_subplotspec()
+    gs = ss.get_gridspec()
+    rows = ss.rowspan
+    cax = owner_ax.get_figure().add_subplot(
+        gs[int(rows.start):int(rows.stop), int(col)])
+    setattr(cax, _GUTTER_ATTR, True)
+    return cax
+
+
+def take_layout_dirty(axes: Iterable[Any]) -> bool:
+    """
+    Consume the "a gutter bar was just born" flag; True at most once per
+    bar.
+
+    ``attach_colorbar`` is called from inside ``plot_fn``, which runs
+    AFTER the constrained-layout solver has placed the panels, so a cax
+    created there keeps its raw gridspec cell position and Pack 5's
+    layout freeze then locks that in -- measured, a bar at
+    ``[0.8635, 0.6316, 0.9, 0.88]`` against an owner at
+    ``[0.0256, 0.6935, 0.9369, 0.9879]``. One more solve lands it exactly
+    on the owner's rows and it never moves again (redraw drift 0.0, pan
+    drift 0.0, resize round trip 0.000000). ``_update_plot`` asks for
+    that solve when this returns True.
+    """
+    dirty = False
+    for ax in axes:
+        if getattr(ax, _DIRTY_ATTR, False):
+            dirty = True
+            try:
+                delattr(ax, _DIRTY_ATTR)
+            except Exception:
+                try:
+                    setattr(ax, _DIRTY_ATTR, False)
+                except Exception:
+                    pass
+    return dirty
+
+
 def attach_colorbar(
     owner_ax: Any,
     mappable: Optional[Any] = None,
     *,
     axes: Optional[Iterable[Any]] = None,
+    gutter: Any = None,
     label: Optional[str] = None,
     fraction: float = 0.04,
     pad: float = 0.01,
@@ -543,6 +652,26 @@ def attach_colorbar(
     registration is dropped and the next call builds a new bar, rather
     than handing back a colorbar that is no longer in the figure.
 
+    WHERE THE BAR GOES (Pack 8.5-B B4). Two placements, and the pane's
+    own layout picks between them:
+
+    * **GUTTER (preferred).** If the pane reserved a gridspec column that
+      no panel occupies -- ``"ncols": 3, "width_ratios": [1.0, 0.05,
+      1.0]`` with areas in columns 0 and 2 -- the bar is built there as a
+      real subplot spanning exactly the owner's rows. Measured over five
+      redraws, a pan and a 14x8 -> 10x6 -> 14x8 resize: bar height /
+      owner height **1.0000** at every stage, position drift
+      **0.000000** across the resize round trip, and the panels' width
+      FLAT in the number of bars (0.8741 of the figure at N = 1, 2 and 3
+      spectrograms).
+    * **SHARED-X STEAL (fallback).** A pane with no free column keeps
+      what Pack 8.5 shipped: ``fig.colorbar(mappable, ax=shared_x_axes)``.
+      Every x axis stays identical, which is the point, but the bar is
+      laid out against the WHOLE group -- measured 2.118 / 3.338 / 4.666
+      times its own panel's height at N = 1 / 2 / 3, and each extra bar
+      costs the panels another ~4.5 % of the figure width. Reserve a
+      gutter column to get out of it.
+
     Parameters
     ----------
     owner_ax :
@@ -552,18 +681,26 @@ def attach_colorbar(
         The artist to build from. Defaults to :func:`current_mappable` of
         ``owner_ax``.
     axes :
-        Which axes give up width. Defaults to :func:`shared_x_axes` of
-        ``owner_ax`` -- the time panels and the Labels strip -- which is
-        the only choice that keeps every x axis identical. Measured: this
-        placement survives redraws, a pan, a zoom, a figure resize and a
-        constrained-layout re-solve with ``len(fig.axes)`` constant. An
-        empty list, or axes belonging to another figure, is refused.
+        Which axes give up width IN THE FALLBACK PLACEMENT. Passing it
+        also SELECTS the fallback, because asking for particular axes to
+        be charged is asking for the steal. Defaults to
+        :func:`shared_x_axes` of ``owner_ax`` -- the time panels and the
+        Labels strip -- which is the only choice that keeps every x axis
+        identical. An empty list, or axes belonging to another figure, is
+        refused.
+    gutter :
+        Which gridspec column to build the bar in. ``None`` (the default)
+        means :func:`gutter_column` decides; an ``int`` names a column
+        explicitly; ``False`` forces the shared-x steal even on a pane
+        that has a free column.
     label :
         Colorbar label, e.g. ``"ion eflux (eV/cm^2-s-sr-eV)"``.
     fraction, pad :
-        Passed to ``fig.colorbar``. The defaults are narrower than
-        matplotlib's (0.15 / 0.05), which on a stacked time pane cost
-        ~17-19 % of the panel width against ~4 % for these.
+        Passed to ``fig.colorbar`` IN THE FALLBACK PLACEMENT only -- in a
+        gutter the width is stated by the layout's ``width_ratios``. The
+        defaults are narrower than matplotlib's (0.15 / 0.05), which on a
+        stacked time pane cost ~17-19 % of the panel width against ~4 %
+        for these.
     """
     fig = owner_ax.get_figure()
 
@@ -593,6 +730,27 @@ def attach_colorbar(
         raise ValueError(
             "attach_colorbar found no colour-mapped artist on this axes; "
             "draw the image first, or pass mappable=")
+
+    # Pack 8.5-B B4: a bar belongs to ONE panel and must span ONE panel.
+    # If the pane reserved a free gridspec column, build the bar there as
+    # a real subplot over the owner's rows -- measured bar-height /
+    # owner-height 1.000 at every stage of a five-redraw + pan + resize
+    # round trip, against 2.12 / 3.34 / 4.67 for the shared-group steal
+    # this replaces at N = 1 / 2 / 3 spectrograms. An explicit `axes=`
+    # still means "steal from these", because that is what asking for it
+    # says.
+    if gutter is None and axes is None:
+        gutter = gutter_column(owner_ax)
+    if gutter is not None and gutter is not False:
+        cax = _make_gutter_axes(owner_ax, int(gutter))
+        cb = fig.colorbar(mappable, cax=cax, **colorbar_kwargs)
+        if label:
+            cb.set_label(label)
+        setattr(owner_ax, _CB_ATTR, cb)
+        # The cax was born after the solver ran; ask _update_plot for one
+        # more solve (take_layout_dirty).
+        setattr(owner_ax, _DIRTY_ATTR, True)
+        return cb
 
     if axes is None:
         parents = shared_x_axes(owner_ax)

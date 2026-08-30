@@ -8,6 +8,10 @@ Demonstrates a richer ChronoTagger setup than the bundled wizard:
       that survives the redraw loop -- alongside time-series and two
       cross-plot ("not-time") panels for spacecraft position in the GSE
       and SSE (Moon-centered) frames.
+    * Pane 1's layout also reserves an empty gridspec column as a
+      COLORBAR GUTTER (`ncols` + `width_ratios`, no area in column 1),
+      which is what makes the eflux bar span its own panel instead of
+      the whole stack.
     * Pane 2 has a complementary set of derived quantities + the same
       cross-plots, so labels created in either tab stay consistent.
     * Four placeholder classes (``label_1`` ... ``label_4``) -- swap
@@ -185,10 +189,10 @@ def first_pane_plot_fn(axs, df: pd.DataFrame, t0: pd.Timestamp, t1: pd.Timestamp
     )
     _format_energy_axis(ax_spec)
     # Idempotent: creates the bar on the first redraw and re-points it on
-    # every later one.  It steals width from the whole shared-x group --
-    # the time panels AND the Labels strip -- so the x axes stay
-    # identical, and _update_plot's sweep keeps it pointed at the live
-    # image without any per-frame code here.
+    # every later one.  LAYOUT_FIRST reserves an empty gridspec column
+    # beside this panel, so the bar is built there and spans exactly this
+    # panel -- not the whole stack.  _update_plot's sweep keeps it pointed
+    # at the live image without any per-frame code here.
     attach_colorbar(ax_spec, im, label="ion eflux (eV/cm^2-s-sr-eV)")
 
     axs["scpot"].plot(df.index, df["SCPot"], marker=marker, ms=ms)
@@ -282,18 +286,27 @@ def _load_dataframe(path: Path) -> pd.DataFrame:
 
 LAYOUT_FIRST = {
     "nrows": 6,
-    "ncols": 2,
+    # THREE columns, and the middle one is empty on purpose: it is the
+    # COLORBAR GUTTER.  `attach_colorbar` looks for the first gridspec
+    # column to the right of the panel it belongs to that no area
+    # occupies, and builds the bar there as a real subplot spanning
+    # exactly that panel's rows -- so the bar marks the spectrogram and
+    # nothing else (measured bar height / panel height = 1.000, stable
+    # across redraws, a pan and a window resize).  Without a gutter the
+    # helper falls back to taking width off the shared-x group, which
+    # keeps the x axes aligned but lays every bar out against the whole
+    # column of panels: 2.1x its own panel's height with one
+    # spectrogram, 4.7x with three.
+    #
+    # The width is now STATED here rather than taken from the panels, and
+    # one gutter column pays for any number of bars.  0.07 of a content
+    # column is the value that reproduces the bar width this example used
+    # to get from the steal (0.0279 of the figure against 0.0281),
+    # measured; wider or narrower is a taste knob and costs the panels
+    # about 1 % of their width per 0.05 of ratio.
+    "ncols": 3,
+    "width_ratios": [1.0, 0.07, 1.0],
     "hspace": 0.05,
-    # A colorbar has to come from somewhere.  `attach_colorbar` takes its
-    # width off the shared-x group -- the time panels and the Labels
-    # strip -- which keeps every x axis identical but puts the bar and
-    # its label in the gap between the two columns.  On a two-column
-    # layout that gap has to be wide enough to hold them, and this is
-    # where it comes from.  (The alternative, if you want the width
-    # stated explicitly rather than taken: declare an extra narrow
-    # gridspec column with no area in it -- `layout_spec` already accepts
-    # `ncols` and `width_ratios` -- and hand its axes to the helper.)
-    "wspace": 0.32,
     "areas": [
         {"key": "n",           "row": 0, "col": 0, "role": "time"},
         {"key": "spectrogram", "row": 1, "col": 0, "role": "time"},
@@ -301,12 +314,13 @@ LAYOUT_FIRST = {
         {"key": "p",           "row": 3, "col": 0, "role": "time"},
         {"key": "b",           "row": 4, "col": 0, "role": "time"},
         {"key": "labels",      "row": 5, "col": 0, "role": "labels"},
-        # Cross-plot panels (column 1) reuse columns from the dataframe
-        # via x_col / y_col mappings -- this is what powers the
-        # box-select-on-cross-plot -> highlight-on-time-series flow.
-        {"key": "xy_gse", "row": 0, "col": 1, "role": "not-time", "rowspan": 2,
+        # Cross-plot panels (column 2 -- column 1 is the gutter) reuse
+        # columns from the dataframe via x_col / y_col mappings -- this is
+        # what powers the box-select-on-cross-plot ->
+        # highlight-on-time-series flow.
+        {"key": "xy_gse", "row": 0, "col": 2, "role": "not-time", "rowspan": 2,
          "x_col": "X", "y_col": "Y"},
-        {"key": "xy_sse", "row": 2, "col": 1, "role": "not-time", "rowspan": 2,
+        {"key": "xy_sse", "row": 2, "col": 2, "role": "not-time", "rowspan": 2,
          "x_col": "Xm", "y_col": "Ym"},
     ],
 }
