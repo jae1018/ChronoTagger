@@ -477,6 +477,8 @@ def plot_fn(
     axs["panel1"].plot(df.index, df["column"])
 ```
 
+For performance: see [`docs/fast-plot-fn.md`](docs/fast-plot-fn.md) for the six measured rules a fast `plot_fn` follows -- artist count, vectorized derives, the cost of `scatter` and of a raw mesh, and what draw decimation can and cannot reach.
+
 ### Panel Count Resolution
 
 The set of panels is fully determined by `layout_spec.areas`: every entry with a unique `key` becomes a panel and is passed to your `plot_fn` as `axs[key]`. Add entries to grow or shrink the layout — there is no separate panel-count argument.

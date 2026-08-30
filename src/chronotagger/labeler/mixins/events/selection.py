@@ -1084,6 +1084,64 @@ class SelectionMixin:
                     except Exception:
                         continue
 
+                # Pack 8.5-C GC1. A time panel drawn with ax.scatter puts a
+                # PathCollection on ax.collections and NOTHING on ax.lines,
+                # so the loop above found no artist at all and both lists
+                # stayed empty -- measured on three identical panels driven
+                # at the production entry points: 0 red preview marks and 0
+                # blue interval marks under every gesture family, at both
+                # decimate settings, while the SELECTION those gestures
+                # produced was sample-for-sample identical to the line
+                # panel's. This is the not-time branch's own PathCollection
+                # fallback (below, in the `else:` of its Line2D loop) with
+                # the box scan's gid guard (:581-582), transplanted here and
+                # given the same component filter the line loop above uses.
+                #
+                # The gid guard is load-bearing twice over: our own red and
+                # blue highlight overlays ARE PathCollections on this axes,
+                # and a selection covering the whole window would give them
+                # the exact length the ordinal gate accepts. Without it a
+                # second gesture would read the tool's own ink back in as
+                # data.
+                for coll in ax.collections:
+                    try:
+                        if str(coll.get_gid() or "").startswith(
+                                TOOL_GID_PREFIX):
+                            continue  # tool-owned overlay (ink), never data
+                        offsets = np.asarray(coll.get_offsets())
+                        if (
+                            offsets.ndim != 2
+                            or offsets.shape[1] != 2
+                            or offsets.shape[0] != len(windowed_idx)
+                        ):
+                            # The same ordinal-validity gate the line loop
+                            # applies (artist point i -> windowed row i);
+                            # it also rejects the [[0, 0]] sentinel offsets
+                            # a PolyCollection from fill_between or a
+                            # LineCollection from errorbar carries.
+                            continue
+
+                        if selected_components is not None:
+                            coll_label = coll.get_label()
+                            if not coll_label.startswith("_"):
+                                if (coll_label.strip().upper()
+                                        not in [lbl.strip().upper()
+                                                for lbl in
+                                                selected_components]):
+                                    continue
+
+                        y_vals_for_coll = [float(offsets[idx, 1])
+                                           for idx in indices
+                                           if 0 <= idx < offsets.shape[0]]
+                        x_vals_for_coll = [float(offsets[idx, 0])
+                                           for idx in indices
+                                           if 0 <= idx < offsets.shape[0]]
+                        x_vals.extend(x_vals_for_coll)
+                        y_vals.extend(y_vals_for_coll)
+
+                    except Exception:
+                        continue
+
             except Exception:
                 return x_vals, y_vals
 

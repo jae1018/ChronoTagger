@@ -3,11 +3,13 @@ Simple Dual-Pane Example
 
 Demonstrates basic multi-pane functionality with two views:
 - Pane 1: Sinusoidal waves (sin/cos)
-- Pane 2: Random walk + histogram
+- Pane 2: Random walk + its rolling spread
 
 This is the minimal example to get started with multi-pane labeling.
 For a more comprehensive example with real scientific data, see:
   examples/multi_pane_magnetosphere.py
+For what makes a plot_fn cheap to redraw, see:
+  docs/fast-plot-fn.md
 
 Usage:
     python examples/dual_pane_demo.py
@@ -42,14 +44,25 @@ def plot_fn_tab1(axs, df_slice, t0, t1):
     axs['bottom'].grid(True, alpha=0.3)
 
 def plot_fn_tab2(axs, df_slice, t0, t1):
-    """Plot for Tab 2 - Random Walk"""
+    """Plot for Tab 2 - Random Walk and its rolling spread.
+
+    Both areas below are role='time', so both panels are on the window's
+    date axis and both must be drawn against df_slice.index.  See
+    docs/fast-plot-fn.md.
+    """
     axs['top'].plot(df_slice.index, df_slice['value3'], 'g-')
     axs['top'].set_ylabel('Random Walk')
     axs['top'].grid(True, alpha=0.3)
 
-    axs['bottom'].hist(df_slice['value3'], bins=20, alpha=0.7, color='purple')
-    axs['bottom'].set_xlabel('Value')
-    axs['bottom'].set_ylabel('Count')
+    # Derived here on purpose: a VECTORIZED statistic over the handed-in
+    # window is free next to the redraw (rule 2).  One artist, not one
+    # per bin (rule 1).  A histogram would have been neither -- 20
+    # Rectangle patches, re-binned every frame, and drawn against VALUES
+    # on an axis this panel's role has already pinned to [t0, t1].
+    spread = df_slice['value3'].rolling(31, center=True, min_periods=2).std()
+    axs['bottom'].plot(df_slice.index, spread, color='purple')
+    axs['bottom'].set_ylabel('Rolling spread')
+    axs['bottom'].grid(True, alpha=0.3)
 
 # Layout specification
 layout_spec = {
