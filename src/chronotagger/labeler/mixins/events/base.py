@@ -117,9 +117,19 @@ class EventsBaseMixin:
             return
         item = sel[0]
         try:
-            idx = int(self.intervals_tree.item(item)["text"]) - 1  # type: ignore[union-attr]
-            if 0 <= idx < len(self.intervals):
-                candidate_interval = self.intervals[idx]
+            # Pack M0 R1.  A row's identity is its Treeview iid, written
+            # by _update_intervals_list together with the interval that
+            # row shows.  This USED to read the "#" column's text -- the
+            # row's 1-based ORDINAL -- and index self.intervals with it,
+            # which is correct only while the list shows every interval
+            # in list order.  Scope the list to the window, filter it or
+            # sort it and the ordinal lands on a different interval: the
+            # user clicks one row, another interval is selected, and the
+            # next `d` deletes that one instead, silently.  Reproduced in
+            # edit_pack/evidence/probes/ml_g4_07_points_and_rowmap.py
+            # part 2.  The "#" column is display only; never index with it.
+            candidate_interval = getattr(self, "_interval_row_map", {}).get(item)
+            if candidate_interval is not None:
 
                 # Check if this is the already selected interval - if so, deselect it
                 if hasattr(self, 'selected_interval') and self.selected_interval is candidate_interval:

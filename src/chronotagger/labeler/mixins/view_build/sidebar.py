@@ -38,6 +38,11 @@ class SidebarMixin:
     - sidebar_interior: ttk.Frame - Interior frame holding sidebar content
     - sidebar_canvas_window: int - Canvas window ID for the interior frame
     - intervals_tree: ttk.Treeview - Treeview for displaying labeled intervals
+    - interval_scope_var: tk.StringVar - "all" or "window"; scopes the
+      interval list to the current window when set to "window" (Pack M0
+      R2; the default is "all", which is what the list always showed)
+    - interval_scope_all_btn: ttk.Radiobutton - the "all" scope button
+    - interval_scope_window_btn: ttk.Radiobutton - the "window" scope button
     - stats_text: tk.Text - Text widget for statistics display
     - snap_var: tk.BooleanVar - BooleanVar for snap-to-samples option
     - overlays_var: tk.BooleanVar - BooleanVar for interval overlays option
@@ -140,6 +145,33 @@ class SidebarMixin:
         # Options
         opts = ttk.LabelFrame(parent, text="Options", padding=5)
         opts.pack(fill=tk.X, pady=5)
+
+        # Interval-list scope (Pack M0 R2).  DEFAULT IS "all": an
+        # interval lying past the end of the data cannot be reached by
+        # navigation (campaign finding C13-3), and this list is the only
+        # way to select or delete it, so scoping by default would hide
+        # it.  "window" is there for the sessions that want it: measured
+        # at 154 visible of 8,000 held, the whole sidebar refresh goes
+        # from 273 ms to 64 ms and the Treeview work inside it from
+        # 215 ms to 7 ms.  The floor is _update_statistics, which is
+        # never scoped on purpose (Pack M0 DR5).
+        scope_row = ttk.Frame(opts)
+        scope_row.pack(anchor=tk.W, fill=tk.X)
+        ttk.Label(scope_row, text="Show:").pack(side=tk.LEFT)
+        self.interval_scope_var = tk.StringVar(value="all")
+        self.interval_scope_all_btn = ttk.Radiobutton(
+            scope_row, text="all", value="all",
+            variable=self.interval_scope_var,
+            command=self._on_interval_scope_change,
+        )
+        self.interval_scope_all_btn.pack(side=tk.LEFT, padx=(4, 0))
+        self.interval_scope_window_btn = ttk.Radiobutton(
+            scope_row, text="window", value="window",
+            variable=self.interval_scope_var,
+            command=self._on_interval_scope_change,
+        )
+        self.interval_scope_window_btn.pack(side=tk.LEFT, padx=(4, 0))
+
         self.snap_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(opts, text="Snap to samples", variable=self.snap_var).pack(anchor=tk.W)
 
