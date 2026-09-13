@@ -250,9 +250,14 @@ class IntervalGapsMixin:
 
         # Create intervals for each gap with the specified label.
         # One gesture: the whole fill is a single undo entry.
+        # Pack M1, construction site 7 of 11: a gap fill lands on the
+        # ACTIVE track, named explicitly.
+        from chronotagger.core.tracks import active_id_of
+        track = active_id_of(self)
         with self._gesture(f"fill {len(gaps)} gap(s) as {label}"):
             for s, e in gaps:
-                self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+                self._execute_command(AddIntervalCommand(
+                    self, Interval(s, e, label, track=track)))
 
         # Update UI
         self.status_var.set(f"Assigned {len(gaps)} interval(s) to {label}")  # type: ignore[union-attr]

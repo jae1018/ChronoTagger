@@ -19,6 +19,19 @@ import pandas as pd
 import numpy as np
 
 from chronotagger.core.models import Interval
+from chronotagger.core.tracks import (
+    DEFAULT_TRACK_ID,
+    Track,
+    active_id_of,
+    active_track_of,
+    default_table,
+    find_track,
+    intervals_on,
+    stray_tracks,
+    table_of,
+    union_covered,
+)
+from chronotagger.core.commands import check_interval_invariants
 from ..utils.atomic_io import atomic_write_json, atomic_write_path
 
 logger = logging.getLogger(__name__)
@@ -56,8 +69,9 @@ def dataset_fingerprint(df: pd.DataFrame) -> str:
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
 
 
-def write_label_map_sidecar(classes, data_path: str, what: str) -> None:
-    """Write ``<stem>_label_map.json`` beside ``data_path``.
+def write_label_map_sidecar(classes, data_path: str, what: str,
+                            stem_suffix: str = "") -> None:
+    """Write ``<stem>_label_map<stem_suffix>.json`` beside ``data_path``.
 
     Pack 6 F14. Pack 5's R7 made ``export_per_sample`` write integer ids,
     which was right -- it separated class 0 ``UNKNOWN`` from unlabelled
@@ -74,6 +88,15 @@ def write_label_map_sidecar(classes, data_path: str, what: str) -> None:
     rather than swallowed. The mapping follows the current class
     ordering, for stability.
 
+    Pack M1 adds ``stem_suffix``: ONE SIDECAR PER TRACK. It is the empty
+    string for the default track, so a single-track session's sidecar
+    keeps its exact filename and its exact bytes, and it is
+    ``"__<track id>"`` for every other track. That asymmetry is the whole
+    reason the acceptance floor survives -- measured on a 115,339-row
+    real ARTEMIS frame with 85 real hand-drawn intervals, the
+    single-track sidecar is byte-identical
+    (``fdb43a898e0468434f4af4b97d5a0a86f2d1cb8c30f1fa2dd24f29a0d7d3b3c8``).
+
     Module-level, not a method, deliberately: tests/test_persistence_
     safety.py binds a NAMED LIST of mixin methods onto a GUI-free host,
     so a new method would have had to be added to that list. A free
@@ -82,13 +105,365 @@ def write_label_map_sidecar(classes, data_path: str, what: str) -> None:
     """
     label_to_id = {label: i for i, label in enumerate(classes)}
     sidecar = Path(data_path).with_name(
-        Path(data_path).stem + "_label_map.json")
+        Path(data_path).stem + "_label_map" + stem_suffix + ".json")
     try:
         atomic_write_json(sidecar, label_to_id, sync_dir=True)
     except Exception as e:
         raise RuntimeError(
             f"The {what} was written to {data_path}, but the label "
             f"map sidecar failed: {e}") from e
+
+
+# ---------------------------------------------------------------- Pack M1
+# Version 2 of the session and autosave payloads, the gate that refuses a
+# newer one, and the per-track naming and accounting helpers. All
+# module-level and all free functions, for the write_label_map_sidecar
+# reason above: the GUI-free hosts in tests/ bind a named list of METHODS,
+# and nothing here needs to be on that list.
+
+SESSION_VERSION = 2
+
+
+class SessionVersionError(RuntimeError):
+    """A session or autosave was written by a NEWER ChronoTagger.
+
+    Raised on the HEAD-LESS path only. In a GUI session the same refusal
+    is a messagebox, because a modal in a display-less script hangs
+    forever -- the two-channel split _save_session already uses.
+    """
+
+
+def validate_track_table(rows, what):
+    """The table rules that must hold wherever a table ARRIVES.
+
+    v2 fold F2. _build_track_table (app.py) enforces these for a
+    caller's tracks= argument, and DR13 leans on that refusal for the
+    whole enforcement of "the id 'default' is reserved". A table read
+    off DISK arrives by a different door and needs the same refusals,
+    or a hand-edited or foreign session re-creates exactly the failure
+    the constructor exists to prevent: measured on v1 of this pack, two
+    rows sharing one id LOADED, gave the two lanes ONE export column
+    and ONE sidecar, and made the orphan gate report the FIRST row's
+    perfectly legal label as an orphan because it keys a dict by id and
+    the last row wins. A classless row loaded and then died on a bare
+    IndexError out of self.current_class_var.set(self.classes[0]).
+    """
+    if not rows:
+        raise ValueError("%s has an empty track table and cannot be "
+                         "loaded." % (what,))
+    seen = set()
+    for row in rows:
+        if row.id in seen:
+            raise ValueError(
+                "%s has two tracks with the id %r: a track id names an "
+                "export column and a label-map sidecar, so it must be "
+                "unique." % (what, row.id))
+        seen.add(row.id)
+        if not row.classes:
+            raise ValueError(
+                "%s has a track (%r) with no classes; every track needs "
+                "its own vocabulary." % (what, row.id))
+    return rows
+
+
+def label_id_column(track_id) -> str:
+    """The per-sample export column name for one track.
+
+    ``label_id`` for the track whose id is ``default``,
+    ``label_id__<track id>`` for every other track. This is the ONLY
+    scheme under which a single-track session's per-sample export is
+    byte-for-byte today's file: measured on a 115,339-row real ARTEMIS
+    frame, parquet
+    ``c14add1527f58ef0d13c5b7e91dd8782773c9502e71c5e062934c5b9207cf35a``
+    and CSV ``0ce94caed27b208d06218e22c223c7fd869a1c4898737b32baa48b862ee916f6``
+    both ways round. A uniform ``label_id__<id>`` for every track is
+    tidier and breaks that floor on day one.
+
+    The price is an asymmetry: ``label_id`` and ``label_id__quality`` in
+    one file look like two different kinds of thing and are not. The
+    price is worth paying because a track id is IMMUTABLE, so renaming a
+    track can never silently change a consumer's column name.
+    """
+    return ("label_id" if track_id == DEFAULT_TRACK_ID
+            else "label_id__%s" % track_id)
+
+
+def label_map_stem_suffix(track_id) -> str:
+    """The sidecar filename suffix for one track. See label_id_column."""
+    return "" if track_id == DEFAULT_TRACK_ID else "__%s" % track_id
+
+
+def payload_version(data):
+    """Read a payload's format version. Returns (found, readable).
+
+    ABSENT MEANS 1. That is not a guess: the autosave has never carried
+    a version key at all, and all 33 of the live autosaves on disk are
+    exactly that shape (one shape, no variants).
+
+    A bool is refused even though bool is an int subclass, because
+    ``"version": true`` is a malformed file, not version 1.
+    """
+    if not isinstance(data, dict) or "version" not in data:
+        return 1, True
+    found = data.get("version")
+    if isinstance(found, bool) or not isinstance(found, int):
+        return found, False
+    return found, 1 <= found <= SESSION_VERSION
+
+
+def refuse_future_version(host, found, what, path) -> None:
+    """Refuse a payload this build cannot read, loudly, having touched
+    nothing.
+
+    Two channels, the split _save_session already uses: a GUI session
+    gets one ``showerror``; a head-less one gets SessionVersionError,
+    because a modal would hang a display-less script forever.
+
+    The caller must not have written ANY live state before calling this.
+    """
+    # v2 fold F7: DR5 refuses version 0 and below as well, and they were
+    # being refused with the words "written by a NEWER ChronoTagger" --
+    # the right refusal with the wrong diagnosis.
+    kind = ("a NEWER ChronoTagger"
+            if isinstance(found, int) and not isinstance(found, bool)
+            and found > SESSION_VERSION
+            else "something this build does not recognise")
+    body = ("This %s file was written by %s.\n\n"
+            "    file format version: %s\n"
+            "    this build reads:    %s\n\n"
+            "It has NOT been loaded. Nothing in this session changed.\n"
+            "Upgrade ChronoTagger, or open the file with the build that "
+            "wrote it.\n\n%s"
+            % (what, kind, found, SESSION_VERSION, path))
+    status = ("Refused: %s file format version %s (this build reads %s)"
+              % (what, found, SESSION_VERSION))
+    sv = getattr(host, "status_var", None)
+    if getattr(host, "root", None) is None:
+        if sv is not None:
+            sv.set(status)
+        raise SessionVersionError(body)
+    messagebox.showerror("Cannot Open: Newer File Format", body)
+    if sv is not None:
+        sv.set(status)
+
+
+def orphan_labels_by_track(intervals, tracks):
+    """Two kinds of orphan, kept apart. Returns (by_track, orphan_tracks).
+
+    by_track      {track id: [labels that track's class set does not hold]}
+    orphan_tracks [track ids no row in the table carries]
+
+    They are separate because an interval on a track that does not exist
+    has NO class set to check its label against, so the label gate
+    cannot even run on it -- and silently dropping it re-creates the
+    ``-1`` ambiguity one level up.
+
+    The flat version of this gate does not merely under-report: measured,
+    with an active track that does not know another track's perfectly
+    legal class, it BLOCKS EVERY EXPORT.
+    """
+    known = {t.id: set(t.classes) for t in tracks}
+    by_track = {}
+    for iv in intervals:
+        if iv.track not in known:
+            continue
+        if iv.label not in known[iv.track]:
+            by_track.setdefault(iv.track, set()).add(iv.label)
+    return ({k: sorted(v) for k, v in sorted(by_track.items())},
+            stray_tracks(intervals, tracks))
+
+
+def format_orphans(by_track, orphan_tracks) -> str:
+    """One human-readable block naming the track for every orphan."""
+    lines = ["  %s: %s" % (tid, ", ".join(labels))
+             for tid, labels in sorted(by_track.items())]
+    if orphan_tracks:
+        lines.append("  intervals on tracks that do not exist: %s"
+                     % ", ".join(orphan_tracks))
+    return "\n".join(lines)
+
+
+def refuse_export_orphans(intervals, tracks, what) -> None:
+    """Refuse a PROGRAMMATIC export rather than write a silent -1.
+
+    Two distinct refusals, because they are two different faults:
+      * a label outside its OWN track's class set;
+      * an interval on a track that is not in the table at all.
+
+    A raise, not a dialog: export_intervals already sets that precedent
+    ("Scripts must fail loudly: a print-and-return leaves a pipeline with
+    no exception and no file"). Measured on the shipped tree, these two
+    paths had NO gate at all -- export_per_sample wrote 1,160,926 bytes
+    with ZERO dialogs, 85 orphan-labelled rows rendered as -1, and the
+    orphan absent from the sidecar. That is exactly the corrupted
+    training data the GUI gate's own error text describes, on the paths a
+    driver script actually calls.
+
+    The cost, stated: this can break a script that is relying on today's
+    silence.
+    """
+    by_track, orphan_tracks = orphan_labels_by_track(intervals, tracks)
+    if orphan_tracks:
+        raise ValueError(
+            "Refusing the %s: %d interval(s) sit on tracks that are not in "
+            "the track table (%s). An interval on a track that does not "
+            "exist has no class set to check its label against, so it "
+            "cannot be exported honestly."
+            % (what, sum(1 for iv in intervals if iv.track in orphan_tracks),
+               ", ".join(orphan_tracks)))
+    if by_track:
+        raise ValueError(
+            ("Refusing the %s: these interval labels are not in their own "
+             "track's class set and would be written as -1 (unlabeled), "
+             "which is indistinguishable from unlabeled in the output and "
+             "absent from the label-map sidecar:" % (what,))
+            + "\n" + format_orphans(by_track, []))
+
+
+def label_column_collision(df, tracks):
+    """Source column names this export would overwrite. Pack M1.
+
+    Today a source column already named ``label_id`` is SILENTLY
+    overwritten -- measured, source ``[0,1,2,0,1,2,...]`` written as
+    ``[-1,-1,...]`` with zero dialogs. The column ingest makes that
+    likely rather than exotic: the natural workflow is "ingest the
+    label_id column from my model's predictions parquet, then export the
+    full frame plus my hand labels", and that IS this collision.
+    """
+    taken = {label_id_column(t.id) for t in tracks}
+    return sorted(c for c in (str(x) for x in df.columns) if c in taken)
+
+
+def label_id_series_for_track(intervals, index, track) -> pd.Series:
+    """
+    THE ONE per-sample label-id writer (Pack M1).
+
+    Build a vectorized per-sample label_id series for ONE track,
+    aligned to `index`.
+
+    Mapping:
+      that track's classes -> ids (0..N-1), in the track's own order
+      rows no interval OF THAT TRACK covers -> -1
+
+    Uses the smallest feasible integer dtype to keep CSVs compact. Two
+    tracks in one file can therefore carry DIFFERENT dtypes, because
+    the dtype follows each track's own class count (3-127 classes ->
+    int8, 128+ -> int16). Today's one-column contract never had to say
+    this out loud.
+
+    `index` IS AN ARGUMENT, not self.df.index, so that the export
+    dialog's PREVIEW is a SLICE of exactly these bytes. The preview used
+    to be a SECOND implementation with a DIFFERENT arbitration rule --
+    FIRST-match-wins against this function's LAST-writer-wins -- and on a
+    deliberately overlapping pair the two disagreed on 20 of 60 previewed
+    rows (0 of 60 on a non-overlapping control). Tracks make cross-track
+    overlap legal, so that divergence became reachable the day this pack
+    shipped; the second implementation is deleted.
+
+    Module-level, like every other helper in this block, for the
+    write_label_map_sidecar reason -- no mock host's bound-method list
+    needs a new name for it -- and because it needs nothing from a
+    labeler but three values.
+    """
+    # Stable, deterministic mapping from this track's class ordering
+    label_to_id = {label: i for i, label in enumerate(track.classes)}
+    unknown_id = -1
+
+    # Smallest int dtype that fits the number of classes
+    n = len(label_to_id)
+    if n <= np.iinfo(np.int8).max:
+        dtype = np.int8
+    elif n <= np.iinfo(np.int16).max:
+        dtype = np.int16
+    else:
+        dtype = np.int32
+
+    idx = index
+    ids = np.full(len(idx), fill_value=unknown_id, dtype=dtype)
+
+    # Index.searchsorted does NOT validate sortedness. On a frame that
+    # is not monotonic -- two spacecraft concatenated without a
+    # re-sort, say -- it returned a bogus slice and MISLABELLED:
+    # measured, 95 rows set where 185 are contained, and not even a
+    # subset of the right ones (pack5_g1 6b / S9). The slice stays for
+    # the monotonic case, where [searchsorted(start), searchsorted(end))
+    # IS exactly {ts : start <= ts < end}; otherwise the half-open
+    # boolean mask, which agrees with Interval.contains by
+    # construction. Fixing it (rather than raising) is the ruling:
+    # export has no current raise behaviour to preserve, it has a
+    # silently wrong one to correct (Pack 5 R7).
+    monotonic = bool(getattr(idx, "is_monotonic_increasing", False))
+
+    # WITHIN one track the intervals are non-overlapping by
+    # construction -- the strict invariant is per track and that is
+    # what enforces it. ACROSS tracks they may overlap, which is why
+    # this loop filters instead of trusting the whole list.
+    for iv in intervals:
+        if iv.track != track.id:
+            continue
+        code = label_to_id.get(iv.label, unknown_id)
+        if monotonic:
+            s = idx.searchsorted(iv.start, side="left")
+            e = idx.searchsorted(iv.end, side="left")
+            if s < e:
+                ids[s:e] = code
+        else:
+            mask = (idx >= iv.start) & (idx < iv.end)
+            if mask.any():
+                ids[mask] = code
+
+    return pd.Series(ids, index=idx, name=label_id_column(track.id))
+
+
+def label_stats_by_track(intervals, tracks):
+    """{track id: {label: {count, duration_hours}}}. Pack M1.
+
+    The flat shape summed two lanes that share a class name into one
+    entry -- measured, five keys for two tracks -- so both the count and
+    the hours were silently wrong. Every track in the table gets a key,
+    including an empty one, so a reader can tell "no intervals" from "no
+    such track".
+    """
+    out = {t.id: {} for t in tracks}
+    for iv in intervals:
+        bucket = out.setdefault(iv.track, {})
+        entry = bucket.setdefault(iv.label, {'count': 0, 'duration_hours': 0})
+        entry['count'] += 1
+        entry['duration_hours'] += (
+            (iv.end - iv.start).total_seconds() / 3600)
+    return out
+
+
+def flatten_label_stats(label_stats):
+    """Sum a label_stats payload down to {label: {count, duration_hours}}.
+
+    Accepts BOTH shapes, because the recovery dialog can be handed
+    either: v1's flat ``{label: {...}}`` from an autosave already on
+    disk, and v2's ``{track: {label: {...}}}``. A leaf is recognised by
+    carrying a 'count' or a 'duration_hours' key, which no track id can.
+
+    The dialog renders the union of the lanes rather than one lane,
+    because "Intervals by Label" is a summary and a per-lane breakdown is
+    M2's Track column.
+    """
+    out = {}
+
+    def add(label, s):
+        if not isinstance(s, dict):
+            return
+        leaf = out.setdefault(str(label), {'count': 0, 'duration_hours': 0})
+        leaf['count'] += s.get('count', 0) or 0
+        leaf['duration_hours'] += s.get('duration_hours', 0) or 0
+
+    for key, value in (label_stats or {}).items():
+        if not isinstance(value, dict):
+            continue
+        if 'count' in value or 'duration_hours' in value:
+            add(key, value)
+        else:
+            for label, s in value.items():
+                add(label, s)
+    return out
 
 
 class IOExportMixin:
@@ -109,8 +484,24 @@ class IOExportMixin:
             # Scripts must fail loudly: a print-and-return leaves a
             # pipeline with no exception and no file (grill Q7).
             raise ValueError("No intervals to export.")
+        # Pack M1: the two PROGRAMMATIC export paths had NO orphan gate at
+        # all. Measured, this one wrote the orphan string verbatim and
+        # export_per_sample wrote 85 rows as -1 with ZERO dialogs and the
+        # orphan absent from the sidecar -- the corrupted training data the
+        # GUI gate's own error text describes, on the paths a driver script
+        # actually calls. A raise, not a dialog, for the reason two lines
+        # above.
+        refuse_export_orphans(self.intervals, table_of(self),
+                              "intervals export")
         rows = [
-            {"start": iv.start, "end": iv.end, "label": iv.label, "notes": iv.notes}
+            # Pack M1: `track` is present ALWAYS, not only when there is
+            # more than one lane. export_intervals has no byte-identity
+            # floor -- R2 grants one only to the per-sample column and its
+            # sidecar -- and a CONDITIONAL schema is a worse contract than
+            # a changed one, because it forces every reader to branch on
+            # the file's own shape.
+            {"start": iv.start, "end": iv.end, "track": iv.track,
+             "label": iv.label, "notes": iv.notes}
             for iv in self.intervals
         ]
         df_export = pd.DataFrame(rows)
@@ -150,8 +541,25 @@ class IOExportMixin:
         if not self.intervals:
             raise ValueError("No intervals to export.")
 
+        tracks = table_of(self)
+        # Pack M1: the programmatic path gets the gate the GUI has always
+        # had, as a raise rather than a dialog.
+        refuse_export_orphans(self.intervals, tracks, "per-sample export")
+
+        # ONE COLUMN PER TRACK (R2). With a single default track the frame
+        # is exactly {"label_id": <series>} and the FILE IS BYTE-FOR-BYTE
+        # TODAY'S: measured on a 115,339-row real ARTEMIS frame with 85
+        # real hand-drawn intervals, parquet
+        # c14add1527f58ef0d13c5b7e91dd8782773c9502e71c5e062934c5b9207cf35a,
+        # CSV 0ce94caed27b208d06218e22c223c7fd869a1c4898737b32baa48b862ee916f6,
+        # sidecar fdb43a898e0468434f4af4b97d5a0a86f2d1cb8c30f1fa2dd24f29a0d7d3b3c8
+        # -- with a same-frame-twice determinism control in the same run,
+        # so that identity is a meaningful pin and not an accident.
         df_export = pd.DataFrame(
-            {"label_id": self._compute_label_id_series()}, index=self.df.index)
+            {label_id_column(t.id): label_id_series_for_track(
+                self.intervals, self.df.index, t)
+             for t in tracks},
+            index=self.df.index)
         if fmt.lower() == "parquet":
             atomic_write_path(path, lambda p: df_export.to_parquet(p),
                               sync_dir=True)
@@ -159,7 +567,12 @@ class IOExportMixin:
             atomic_write_path(path, lambda p: df_export.to_csv(p),
                               sync_dir=True)
         # Pack 6 F14: both branches write ids, so the map is not optional.
-        write_label_map_sidecar(self.classes, path, "per-sample export")
+        # Pack M1: ONE SIDECAR PER TRACK. The default track keeps the name
+        # <stem>_label_map.json; every other track gets
+        # <stem>_label_map__<id>.json.
+        for t in tracks:
+            write_label_map_sidecar(t.classes, path, "per-sample export",
+                                    label_map_stem_suffix(t.id))
         logger.info("Exported per-sample labels to %s", path)
 
     # ---- GUI-connected ops ----
@@ -177,10 +590,22 @@ class IOExportMixin:
                 return False
             target = Path(chosen)
 
+        tracks = table_of(self)
         data = {
-            "version": 1,
-            "classes": self.classes,
-            "class_colors": self.class_colors,
+            "version": SESSION_VERSION,
+            # Pack M1 v2: the TRACK TABLE is the only schema authority in
+            # the file. The old top-level "classes" / "class_colors" keys
+            # are GONE, deliberately, and the consequence was measured
+            # both ways round: a pre-M1 build handed a v2 session raises
+            # KeyError: 'classes' and loads nothing -- it fails CLOSED.
+            # Keeping a mirror would put two copies of one schema in one
+            # file, and the only thing it would buy is an old build
+            # loading the file and flattening every track into one, which
+            # is the outcome the version gate exists to prevent.
+            "tracks": [t.to_dict() for t in tracks],
+            # View state that must persist, so it lives at the top level
+            # and not on a row. M1 ships no control that changes it.
+            "active_track": active_id_of(self),
             "window": str(self.window),
             "step": str(self.step),
             "data_start": self.data_start.isoformat(),
@@ -237,6 +662,20 @@ class IOExportMixin:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
+        # Pack M1: THE VERSION GATE, and it is the FIRST statement after
+        # json.load for a measured reason. With the gate sitting below the
+        # layout-compatibility question, a refused file first asks the
+        # user to accept a layout RISK -- and if they answer No the file
+        # is refused for the WRONG REASON and they never learn the real
+        # one. Hoisted here, exactly one dialog appears and it is the
+        # refusal. Nothing live has been touched at this point, which is
+        # the other half of the contract.
+        found, ok = payload_version(data)
+        if not ok:
+            refuse_future_version(self, found, "session", path)
+            return
+        migrated_from_v1 = (found == 1)
+
         # Check if session has layout_spec (backward compatibility)
         saved_layout = data.get("layout_spec", None)
         
@@ -257,22 +696,68 @@ class IOExportMixin:
                     self.status_var.set("Load cancelled - layout mismatch")  # type: ignore[union-attr]
                     return  # User cancelled
 
-        self.classes = list(data["classes"])
-        self.class_colors = dict(data["class_colors"])
-        self.window = pd.Timedelta(data["window"])
-        self.step = pd.Timedelta(data["step"])
-        self.intervals = [Interval.from_dict(d) for d in data["intervals"]]
+        # Pack M1: BUILD every piece of new state in locals, VALIDATE the
+        # locals against each other, and only THEN publish. The old shape
+        # assigned self.intervals first and validated last, so a corrupt
+        # session left the labeler holding the bad set -- measured,
+        # "previous set intact: False", and on the recovery path it left
+        # raw dicts in self.intervals. There is no try/except and no saved
+        # copy here because nothing is written until every check has
+        # passed, which is strictly simpler than a rollback.
+        if migrated_from_v1:
+            # A v1 session -- or one with no version key at all -- loads
+            # in MEMORY as ONE default track whose vocabulary is the
+            # file's own flat "classes" list. THE FILE IS NOT REWRITTEN;
+            # the next explicit Save writes v2. Say the consequence out
+            # loud: the AUTOSAVE beside it goes to v2 on the first
+            # gesture, so for a while one folder holds a v1 session next
+            # to a v2 autosave. That is an argument for the gate on the
+            # recovery path, not against the asymmetry.
+            new_tracks = default_table(list(data["classes"]),
+                                       dict(data["class_colors"]))
+        else:
+            # v2 fold F2: the two table rules _build_track_table refuses
+            # for a caller's tracks= argument must also hold for a table
+            # that arrives OFF DISK. Measured on v1: two rows sharing
+            # one id loaded, then collapsed two lanes into one export
+            # column and one sidecar.
+            new_tracks = validate_track_table(
+                [Track.from_dict(t) for t in data["tracks"]], "Session")
+        new_active = data.get("active_track") or new_tracks[0].id
+        new_intervals = [Interval.from_dict(d) for d in data["intervals"]]
+        unknown = stray_tracks(new_intervals, new_tracks)
+        if unknown:
+            raise ValueError(
+                "Session has intervals on tracks that are not in its track "
+                "table: " + ", ".join(unknown))
+        # Validate against the table being INSTALLED, not the live one.
+        check_interval_invariants(new_intervals, new_tracks)
+        new_window = pd.Timedelta(data["window"])
+        new_step = pd.Timedelta(data["step"])
+
+        # Publish. The table is slice-assigned when one already exists so
+        # a reference taken before the load still points at the live list.
+        if getattr(self, "tracks", None) is None:
+            self.tracks = new_tracks
+        else:
+            self.tracks[:] = new_tracks
+        self._active_track_id = (new_active
+                                 if find_track(self.tracks, new_active)
+                                 else self.tracks[0].id)
+        self._migrated_from_v1 = migrated_from_v1
+        self.window = new_window
+        self.step = new_step
+        self.intervals = new_intervals
 
         # A loaded session invalidates the undo history and any selection
-        # made against the previous session's interval objects. In strict
-        # mode, validate the loaded set NOW so a corrupt session file is
-        # blamed on the load, not on the user's next gesture (fold V3-M3).
+        # made against the previous session's interval objects. The strict
+        # validation that used to sit at the END of this method is gone:
+        # it ran AFTER the assignment, which is the defect above.
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.selected_interval = None
         if hasattr(self, '_clear_selected_interval_highlights'):
             self._clear_selected_interval_highlights()
-        self._check_interval_invariants()
 
         self.modified = False
 
@@ -307,63 +792,31 @@ class IOExportMixin:
                         self.notebook.tab(i, text=saved_pane["title"])
 
         self._update_plot()
-        self.status_var.set(f"Loaded from {path}")  # type: ignore[union-attr]
+        # Pack M1: a migrated v1 session SAYS SO, once, where the user is
+        # already looking. It is the only signal that the file on disk is
+        # still v1 and that the lane being labeled was synthesized from
+        # the file's flat "classes" list.
+        if getattr(self, "_migrated_from_v1", False):
+            self.status_var.set(  # type: ignore[union-attr]
+                f"Loaded from {path} as a single track "
+                f"('{DEFAULT_TRACK_ID}')")
+        else:
+            self.status_var.set(f"Loaded from {path}")  # type: ignore[union-attr]
         
     def _compute_label_id_series(self) -> pd.Series:
+        """The ACTIVE track's per-sample label ids.
+
+        Kept under its old name and its old signature, because the GUI
+        export path and eight existing tests call it. With one default
+        track it is exactly what it always was. With more than one it is
+        the ACTIVE lane, which is the R6 reading: the alternative -- a
+        flat last-writer-wins pass over every lane -- was measured to
+        write 1,200 of 2,400 human-labeled rows as -1, because an imported
+        track's interval overwrote them with a class the active track does
+        not even contain.
         """
-        Build a vectorized per-sample label_id series aligned to self.df.index.
-    
-        Mapping:
-          classes -> ids  (0..N-1) using current self.classes order
-          Unlabeled samples -> -1
-    
-        Uses the smallest feasible integer dtype to keep CSVs compact.
-        """
-        import pandas as pd
-    
-        # Stable, deterministic mapping from current classes ordering
-        label_to_id = {label: i for i, label in enumerate(self.classes)}
-        unknown_id = -1
-    
-        # Smallest int dtype that fits the number of classes
-        n = len(label_to_id)
-        if n <= np.iinfo(np.int8).max:
-            dtype = np.int8
-        elif n <= np.iinfo(np.int16).max:
-            dtype = np.int16
-        else:
-            dtype = np.int32
-    
-        idx = self.df.index
-        ids = np.full(len(idx), fill_value=unknown_id, dtype=dtype)
-
-        # Index.searchsorted does NOT validate sortedness. On a frame that
-        # is not monotonic -- two spacecraft concatenated without a
-        # re-sort, say -- it returned a bogus slice and MISLABELLED:
-        # measured, 95 rows set where 185 are contained, and not even a
-        # subset of the right ones (pack5_g1 6b / S9). The slice stays for
-        # the monotonic case, where [searchsorted(start), searchsorted(end))
-        # IS exactly {ts : start <= ts < end}; otherwise the half-open
-        # boolean mask, which agrees with Interval.contains by
-        # construction. Fixing it (rather than raising) is the ruling:
-        # export has no current raise behaviour to preserve, it has a
-        # silently wrong one to correct (Pack 5 R7).
-        monotonic = bool(getattr(idx, "is_monotonic_increasing", False))
-
-        # NOTE: intervals are non-overlapping by construction
-        for iv in self.intervals:
-            code = label_to_id.get(iv.label, unknown_id)
-            if monotonic:
-                s = idx.searchsorted(iv.start, side="left")
-                e = idx.searchsorted(iv.end, side="left")
-                if s < e:
-                    ids[s:e] = code
-            else:
-                mask = (idx >= iv.start) & (idx < iv.end)
-                if mask.any():
-                    ids[mask] = code
-
-        return pd.Series(ids, index=idx, name="label_id")
+        return label_id_series_for_track(
+            self.intervals, self.df.index, active_track_of(self))
 
     def _export_labels_dialog(self) -> None:
         """
@@ -383,13 +836,20 @@ class IOExportMixin:
 
         # Orphan labels would render as -1 in the preview and the CSV;
         # refuse at the door so the preview never lies (grill Q4).
-        orphans = sorted({iv.label for iv in self.intervals} - set(self.classes))
-        if orphans:
+        # Pack M1: PER TRACK, and the message names the track. The flat
+        # version did not merely under-report: measured, it BLOCKED EVERY
+        # EXPORT the moment two tracks had different vocabularies, because
+        # one lane's perfectly legal class is not in the other lane's
+        # class set.
+        _tracks = table_of(self)
+        _by_track, _orphan_tracks = orphan_labels_by_track(self.intervals,
+                                                           _tracks)
+        if _by_track or _orphan_tracks:
             messagebox.showerror(
                 "Export Blocked",
-                "These interval labels are not in the current label schema "
-                "and would be exported as -1 (unlabeled):\n\n"
-                f"  {', '.join(orphans)}\n\n"
+                "These interval labels are not in their own track's label "
+                "schema and would be exported as -1 (unlabeled):\n\n"
+                f"{format_orphans(_by_track, _orphan_tracks)}\n\n"
                 "Fix them via Manage Labels..., then export again.")
             return
     
@@ -554,20 +1014,34 @@ class IOExportMixin:
         # would silently collapse to -1 (= unlabeled) in the CSV and be
         # absent from the sidecar -- corrupted training data with no
         # warning (grill Q4; reproduced in the Pack 2 evidence map).
-        orphans = sorted({iv.label for iv in self.intervals} - set(self.classes))
-        if orphans:
+        # Pack M1: PER TRACK, and the message names the track.
+        tracks = table_of(self)
+        by_track, orphan_tracks = orphan_labels_by_track(self.intervals,
+                                                         tracks)
+        if by_track or orphan_tracks:
             from tkinter import messagebox
             messagebox.showerror(
                 "Export Blocked",
-                "These interval labels are not in the current label schema "
-                "and would be exported as -1 (unlabeled):\n\n"
-                f"  {', '.join(orphans)}\n\n"
+                "These interval labels are not in their own track's label "
+                "schema and would be exported as -1 (unlabeled):\n\n"
+                f"{format_orphans(by_track, orphan_tracks)}\n\n"
                 "Fix them via Manage Labels..., then export again.")
             return False
 
-        # Build label_id column
-        label_id = self._compute_label_id_series()
-    
+        # Build one label_id column per track. Pack M1: with a single
+        # default track this is the same single column under the same
+        # name, so the file is byte-identical to today's.
+        columns = {label_id_column(t.id): label_id_series_for_track(
+            self.intervals, self.df.index, t) for t in tracks}
+
+        # The ACTIVE track decides what "selected" means. With K lanes the
+        # test "is this row labeled" has K answers, and the union answer
+        # produces rows that are -1 in most columns -- the same "is this
+        # unlabeled, or is it outside this lane" ambiguity Pack 5 R7 spent
+        # a clean break to remove.
+        active = active_track_of(self)
+        label_id = columns[label_id_column(active.id)]
+
         if scope == "selected":
             mask = label_id.values != -1
             if not mask.any():
@@ -575,22 +1049,39 @@ class IOExportMixin:
                 messagebox.showwarning("No Labeled Samples", "There are no labeled samples in the current data.")
                 return False
             idx = self.df.index[mask]
-            label_id = label_id.loc[idx]
+            columns = {k: v.loc[idx] for k, v in columns.items()}
+            label_id = columns[label_id_column(active.id)]
             df_source = self.df.loc[idx]
         else:
             # full dataset (unlabeled = -1)
             df_source = self.df
-    
+
         # Assemble output frame
         if content == "index_labels_csv":
-            out = pd.DataFrame({"label_id": label_id}, index=label_id.index)
+            out = pd.DataFrame(columns, index=label_id.index)
             out.index.name = "time"
         else:  # "full_df_labels_csv"
+            # Pack M1: REFUSE rather than overwrite. A source column
+            # already named label_id used to be silently overwritten --
+            # measured, source first ten [0,1,2,0,1,2,0,1,2,0] written as
+            # [-1,-1,...] with zero dialogs. The column ingest makes that
+            # likely rather than exotic.
+            clash = label_column_collision(df_source, tracks)
+            if clash:
+                from tkinter import messagebox
+                messagebox.showerror(
+                    "Export Blocked",
+                    "The data already has a column named "
+                    f"{', '.join(clash)}, and this export would overwrite "
+                    "it.\n\nRename the source column, or choose "
+                    "'Index + labels' instead, then export again.")
+                return False
             out = df_source.copy()
-            out["label_id"] = label_id.astype(label_id.dtype)
+            for _name, _series in columns.items():
+                out[_name] = _series.astype(_series.dtype)
             if out.index.name is None:
                 out.index.name = "time"
-    
+
         # Write CSV atomically (complete file or no change, never a
         # valid-looking truncated training set)
         atomic_write_path(csv_path, lambda p: out.to_csv(p), sync_dir=True)
@@ -601,7 +1092,11 @@ class IOExportMixin:
         # it. The RuntimeError text is
         # unchanged -- "The labels CSV was written to ..." -- because it
         # is what a user reads when a save half-fails.)
-        write_label_map_sidecar(self.classes, csv_path, "labels CSV")
+        # Pack M1: one sidecar per track; the default track's keeps its
+        # name and its bytes.
+        for t in tracks:
+            write_label_map_sidecar(t.classes, csv_path, "labels CSV",
+                                    label_map_stem_suffix(t.id))
         return True
 
     def _generate_export_preview(self, scope: str, content: str, limit: int = 10):
@@ -645,8 +1140,25 @@ class IOExportMixin:
         else:
             raise ValueError(f"Unknown scope: {scope}")
         
-        # Generate label_id series for preview data
-        label_id = self._compute_label_id_series_for_subset(preview_input)
+        # Generate label_id series for preview data. Pack M1: a SLICE of
+        # the real writer's output, not a second implementation.
+        # _get_first_labeled_rows concatenates rows interval by interval,
+        # so once cross-track overlap is legal its index can carry
+        # DUPLICATES -- and a duplicated index makes searchsorted slices
+        # ambiguous. Drop them first; this is a real edge the preview has
+        # never had to face.
+        _pidx = preview_input.index
+        if not _pidx.is_unique:
+            # .loc[a de-duplicated index] on a frame whose index HAS
+            # duplicates returns EVERY matching row again -- measured, 19
+            # rows for 14 unique stamps in pandas 2.3.3 and 3.0.2 alike --
+            # so the FRAME is masked, not re-selected. Without the mask the
+            # "full DataFrame + labels" preview still showed the
+            # duplicated rows while "index + labels" showed 14.
+            preview_input = preview_input[~_pidx.duplicated()]
+            _pidx = preview_input.index
+        label_id = label_id_series_for_track(
+            self.intervals, _pidx, active_track_of(self))
         
         # Apply content formatting
         if content == "index_labels_csv":
@@ -712,47 +1224,24 @@ class IOExportMixin:
         
         return preview_df, total_labeled_count
     
-    def _compute_label_id_series_for_subset(self, subset_df):
-        """
-        Compute label_id series for a subset of data efficiently.
-        
-        Parameters
-        ----------
-        subset_df : pd.DataFrame
-            Subset of self.df to compute labels for
-            
-        Returns
-        -------
-        pd.Series
-            Label ID series aligned with subset_df.index
-        """
-        import pandas as pd
-        import numpy as np
-        
-        # Stable mapping from current classes
-        label_to_id = {label: i for i, label in enumerate(self.classes)}
-        unknown_id = -1
-        
-        # Determine dtype
-        n = len(label_to_id)
-        if n <= np.iinfo(np.int8).max:
-            dtype = np.int8
-        elif n <= np.iinfo(np.int16).max:
-            dtype = np.int16
-        else:
-            dtype = np.int32
-        
-        # Initialize with unknown
-        ids = np.full(len(subset_df), fill_value=unknown_id, dtype=dtype)
-        
-        # Apply interval labels
-        for i, ts in enumerate(subset_df.index):
-            for iv in self.intervals:
-                if iv.contains(ts):
-                    ids[i] = label_to_id.get(iv.label, unknown_id)
-                    break
-        
-        return pd.Series(ids, index=subset_df.index, name="label_id")
+    # Pack M1: _compute_label_id_series_for_subset IS GONE.
+    #
+    # It was a SECOND per-sample implementation with a DIFFERENT
+    # arbitration rule -- FIRST-match-wins here against the real writer's
+    # LAST-writer-wins -- and on a deliberately overlapping pair the two
+    # disagreed on 20 of 60 previewed rows (0 of 60 on a non-overlapping
+    # control). Tracks make cross-track overlap legal, so that divergence
+    # became reachable the day this pack shipped: the dialog's live
+    # preview and the file the user then got would have disagreed about
+    # the same rows, with nothing saying so.
+    #
+    # It was also the O(rows x intervals) pure-Python loop Pack 5 R7
+    # deleted from the writer, kept alive here for three more packs.
+    #
+    # _generate_export_preview now calls the module-level
+    # label_id_series_for_track() with the preview's own index: one
+    # implementation, one arbitration rule, one dtype rule, one orphan
+    # answer.
     
     def _format_dataframe_preview(self, preview_df, total_estimate: int, info: dict) -> str:
         """
@@ -850,15 +1339,23 @@ class IOExportMixin:
             est_size_mb = total_estimate * len(display_df.columns) * 20 / (1024 * 1024)  # Rough estimate
             lines.append(f"  Estimated file size: ~{est_size_mb:.1f} MB")
         
-        # Label mapping preview
-        if hasattr(self, 'classes') and self.classes:
+        # Label mapping preview. Pack M1: the ACTIVE track's map, and it
+        # SAYS WHOSE MAP IT IS, because with K lanes an unnamed "Label ID
+        # Mapping" is the wrong map for every non-default column.
+        _tracks = table_of(self)
+        _active = active_track_of(self)
+        if _active.classes:
             lines.append("")
-            lines.append("Label ID Mapping:")
-            for i, label in enumerate(self.classes[:8]):  # Show first 8 labels
+            lines.append(f"Label ID Mapping ({_active.name}):")
+            for i, label in enumerate(_active.classes[:8]):  # Show first 8
                 lines.append(f"  {i}: {label}")
-            if len(self.classes) > 8:
-                lines.append(f"  ... and {len(self.classes) - 8} more")
+            if len(_active.classes) > 8:
+                lines.append(f"  ... and {len(_active.classes) - 8} more")
             lines.append(f"  -1: UNLABELED")
+            if len(_tracks) > 1:
+                lines.append(
+                    f"  (+{len(_tracks) - 1} more track(s), each exporting "
+                    f"its own label_id__<id> column and sidecar)")
         
         return "\n".join(lines)
 
@@ -878,7 +1375,12 @@ class IOExportMixin:
         if not path:
             return
         rows = [
-            {"start": iv.start, "end": iv.end, "label": iv.label, "notes": iv.notes}
+            # Pack M1: the SECOND, independent row builder for the same
+            # contract. It gains the same `track` column export_intervals
+            # does -- two copies of one contract must not be allowed to
+            # drift, which is exactly what happened to the orphan gate.
+            {"start": iv.start, "end": iv.end, "track": iv.track,
+             "label": iv.label, "notes": iv.notes}
             for iv in self.intervals
         ]
         df_export = pd.DataFrame(rows)
@@ -907,22 +1409,58 @@ class IOExportMixin:
         # Use instance autosave file path
         autosave_path = self.autosave_file
 
-        # Calculate statistics
-        label_stats = {}
-        total_duration = 0
-        for interval in self.intervals:
-            label = interval.label
-            duration_hours = (interval.end - interval.start).total_seconds() / 3600
+        tracks = table_of(self)
 
-            if label not in label_stats:
-                label_stats[label] = {'count': 0, 'duration_hours': 0}
-            label_stats[label]['count'] += 1
-            label_stats[label]['duration_hours'] += duration_hours
-            total_duration += duration_hours
+        # Pack M1: SKIP THE WRITE when neither the interval set nor the
+        # track table has changed since the last successful one. Autosave
+        # fires per GESTURE, and one ingested rule track takes a single
+        # write from 14.8 ms / 14,693 B to 64.7 ms / 392,453 B -- measured
+        # on the user's own 2016 rule-label column, 2,349 intervals. The
+        # signature is a tuple of field values and costs about a
+        # millisecond at that size. The file's continued EXISTENCE is part
+        # of the condition, so deleting the autosave and calling this
+        # again still rewrites it, and the signature is only recorded
+        # after a write that actually succeeded.
+        # v2 fold F3: active_id_of is in the SIGNATURE because it is in
+        # the PAYLOAD (DR4). M1 ships no control that changes it, so
+        # this costs nothing today; the moment M2 ships a lane switch, a
+        # signature without it makes the skip swallow that change and
+        # the autosave re-opens on the wrong lane. Measured on v1 of
+        # this pack: the file still said 'a' while the labeler said 'b'.
+        signature = (
+            tuple((iv.start, iv.end, iv.label, iv.notes, iv.track,
+                   repr(iv.meta) if iv.meta else "")
+                  for iv in self.intervals),
+            tuple((t.id, t.name, tuple(t.classes),
+                   tuple(sorted(t.class_colors.items())), t.kind,
+                   t.locked, t.visible, t.order) for t in tracks),
+            active_id_of(self),
+        )
+        if (signature == getattr(self, '_autosave_signature', None)
+                and autosave_path.exists()):
+            return
 
-        # Calculate coverage percentage
+        # Calculate statistics, PER TRACK (Pack M1). The flat shape summed
+        # two lanes that share a class name into one entry -- measured,
+        # five keys for two tracks -- so both the count and the hours were
+        # silently wrong.
+        label_stats = label_stats_by_track(self.intervals, tracks)
+
+        # Calculate coverage percentage as the UNION, not the sum. Summing
+        # durations across lanes reported 100.8 % of the record on one
+        # hand track plus one ingested rule track, and the recovery dialog
+        # renders that number verbatim -- a user offered a recovery that
+        # claims to have labelled more than all of time. With ONE track
+        # the union IS the sum, to the nanosecond.
         data_duration = (self.data_end - self.data_start).total_seconds() / 3600
-        coverage_percent = (total_duration / data_duration * 100) if data_duration > 0 else 0
+        union_hours = union_covered(self.intervals).total_seconds() / 3600
+        coverage_percent = (union_hours / data_duration * 100) if data_duration > 0 else 0
+        coverage_by_track = {}
+        for _t in tracks:
+            _hrs = union_covered(
+                intervals_on(self.intervals, _t.id)).total_seconds() / 3600
+            coverage_by_track[_t.id] = round(
+                (_hrs / data_duration * 100) if data_duration > 0 else 0, 1)
 
         # Build autosave data structure
         autosave_data = {
@@ -935,6 +1473,7 @@ class IOExportMixin:
                 'autosave_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'total_intervals': len(self.intervals),
                 'coverage_percent': round(coverage_percent, 1),
+                'coverage_percent_by_track': coverage_by_track,
                 # tz-NORMALIZED, matching the fingerprint and the load-time
                 # comparison, so a naive/UTC-localized pair of the same
                 # dataset can never self-flag as a mismatch (fold tz).
@@ -943,11 +1482,16 @@ class IOExportMixin:
                     'end': _norm_iso(self.data_end)
                 }
             },
-            # Label schema travels with the intervals so recovery can
-            # restore it -- without this, recovered labels outside the
-            # session's default schema silently export as -1 (grill Q4).
-            'classes': list(self.classes),
-            'class_colors': dict(self.class_colors),
+            # Pack M1 v2. The TRACK TABLE travels with the intervals so
+            # recovery can restore the schema -- without a schema,
+            # recovered labels outside the session's default vocabulary
+            # silently export as -1 (grill Q4). The top-level 'classes' /
+            # 'class_colors' mirror is GONE, and the version key is NEW:
+            # this payload never had one, which is exactly why a pre-M1
+            # build reading it would fail OPEN rather than closed.
+            'version': SESSION_VERSION,
+            'tracks': [t.to_dict() for t in tracks],
+            'active_track': active_id_of(self),
             'intervals': [iv.to_dict() for iv in self.intervals],  # Convert Interval objects to dicts
             'label_stats': label_stats
         }
@@ -983,6 +1527,11 @@ class IOExportMixin:
                     )
                 except Exception:
                     pass  # headless: the log line above is the record
+        else:
+            # Pack M1: only a write that SUCCEEDED may suppress the next
+            # one. A failed write leaves the signature alone, so the very
+            # next gesture retries exactly as it did before this pack.
+            self._autosave_signature = signature
 
     def _check_autosave(self):
         """
@@ -1013,10 +1562,32 @@ class IOExportMixin:
             try:
                 with open(candidate, 'r', encoding='utf-8') as f:
                     autosave_data = json.load(f)
+                # Pack M1: THE VERSION GATE, before the identity block
+                # below. An AUTOSAVE HAS NEVER CARRIED A VERSION KEY --
+                # all 33 of the live ones on disk are exactly that shape,
+                # one shape with no variants -- so absent reads as 1.
+                # This is the half of the gate that matters most:
+                # measured, a pre-M1 build handed a v2 autosave recovers
+                # it SILENTLY, flattens two tracks into one overlapping
+                # list, keeps the live schema, and then exports 240 of
+                # 240 rows as -1. The session path fails closed; the
+                # autosave path fails OPEN, and only a version comparison
+                # closes it.
+                found, ok = payload_version(autosave_data)
+                if not ok:
+                    refuse_future_version(self, found, "autosave",
+                                          str(candidate))
+                    return None
+                autosave_data['_migrated_from_v1'] = (found == 1)
                 # Convert interval dicts back to Interval objects
                 autosave_data['intervals'] = [
                     Interval.from_dict(d) for d in autosave_data.get('intervals', [])
                 ]
+            except SessionVersionError:
+                # A refusal is not a corrupt file. It must not be logged
+                # as "unreadable", and on the head-less path it must not
+                # be swallowed by the handler below.
+                raise
             except Exception as e:
                 # A corrupt candidate is worth telling the user about --
                 # silently pretending no autosave exists converted
@@ -1117,29 +1688,68 @@ class IOExportMixin:
         modified (recovered work is unsaved work). GUI refresh and pane
         sync are the caller's job.
         """
-        self.intervals = list(autosave_data.get('intervals', []))
+        # Pack M1: BUILD, VALIDATE, PUBLISH -- the same discipline
+        # _load_session now uses, and the reason it matters more here.
+        # This method used to assign self.intervals FIRST and validate
+        # LAST with no rollback, so a bad payload left the labeler holding
+        # it: measured, raw dicts installed with no exception in normal
+        # mode, and in strict mode an AttributeError raised from the
+        # validation call AFTER self.intervals had already been replaced.
+        raw = autosave_data.get('intervals', []) or []
+        new_intervals = [d if isinstance(d, Interval) else Interval.from_dict(d)
+                         for d in raw]
+
+        # The track table, or the v1 fallback. The fallback is four lines
+        # and it is KEPT on purpose: this is a NAMED ENTRY POINT that the
+        # suite calls directly with hand-built payloads, and a
+        # future importer will hand it a payload it built itself. A
+        # payload with neither 'tracks' nor 'classes' keeps the live
+        # schema, exactly as it did before.
+        saved_tracks = autosave_data.get('tracks')
         saved_classes = autosave_data.get('classes')
-        if saved_classes:
-            self.classes = list(saved_classes)
-            # Only replace colors when the payload actually carries them:
-            # a schema without colors must not wipe the live map into
-            # all-grey fallbacks (fold V1/V3).
-            if 'class_colors' in autosave_data:
-                self.class_colors = dict(autosave_data['class_colors'] or {})
-            # getattr guards: this method is a named entry point and must
-            # not assume the GUI widgets exist yet (fold V2).
-            combo = getattr(self, 'class_combo', None)
-            var = getattr(self, 'current_class_var', None)
-            if combo is not None and var is not None:
-                combo["values"] = self.classes
-                if var.get() not in self.classes and self.classes:
-                    var.set(self.classes[0])
+        if saved_tracks:
+            # v2 fold F2, the same door on the path a user meets without
+            # choosing to.
+            new_tracks = validate_track_table(
+                [Track.from_dict(t) for t in saved_tracks], "Autosave")
+        elif saved_classes:
+            new_tracks = default_table(
+                list(saved_classes),
+                dict(autosave_data.get('class_colors') or {})
+                if 'class_colors' in autosave_data else None)
+        else:
+            new_tracks = [Track.from_dict(t.to_dict())
+                          for t in table_of(self)]
+        new_active = autosave_data.get('active_track') or new_tracks[0].id
+
+        unknown = stray_tracks(new_intervals, new_tracks)
+        if unknown:
+            raise ValueError(
+                "Autosave has intervals on tracks that are not in its track "
+                "table: " + ", ".join(unknown))
+        check_interval_invariants(new_intervals, new_tracks)
+
+        if getattr(self, "tracks", None) is None:
+            self.tracks = new_tracks
+        else:
+            self.tracks[:] = new_tracks
+        self._active_track_id = (new_active
+                                 if find_track(self.tracks, new_active)
+                                 else self.tracks[0].id)
+        self.intervals = new_intervals
+        # getattr guards: this method is a named entry point and must
+        # not assume the GUI widgets exist yet (fold V2).
+        combo = getattr(self, 'class_combo', None)
+        var = getattr(self, 'current_class_var', None)
+        if combo is not None and var is not None:
+            combo["values"] = self.classes
+            if var.get() not in self.classes and self.classes:
+                var.set(self.classes[0])
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.selected_interval = None
         if hasattr(self, '_clear_selected_interval_highlights'):
             self._clear_selected_interval_highlights()
-        self._check_interval_invariants()
         self.modified = True
 
     def _show_recovery_dialog(self, autosave_data):
@@ -1224,9 +1834,8 @@ class IOExportMixin:
         metadata = autosave_data.get('metadata', {}) or {}
         if not isinstance(metadata, dict):
             metadata = {}
-        label_stats = autosave_data.get('label_stats', {}) or {}
-        if not isinstance(label_stats, dict):
-            label_stats = {}
+        label_stats = flatten_label_stats(
+            autosave_data.get('label_stats', {}) or {})
 
 
         # Autosave file actually loaded (main or .bak); wraplength so a

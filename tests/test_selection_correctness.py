@@ -133,6 +133,12 @@ class MockSelectionHost:
 
         self.classes = ["UNKNOWN", "PS", "LOBE"]
         self.class_colors = {c: "#cccccc" for c in self.classes}
+        # Pack M1: the mock host mirrors the real class -- a track table
+        # plus the active id, beside the classes/class_colors the rest of
+        # this harness reads directly.
+        from chronotagger.core.tracks import default_table
+        self.tracks = default_table(self.classes, self.class_colors)
+        self._active_track_id = self.tracks[0].id
         self.current_class_var = _Var("PS")
         self.snap_var = _Var(bool(snap))
         self.status_var = _Var("")

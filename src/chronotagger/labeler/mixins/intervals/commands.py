@@ -17,15 +17,15 @@ for the whole suite.
 
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 
 from chronotagger.core.commands import (
     Command,
     GestureCommand,
-    IntervalInvariantError,
+    check_interval_invariants,
     copy_intervals,
 )
+from chronotagger.core.tracks import copy_tracks, snapshot_tracks
 
 
 class IntervalCommandsMixin:
@@ -54,11 +54,21 @@ class IntervalCommandsMixin:
 
         self._gesture_depth = 1
         before = None
+        # Pack M1: hoisted beside `before` on purpose. The rollback
+        # branch below reads it, and a prototype that assigned it only
+        # after the interval copy raised UnboundLocalError on every host
+        # that has no track table.
+        tracks_before = None
         try:
             before = copy_intervals(self.intervals)
+            tracks_before = snapshot_tracks(self)
             yield
             after = copy_intervals(self.intervals)
-            if after != before:
+            tracks_after = snapshot_tracks(self)
+            # Pack M1: the no-op test compares the PAIR. Creating a
+            # track adds no interval, so under an intervals-only test it
+            # would push NO undo entry and be silently non-undoable.
+            if (after, tracks_after) != (before, tracks_before):
                 # Validate BEFORE committing anything: a violation must
                 # be rolled back, never recorded (fold V2-M3/V3-M1).
                 self._check_interval_invariants()
@@ -67,15 +77,18 @@ class IntervalCommandsMixin:
             # not leave half-applied mutations: roll back, then re-raise.
             if before is not None:
                 self.intervals[:] = copy_intervals(before)
+            if tracks_before is not None:
+                self.tracks[:] = copy_tracks(tracks_before)
             raise
         finally:
             self._gesture_depth = 0
             # Keep the selection honest: a merge inside the gesture may
             # have consumed the selected object (fold V3-M2).
             self._repoint_selected_interval()
-        if after == before:
+        if (after, tracks_after) == (before, tracks_before):
             return
-        self.undo_stack.append(GestureCommand(self, name, before, after))
+        self.undo_stack.append(GestureCommand(self, name, before, after,
+                                              tracks_before, tracks_after))
         if len(self.undo_stack) > self.max_undo:
             del self.undo_stack[0 : len(self.undo_stack) - self.max_undo]
         self.redo_stack.clear()
@@ -91,20 +104,29 @@ class IntervalCommandsMixin:
 
     # ---- invariants ----
     def _check_interval_invariants(self) -> None:
+        """Strict-mode invariants on the LIVE interval list and table.
+
+        Calls the module-level function rather than the sibling method
+        below ON PURPOSE: the GUI-free hosts in tests/ bind a NAMED LIST
+        of mixin methods, and a method that calls a sibling would force
+        every one of those lists to grow an entry. The same reason
+        write_label_map_sidecar is a free function.
         """
-        Strict-mode invariant: no two intervals may overlap. Half-open
-        semantics -- exact adjacency is legal and must not trip this.
+        check_interval_invariants(self.intervals,
+                                  getattr(self, "tracks", None))
+
+    def _check_interval_invariants_on(self, intervals, table=None) -> None:
+        """Strict-mode invariants on the set being INSTALLED.
+
+        Pack M1 moved the body out to
+        core/commands.check_interval_invariants, so that a load path can
+        validate an interval set it has not published yet and so that a
+        GUI-free host binding a named list of mixin methods needs no new
+        entry for it. The two clauses -- MEMBERSHIP and per-track
+        non-overlap -- and the reason the `table` argument must be the
+        table being installed are documented there.
         """
-        if os.environ.get("CHRONOTAGGER_STRICT") != "1":
-            return
-        ivs = sorted(self.intervals, key=lambda iv: (iv.start, iv.end))
-        for a, b in zip(ivs, ivs[1:]):
-            if a.end > b.start:
-                raise IntervalInvariantError(
-                    f"overlapping intervals: "
-                    f"[{a.start}, {a.end}) {a.label!r} / "
-                    f"[{b.start}, {b.end}) {b.label!r}"
-                )
+        check_interval_invariants(intervals, table)
 
     # ---- selection upkeep ----
     def _repoint_selected_interval(self) -> None:

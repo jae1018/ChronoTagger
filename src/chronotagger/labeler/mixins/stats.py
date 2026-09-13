@@ -38,8 +38,22 @@ class StatsMixin:
         # shown, NOT from self.classes, so an interval whose class was
         # deleted from the schema still gets the "#cccccc" default it
         # got before.
+        # Pack M1: the tag colours come from the ACTIVE track's map, and
+        # the loop iterates the labels the ACTIVE track's rows carry. M0
+        # pinned the row tag to the bare label (tags=(iv.label,)), so a
+        # per-track tag name would break that pin -- which means that with
+        # two tracks a row from a non-active lane is painted in the active
+        # lane's colour when the label name is shared, and gets no
+        # configured tag at all when it is not. That is a stated
+        # consequence, not an accident: M2's Track column and
+        # active-track filter are what make this list honest. With one
+        # track this is byte-identical to M0.
+        from chronotagger.core.tracks import active_id_of
+        active_track = active_id_of(self)
         shown_labels = {}
         for _, iv in rows:
+            if iv.track != active_track:
+                continue
             shown_labels[iv.label] = None
         for name in shown_labels:
             tree.tag_configure(name, background=self.class_colors.get(name, "#cccccc"))
@@ -132,7 +146,17 @@ class StatsMixin:
             return
 
         total = self.data_end - self.data_start
-        labeled = sum((iv.end - iv.start for iv in self.intervals), total - total)  # zero Timedelta
+        # Pack M1: UNION coverage, not the sum of durations. Measured on a
+        # four-interval two-track set through this very box: the sum reads
+        # "Labeled: 0 days 01:10:00 / 0 days 00:59:59" and
+        # "Coverage: 116.7%" -- more than all of time. With ONE track the
+        # union IS the sum, to the nanosecond, because a track's intervals
+        # cannot overlap. This is the third copy of that arithmetic; the
+        # other two are in io_export._save_autosave and now call the same
+        # helper, so the number can no longer differ between the sidebar
+        # and the recovery dialog.
+        from chronotagger.core.tracks import union_covered
+        labeled = union_covered(self.intervals)
         pct = (labeled / total * 100) if total.total_seconds() > 0 else 0.0
 
         counts: Dict[str, int] = {}

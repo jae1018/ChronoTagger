@@ -60,6 +60,12 @@ class MockUndoMixin:
         self.modified = False
         self.selected_interval = None
         self.classes = ["UNKNOWN", "A", "B"]
+        # Pack M1: the mock host mirrors the real class -- it holds a
+        # track table and an active id, so the gesture snapshot and the
+        # MEMBERSHIP clause see here the shape they see in the app.
+        from chronotagger.core.tracks import default_table
+        self.tracks = default_table(self.classes)
+        self._active_track_id = self.tracks[0].id
         self.t0 = df.index[0]
         self.t1 = df.index[-1]
         self.status_var = _Var()

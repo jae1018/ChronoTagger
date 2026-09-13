@@ -21,6 +21,15 @@ from matplotlib.widgets import RectangleSelector
 
 # ABSOLUTE imports from core (moved here)
 from chronotagger.core.models import Interval
+from chronotagger.core.tracks import (
+    Track,
+    active_id_of,
+    active_track_of,
+    colors_for,
+    default_table,
+    find_track,
+    track_ids,
+)
 from chronotagger.core.commands import (
     Command,
     AddIntervalCommand,
@@ -79,6 +88,12 @@ class TimeIntervalLabeler(
         autosave_folder: str = ".",
         source_name: Optional[str] = None,
         *,
+        # Pack M1: the multi-track spelling. KEYWORD-ONLY on purpose --
+        # nothing passes it positionally, so inserting it here cannot
+        # shift any of the ten positional parameters above it. Mutually
+        # exclusive with classes= / class_colors=; see the track-table
+        # build further down.
+        tracks: Optional[List[Any]] = None,
         layout_spec: Optional[Dict[str, Any]] = None,
         panes: Optional[List[Dict[str, Any]]] = None,
         parent: Optional[tk.Misc] = None,
@@ -201,17 +216,39 @@ class TimeIntervalLabeler(
         # known-limitations note for what that buys and costs.
         self.decimate: bool = bool(decimate)
 
-        # Label classes & colors
-        if classes is None:
-            classes = ["UNKNOWN", "label_1", "label_2"]
-        self.classes: List[str] = list(classes)
-
-        if class_colors is None:
-            class_colors = {
-                cls: self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)]
-                for i, cls in enumerate(self.classes)
-            }
-        self.class_colors: Dict[str, str] = dict(class_colors)
+        # Label TRACKS (Pack M1). classes= / class_colors= stay as the
+        # SINGLE-TRACK spelling and build a one-row table; tracks= is the
+        # multi-track spelling. Passing both is a ValueError, in exactly
+        # the shape this constructor already uses for panes vs plot_fn
+        # sixty lines above. This is the one place Pack M1 does NOT take
+        # a clean break, and the reason is that a driver is a file the
+        # user owns: 47 files on disk pass classes=CLASSES and 151
+        # construct a labeler outside src/ and tests/. classes= is not a
+        # compatibility layer, it is the one-lane name for the same
+        # thing.
+        if tracks is not None and (classes is not None
+                                   or class_colors is not None):
+            raise ValueError(
+                "Cannot specify both 'tracks' and 'classes'/'class_colors'. "
+                "Use 'tracks' for the multi-track table, or 'classes' "
+                "(optionally with 'class_colors') for a single default track."
+            )
+        if tracks is not None:
+            self.tracks: List[Track] = self._build_track_table(tracks)
+        else:
+            if classes is None:
+                classes = ["UNKNOWN", "label_1", "label_2"]
+            self.tracks = default_table(
+                list(classes),
+                dict(class_colors) if class_colors is not None else None,
+                palette=self.DEFAULT_COLORS,
+            )
+        # The ACTIVE track. View state -- but it persists, so it lives at
+        # the session's top level as "active_track" rather than on a row.
+        # Pack M1 ships no control that changes it, so it is the first
+        # row for every session the user opens; self.classes and
+        # self.class_colors are properties over it (see below).
+        self._active_track_id: str = self.tracks[0].id
 
         # Time bounds & window
         self.data_start: pd.Timestamp = df.index[0]
@@ -421,6 +458,229 @@ class TimeIntervalLabeler(
     def layout_spec(self) -> Optional[Dict[str, Any]]:
         """Delegate to active pane for backward compatibility."""
         return self.active_pane.layout_spec
+
+    # -------- Pack M1: the track table --------
+
+    def _build_track_table(self, tracks) -> List[Track]:
+        """Normalize a caller's tracks= argument into a Track list.
+
+        Accepts Track objects and plain dicts in any mixture, because a
+        driver's TRACKS block is a dict literal a human edits.
+
+        Three refusals, each of them something that would otherwise fail
+        much later and much more quietly:
+          * an empty table -- a session with no lane cannot label;
+          * a duplicate id -- an id names an export column and a sidecar
+            file, so two rows sharing one id would write one column and
+            lose the other in silence. This is also the whole
+            enforcement of "the id 'default' is reserved": the default
+            table already holds that row, so a second one collides;
+          * a track with no classes -- every lane needs its own
+            vocabulary, and an empty one exports a column of -1.
+        The id charset itself is enforced in Track.__post_init__.
+
+        `order` is NORMALISED to the list position, so "the order I
+        wrote them in the driver is the lane order" is true without the
+        caller keeping two things in sync. A caller-supplied `order` is
+        therefore overridden; that is a drafter ruling and it is stated
+        as one in the pack.
+        """
+        rows = [t if isinstance(t, Track) else Track.from_dict(t)
+                for t in (tracks or [])]
+        if not rows:
+            raise ValueError(
+                "'tracks' must contain at least one track; pass "
+                "classes=[...] for the single-track default instead.")
+        seen = set()
+        for i, row in enumerate(rows):
+            if row.id in seen:
+                raise ValueError(
+                    "duplicate track id %r: a track id names an export "
+                    "column and a label-map sidecar, so it must be "
+                    "unique" % (row.id,))
+            seen.add(row.id)
+            row.order = i
+            if not row.classes:
+                raise ValueError(
+                    "track %r has no classes; every track needs its own "
+                    "vocabulary" % (row.id,))
+            if not row.class_colors:
+                row.class_colors = colors_for(row.classes,
+                                              self.DEFAULT_COLORS)
+        return rows
+
+    @property
+    def active_track(self) -> Track:
+        """The row every gesture writes to and the strip paints.
+
+        Falls back to the first row rather than raising when the active
+        id is stale, because a stale id is a view-state bug and must not
+        take the window down.
+        """
+        return active_track_of(self)
+
+    @property
+    def active_track_id(self) -> str:
+        """The active track's id."""
+        return active_id_of(self)
+
+    def track_by_id(self, track_id) -> Optional[Track]:
+        """The row with this id, or None."""
+        return find_track(self.tracks, track_id)
+
+    @property
+    def track_ids(self) -> List[str]:
+        """Every track id, in lane order."""
+        return track_ids(self.tracks)
+
+    @property
+    def classes(self) -> List[str]:
+        """The ACTIVE track's vocabulary.
+
+        Pack M1 turned this from a plain attribute into a view over one
+        row of the track table. With one default track it is the same
+        list it always was, which is why 22 of the 44 code lines that
+        read self.classes needed no edit at all. The setter writes
+        through to the active row, so Manage Labels..., a session load
+        and an autosave recovery all keep working unchanged.
+        """
+        return self.active_track.classes
+
+    @classes.setter
+    def classes(self, value) -> None:
+        self.active_track.classes = [str(c) for c in value]
+
+    @property
+    def class_colors(self) -> Dict[str, str]:
+        """The ACTIVE track's colour map. See `classes`."""
+        return self.active_track.class_colors
+
+    @class_colors.setter
+    def class_colors(self, value) -> None:
+        self.active_track.class_colors = dict(value)
+
+    # -------- Pack M1: column -> locked track ingest (R5) --------
+
+    def add_track_from_column(self, column, track_id, name=None,
+                              gap_tolerance=None, locked=True,
+                              class_order=None):
+        """Turn a per-sample label COLUMN into a label TRACK.
+
+        This is the door the user's own workflow has been waiting for: his
+        driver hand-builds a model-label lane as a fake one-row
+        `pcolormesh` in all four of his pane layouts, because the tool has
+        one strip. That lane costs him a gridspec row per pane and cannot
+        be clicked, edited, undone, selected, saved or exported. This makes
+        it a real track.
+
+        column        a column NAME in self.df, or a pd.Series aligned to
+                      self.df.index.
+        track_id      the new (or existing) track's opaque id, validated
+                      to [A-Za-z0-9_-]{1,32}.
+        name          the display name; defaults to the id.
+        gap_tolerance anything pd.Timedelta accepts, or None for the
+                      default `3 x p95(dt)` of the frame's own index. See
+                      core/ingest.py for why `k x median` is the wrong
+                      statistic on this user's bimodal ARTEMIS cadence --
+                      it inflates the interval count 14.7x.
+        locked        the new track is locked BY CONSTRUCTION. "The tool
+                      must not let you edit this, it came from a file" is a
+                      fact about provenance, not about the current window,
+                      so it is MODEL state and it persists.
+        class_order   the vocabulary in the order the ids should take.
+                      When this ingest CREATES the track, an absent
+                      class_order means the column's distinct values,
+                      sorted. When it ingests into an EXISTING track, an
+                      unknown label is REFUSED -- there the class set is a
+                      declared schema, and a silent auto-add would make
+                      Manage Labels, the strip legend and the sidebar tags
+                      drift without a gesture.
+
+        Returns the Track.
+
+        IT RUNS INSIDE A GESTURE, so one Ctrl+Z removes the track AND its
+        intervals. That is the whole reason the track table rides in the
+        gesture snapshot: an ingest adds no interval to an existing lane,
+        so an intervals-only no-op test would push no undo entry at all.
+
+        IT NEVER WRITES A COLUMN INTO self.df. Measured: adding one column
+        moves dataset_fingerprint from d5dce8d8910a to 7520c0a76b11, which
+        changes the autosave FILENAME, which makes every prior autosave for
+        that dataset unreachable and pops the identity-mismatch dialog.
+        That is a rule, not a note.
+        """
+        from chronotagger.core.ingest import intervals_from_column
+
+        if isinstance(column, str):
+            if self.df is None or column not in self.df.columns:
+                raise ValueError(
+                    "no column %r in the frame; pass a column name that "
+                    "exists, or a Series aligned to df.index" % (column,))
+            values = self.df[column]
+            source = "column:%s" % column
+        else:
+            values = column
+            if len(values) != len(self.df.index):
+                raise ValueError(
+                    "the series has %d rows and the frame has %d; an "
+                    "ingested column must be aligned to df.index"
+                    % (len(values), len(self.df.index)))
+            source = "column:%s" % (getattr(column, "name", None) or "series")
+
+        existing = self.track_by_id(track_id)
+        if existing is None:
+            # Validate the id before anything else touches the model: the
+            # id becomes an export column name and a sidecar filename.
+            Track(id=track_id)
+
+        ivs, info = intervals_from_column(
+            self.df.index, values, track_id,
+            gap_tolerance=gap_tolerance,
+            source=source,
+            class_order=class_order,
+            end_after_inclusive=self._end_after_inclusive,
+            data_end=self.data_end,
+        )
+
+        with self._gesture("import track %s from %s" % (track_id, source)):
+            if existing is None:
+                classes = list(info["classes"])
+                row = Track(
+                    id=track_id,
+                    name=name or track_id,
+                    classes=classes,
+                    class_colors=colors_for(classes, self.DEFAULT_COLORS),
+                    locked=bool(locked),
+                    order=len(self.tracks),
+                )
+                self.tracks.append(row)
+            else:
+                unknown = sorted(set(info["present"])
+                                 - set(existing.classes))
+                if unknown:
+                    raise ValueError(
+                        "track %r already exists and its class set does "
+                        "not contain %s; ingesting into an EXISTING track "
+                        "must not silently change its schema. Pass a new "
+                        "track_id, or add the class through Manage "
+                        "Labels first." % (track_id, ", ".join(unknown)))
+                row = existing
+                if locked:
+                    row.locked = True
+            self.intervals.extend(ivs)
+            self._sort_and_merge_intervals()
+
+        if getattr(self, 'status_var', None) is not None:
+            self.status_var.set(
+                "Imported %d interval(s) into track '%s' from %s "
+                "(gap tolerance %s, %d run(s), %d split(s), %d unlabeled "
+                "sample(s) skipped)"
+                % (len(ivs), track_id, source, info["gap_tolerance"],
+                   info["runs"], info["splits"], info["unlabeled_rows"]))
+        if getattr(self, 'canvas', None) is not None:
+            self._update_plot()
+        self._save_autosave()
+        return row
 
     # -------- Public entrypoint --------
 

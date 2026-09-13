@@ -319,6 +319,12 @@ def test_export_prints_migrated_to_log(labeler, logcap, capsys, tmp_path):
     """R11: public-API success chatter moves off stdout."""
     from chronotagger.core.models import Interval
     idx = labeler.df.index
+    # Pack M1: export_intervals now REFUSES a label that is not in its own
+    # track's class set, so the label this test uses has to be in the
+    # schema. Before Pack M1 both programmatic export paths had no gate at
+    # all -- export_per_sample wrote 85 orphan-labelled rows as -1 with
+    # zero dialogs and the orphan absent from the sidecar.
+    labeler.classes = ["UNKNOWN", "PS"]
     labeler.intervals.append(Interval(idx[5], idx[15], "PS"))
 
     out_path = str(tmp_path / "iv.csv")

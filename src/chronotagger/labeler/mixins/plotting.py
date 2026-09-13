@@ -446,9 +446,20 @@ class PlottingMixin:
         # Background interval overlays across time panels only
         if self._overlays_enabled() and time_axes:
             from ..utils.overlays import draw_interval_bands
+            from chronotagger.core.tracks import active_id_of, intervals_on
+            # Pack M1: the ACTIVE track only. self.class_colors IS the
+            # active track's colour map, so painting every lane through it
+            # paints an imported machine label in the colour of a
+            # hand-drawn one: measured with two tracks through this very
+            # call, an imported `sw` band came out in EXACTLY the human
+            # track's `sw` colour -- visually indistinguishable from a hand
+            # label -- and an `umbra` band the active track does not know
+            # came out grey. Grey at least looks wrong. The other lanes are
+            # still in the model, the autosave, the session and the export;
+            # M2 gives them their own bands.
             draw_interval_bands(
                 time_axes,
-                self.intervals,
+                intervals_on(self.intervals, active_id_of(self)),
                 self.t0, self.t1,
                 self.class_colors,
                 selected_interval=self.selected_interval,
@@ -809,7 +820,18 @@ class PlottingMixin:
         faces = []
         edges = []
         widths = []
+        # Pack M1: the strip paints the ACTIVE track only -- ONE lane, in
+        # the same place, in the same colours, so the screen does not
+        # change while there is one track. M2 adds the lanes. Painting
+        # every track here through self.class_colors (which IS the active
+        # track's map) was measured to paint an imported machine label in
+        # exactly the human track's colour for a shared class name, and
+        # grey for a class the active track does not know.
+        from chronotagger.core.tracks import active_id_of
+        _active_track = active_id_of(self)
         for iv in self.intervals:
+            if iv.track != _active_track:
+                continue
             if iv.end <= self.t0 or iv.start >= self.t1:
                 continue
             s = max(iv.start, self.t0)

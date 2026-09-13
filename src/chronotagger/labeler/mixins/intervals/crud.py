@@ -119,13 +119,28 @@ class IntervalCRUDMixin:
         # Added" and skipped sync/autosave once the stack was full).
         _top_before = self.undo_stack[-1] if self.undo_stack else None
         with self._gesture(f"add {label} interval(s)"):
+            # Pack M1, construction sites 3 and 4 of 11. The interval an
+            # Add gesture produces names the ACTIVE track EXPLICITLY
+            # rather than leaning on Interval.track's field default, so a
+            # session whose table has no row called 'default' -- a
+            # driver's own TRACKS block -- still labels correctly.
+            #
+            # The three helpers this block calls
+            # (_carve_existing_for_new_span, _subtract_overlaps_from_span
+            # via _apply_overlap_policy_to_spans, and
+            # _remove_overlapping_intervals inside AddIntervalCommand)
+            # all default to the active track or read the new interval's
+            # own, so nothing else here has to pass it down.
+            from chronotagger.core.tracks import active_id_of
+            track = active_id_of(self)
             if policy == "replace":
                 # Carve out existing intervals, then add new ones
                 for s, e in spans:
                     if e <= s:
                         continue
                     self._carve_existing_for_new_span(s, e)
-                    self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+                    self._execute_command(AddIntervalCommand(
+                        self, Interval(s, e, label, track=track)))
                     count += 1
             else:
                 # Skip overlaps - only add non-overlapping portions
@@ -133,7 +148,8 @@ class IntervalCRUDMixin:
                 for s, e in final_spans:
                     if e <= s:
                         continue
-                    self._execute_command(AddIntervalCommand(self, Interval(s, e, label)))
+                    self._execute_command(AddIntervalCommand(
+                        self, Interval(s, e, label, track=track)))
                     count += 1
         pushed = bool(self.undo_stack) and self.undo_stack[-1] is not _top_before
         if count > 0 and not pushed:
@@ -541,12 +557,23 @@ class IntervalCRUDMixin:
                     # Delete original interval
                     self._execute_command(DeleteIntervalCommand(self, iv))
 
+                    # Pack M1, construction sites 5 and 6 of 11: a clear
+                    # fragment INHERITS its parent's track and a deep
+                    # copy of its meta. It is the user's own interval cut
+                    # in two, so it must not change lane and must not
+                    # lose its provenance.
+                    from chronotagger.core.commands import copy_meta
+
                     # Add left part (before clear range)
-                    left_interval = Interval(iv.start, t0, iv.label, iv.notes)
+                    left_interval = Interval(iv.start, t0, iv.label, iv.notes,
+                                             track=iv.track,
+                                             meta=copy_meta(iv.meta))
                     self._execute_command(AddIntervalCommand(self, left_interval))
 
                     # Add right part (after clear range)
-                    right_interval = Interval(t1, iv.end, iv.label, iv.notes)
+                    right_interval = Interval(t1, iv.end, iv.label, iv.notes,
+                                              track=iv.track,
+                                              meta=copy_meta(iv.meta))
                     self._execute_command(AddIntervalCommand(self, right_interval))
 
                     split += 1

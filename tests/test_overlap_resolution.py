@@ -33,6 +33,15 @@ class MockIntervalsMixin:
         self.redo_stack: List = []
         self.max_undo = 100
         self.modified = False
+        # Pack M1: the mock host mirrors the real class -- a track table
+        # plus the active id, so the track-scoped add path and the
+        # MEMBERSHIP clause see here the shape they see in the app. The
+        # vocabulary is empty on purpose: nothing this host exercises
+        # reads a class list, and inventing one would be a second place
+        # to keep in sync.
+        from chronotagger.core.tracks import default_table
+        self.tracks = default_table([])
+        self._active_track_id = self.tracks[0].id
 
         # Import the methods we want to test
         from chronotagger.labeler.mixins.intervals import IntervalsMixin
@@ -46,6 +55,7 @@ class MockIntervalsMixin:
         # Gesture plumbing used by _execute_command (Pack 1)
         self._gesture = IntervalsMixin._gesture.__get__(self)
         self._check_interval_invariants = IntervalsMixin._check_interval_invariants.__get__(self)
+        self._check_interval_invariants_on = IntervalsMixin._check_interval_invariants_on.__get__(self)
         self._repoint_selected_interval = IntervalsMixin._repoint_selected_interval.__get__(self)
 
 

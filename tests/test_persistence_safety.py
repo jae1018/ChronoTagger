@@ -44,8 +44,17 @@ class MockPersistHost:
     def __init__(self, df, folder):
         self.df = df
         self.intervals = []
-        self.classes = ["UNKNOWN", "PS", "LOBE"]
-        self.class_colors = {"UNKNOWN": "#cccccc", "PS": "#ff0000", "LOBE": "#0000ff"}
+        # Pack M1: the mock host MIRRORS THE REAL CLASS. `classes` and
+        # `class_colors` are properties over the ACTIVE track's row here
+        # exactly as they are on TimeIntervalLabeler, so a recovery that
+        # installs a schema is observable through the same names the rest
+        # of this file already asserts on -- and the mock cannot drift
+        # into passing a test the app would fail.
+        from chronotagger.core.tracks import default_table
+        self.tracks = default_table(
+            ["UNKNOWN", "PS", "LOBE"],
+            {"UNKNOWN": "#cccccc", "PS": "#ff0000", "LOBE": "#0000ff"})
+        self._active_track_id = self.tracks[0].id
         self.undo_stack = []
         self.redo_stack = []
         self.max_undo = 50
@@ -70,9 +79,31 @@ class MockPersistHost:
         from chronotagger.labeler.mixins.intervals import IntervalsMixin
         self._check_interval_invariants = \
             IntervalsMixin._check_interval_invariants.__get__(self)
+        self._check_interval_invariants_on = \
+            IntervalsMixin._check_interval_invariants_on.__get__(self)
 
         self.autosave_folder = folder
         self.autosave_file = folder / f"chronotagger_autosave_{self._dataset_fingerprint()}.json"
+
+    @property
+    def classes(self):
+        from chronotagger.core.tracks import active_track_of
+        return active_track_of(self).classes
+
+    @classes.setter
+    def classes(self, value):
+        from chronotagger.core.tracks import active_track_of
+        active_track_of(self).classes = [str(c) for c in value]
+
+    @property
+    def class_colors(self):
+        from chronotagger.core.tracks import active_track_of
+        return active_track_of(self).class_colors
+
+    @class_colors.setter
+    def class_colors(self, value):
+        from chronotagger.core.tracks import active_track_of
+        active_track_of(self).class_colors = dict(value)
 
 
 def _grid(cols=("a", "b", "c"), periods=100):
@@ -180,8 +211,16 @@ def test_autosave_writes_fingerprinted_file_with_schema(host):
     assert host.autosave_file.exists()
     assert host.autosave_file.name.startswith("chronotagger_autosave_")
     data = json.loads(host.autosave_file.read_text(encoding="utf-8"))
-    assert data["classes"] == ["UNKNOWN", "PS", "LOBE"]
-    assert data["class_colors"]["PS"] == "#ff0000"
+    # Pack M1 v2: the SCHEMA AUTHORITY is the track table. The top-level
+    # "classes" / "class_colors" mirror is gone on purpose -- see
+    # io_export.SESSION_VERSION and the version gate.
+    assert data["version"] == 2
+    assert [t["id"] for t in data["tracks"]] == ["default"]
+    assert data["tracks"][0]["classes"] == ["UNKNOWN", "PS", "LOBE"]
+    assert data["tracks"][0]["class_colors"]["PS"] == "#ff0000"
+    assert data["active_track"] == "default"
+    assert data["intervals"][0]["track"] == "default"
+    assert "classes" not in data and "class_colors" not in data
     assert data["metadata"]["fingerprint"] == host._dataset_fingerprint()
     assert data["metadata"]["n_rows"] == 100
 
@@ -205,11 +244,23 @@ def test_crash_mid_autosave_preserves_previous_and_surfaces(host):
     host._save_autosave()
     before = host.autosave_file.read_bytes()
 
+    # Pack M1: _save_autosave SKIPS the write when neither the interval
+    # set nor the track table has changed since the last SUCCESSFUL one --
+    # autosave fires per gesture, and one ingested rule track takes a
+    # single write from 14.8 ms / 14,693 B to 64.7 ms / 392,453 B. So the
+    # failure has to be provoked by a real change, exactly as a real
+    # gesture would provoke it.
+    host.intervals.append(Interval(T("00:30"), T("00:40"), "LOBE"))
     with patch.object(atomic_io.json, "dump", side_effect=OSError("boom")):
         host._save_autosave()  # must not raise; must not destroy
 
     assert host.autosave_file.read_bytes() == before
     assert "Autosave failed" in host.status_var.get()
+
+    # And a FAILED write must not record the signature: the very next
+    # call retries rather than skipping, exactly as it did before Pack M1.
+    host._save_autosave()
+    assert host.autosave_file.read_bytes() != before
 
 
 # ---- recovery lookup (grill Q2 clean break, Q3) ----
@@ -256,6 +307,9 @@ def test_bak_not_consulted_when_main_deleted(host):
     route; the .bak must not resurrect it."""
     host.intervals = [Interval(T("00:10"), T("00:20"), "PS")]
     host._save_autosave()
+    # Pack M1: the second save has to CHANGE something, or the
+    # unchanged-write skip leaves no .bak for this test to check.
+    host.intervals.append(Interval(T("00:30"), T("00:40"), "LOBE"))
     host._save_autosave()  # second save creates the .bak
     host.autosave_file.unlink()
 
