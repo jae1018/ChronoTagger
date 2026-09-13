@@ -824,25 +824,37 @@ TWO_LANES = [{"id": "human", "name": "Human", "classes": ["sw"]},
              {"id": "rules", "name": "Rules", "classes": ["umbra"]}]
 
 
-def test_the_strip_paints_the_ACTIVE_track_only():
-    """ONE lane, in the same place. Painting both through
-    self.class_colors -- which IS the active lane's map -- was measured to
-    paint an imported machine label in exactly the human lane's colour
-    for a shared class name, and grey for one the active lane does not
-    know."""
+def test_the_strip_paints_every_VISIBLE_lane_in_its_OWN_colours():
+    """AMENDED BY PACK M2, which is what M1's own docstring promised.
+
+    M1 painted the ACTIVE lane only and said so in this very test: "M2
+    adds the lanes." The rule M1 was protecting is intact and is the half
+    that matters -- a lane is painted in ITS OWN class_colors, never in
+    the active lane's -- while the count of painted faces is now every
+    visible lane's.
+    """
     lbl = _gui_labeler(tracks=TWO_LANES)
     try:
         _two_lane(lbl)
         lbl._update_plot()
         bands = [c for c in lbl.strip_ax.collections
                  if str(c.get_gid() or "").endswith("strip-bands")]
-        assert len(bands) == 1
-        assert len(bands[0].get_paths()) == 1      # human only, not both
+        assert len(bands) == 1, "ONE PolyCollection at every K (Pack 5 R14)"
+        assert len(bands[0].get_paths()) == 2      # both lanes now
+        assert bands[0].get_pickradius() == 0      # the gutter declines
+        # one band ROW per lane, and the active lane does not move the paint
+        ys = sorted({round(float(p.vertices[0][1]), 6)
+                     for p in bands[0].get_paths()})
+        assert len(ys) == 2
         lbl._active_track_id = "rules"
         lbl._update_plot()
         bands = [c for c in lbl.strip_ax.collections
                  if str(c.get_gid() or "").endswith("strip-bands")]
-        assert len(bands[0].get_paths()) == 1      # rules only
+        assert len(bands[0].get_paths()) == 2
+        ys2 = sorted({round(float(p.vertices[0][1]), 6)
+                      for p in bands[0].get_paths()})
+        assert ys2 == ys, "only the ring, the legend and the bold lane " \
+                          "name follow the active lane"
     finally:
         lbl.root.destroy()
 
@@ -883,11 +895,17 @@ def test_the_statistics_box_reports_UNION_coverage():
         lbl.root.destroy()
 
 
-def test_the_sidebar_configures_the_ACTIVE_tracks_tags_only():
-    """M0 pinned the row tag to the bare label, so one label can only have
-    one colour in the whole list. The loop therefore configures the labels
-    the ACTIVE lane's rows carry and no others -- DR14 states the
-    consequence out loud."""
+def test_the_sidebar_configures_a_PER_LANE_tag_for_every_row_it_shows():
+    """AMENDED BY PACK M2: this is DR14, closed.
+
+    M1 pinned the row tag to the BARE LABEL, so one label name could only
+    have one colour in the whole list -- measured on two lanes sharing
+    `solar_wind`, 3 of 6 rows were painted in the wrong lane's colour or
+    in none at all. M2's tag is "<track>|<label>" and its colour comes
+    from that lane's own map. The list also defaults to the ACTIVE lane,
+    so the second lane's row is not listed until the filter is opened --
+    which is the other half of what makes this list honest.
+    """
     lbl = _gui_labeler(tracks=TWO_LANES)
     try:
         _two_lane(lbl)
@@ -901,8 +919,13 @@ def test_the_sidebar_configures_the_ACTIVE_tracks_tags_only():
 
         lbl.intervals_tree.tag_configure = spy
         lbl._update_intervals_list()
-        assert configured == ["sw"]
-        # both rows are still LISTED -- M1 ships no filter (R4/M2 does)
+        assert configured == ["human|sw"]
+        assert len(lbl.intervals_tree.get_children()) == 1
+        # open the filter and BOTH lanes are listed, each with its own tag
+        configured[:] = []
+        lbl.interval_track_scope_var.set("all")
+        lbl._update_intervals_list()
+        assert sorted(configured) == ["human|sw", "rules|umbra"]
         assert len(lbl.intervals_tree.get_children()) == 2
     finally:
         lbl.root.destroy()

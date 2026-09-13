@@ -320,6 +320,28 @@ class MouseEventsMixin:
         if self.selected_interval is None or event.inaxes is not strip_ax:
             return None
 
+        # Pack M2: Y IS NOW PART OF THE ANSWER. This method read `event.x`
+        # and never `event.y`, so with lanes on screen the selected
+        # interval's move and resize handles answered from the top of the
+        # strip to the bottom -- measured 'move' at y = 0.02, 0.15, 0.50,
+        # 0.85 and 0.98, and 'resize_left' at all five -- which means a
+        # hover anywhere in the strip's column showed a resize cursor and a
+        # drag started on a lane the interval is not on. A handle belongs
+        # to ONE band: the one the selected interval is painted in.
+        from chronotagger.core.lanes import frac_from_event, lane_strict
+        _pane = self.active_pane if hasattr(self, 'active_pane') else self
+        _K = int(getattr(_pane, "_strip_lane_count", 1) or 1)
+        if _K > 1:
+            _pad = getattr(_pane, "_strip_pad_frac", None)
+            _frac = frac_from_event(strip_ax, event)
+            if _frac is None:
+                return None
+            _row = lane_strict(_frac, _K, _pad)
+            _ids = list(getattr(_pane, "_strip_lane_ids", None) or [])
+            if _row is None or _row >= len(_ids) or \
+                    _ids[_row] != self.selected_interval.track:
+                return None
+
         ax = strip_ax
         iv = self.selected_interval
         x0 = mdates.date2num(iv.start)
@@ -369,8 +391,15 @@ class MouseEventsMixin:
             return
 
         if self.selected_interval is None:
-            # Select if inside any interval
-            for iv in self.intervals:
+            # Select if inside any interval ON A PAINTED LANE (Pack M2).
+            # The press path gets the same lane resolution the pick path
+            # gets, through a STRICT band test: a press in the gutter
+            # between two lanes, or above the top band, or below the
+            # bottom one, selects NOTHING -- which is what the band
+            # collection's own pickradius(0) already answers, so the two
+            # paths agree everywhere instead of one selecting what the
+            # other says is not there.
+            for iv in self._strip_press_candidates(event, pane, click_ts):
                 if iv.contains(click_ts):
                     self.selected_interval = iv
                     if self.status_var is not None:
@@ -384,6 +413,15 @@ class MouseEventsMixin:
         # Determine drag mode against the selected interval
         mode = self._hit_test_selected(event)
         if mode is None or self.selected_interval is None:
+            return
+
+        # Pack M2 R1, lock path 7 of 9: the strip drag. Refused BEFORE
+        # _drag_mode is set, so no motion event can start a preview on a
+        # locked lane and no release can commit a ResizeIntervalCommand.
+        # The interval's OWN lane decides, not the active one.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, self.selected_interval.track,
+                            what="drag"):
             return
 
         iv = self.selected_interval

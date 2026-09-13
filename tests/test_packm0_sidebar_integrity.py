@@ -447,7 +447,13 @@ def test_the_scope_change_says_what_it_did(labeler):
 
 def test_tag_configure_runs_once_per_class_not_once_per_row(labeler,
                                                             monkeypatch):
-    """R3.  21 rows, 3 distinct labels -> 3 calls, not 21."""
+    """R3.  21 rows, 3 distinct labels -> 3 calls, not 21.
+
+    Pack M2 amends the EXPECTED TAG NAMES, not the rule. The tag is now
+    "<track>|<label>" so that two lanes sharing a class name do not share
+    a colour (M1's DR14, measured 3 of 6 rows wrong before this change).
+    The count is still one call per distinct tag among the rows shown.
+    """
     labeler.intervals[:] = [
         Interval(ts("00:%02d:00" % (2 * n)), ts("00:%02d:30" % (2 * n)),
                  ("A", "B", "C")[n % 3], None)
@@ -465,7 +471,7 @@ def test_tag_configure_runs_once_per_class_not_once_per_row(labeler,
 
     assert len(rows(labeler)) == 21
     assert len(calls) == 3
-    assert sorted(calls) == ["A", "B", "C"]
+    assert sorted(calls) == ["default|A", "default|B", "default|C"]
 
 
 def test_a_label_with_no_colour_of_its_own_still_gets_the_grey_default(labeler):
@@ -473,7 +479,9 @@ def test_a_label_with_no_colour_of_its_own_still_gets_the_grey_default(labeler):
 
     The label set is built from the rows on screen, not from self.classes,
     so `orphan` is still configured -- with the "#cccccc" that
-    class_colors.get() always handed it.
+    class_colors.get() always handed it.  Pack M2: under the per-lane tag
+    name, and the colour now comes from that LANE's own map rather than
+    from self.class_colors, which for the default lane is the same dict.
     """
     labeler.intervals[:] = [
         Interval(ts("00:01:00"), ts("00:02:00"), "A", None),
@@ -481,7 +489,8 @@ def test_a_label_with_no_colour_of_its_own_still_gets_the_grey_default(labeler):
     ]
     assert "orphan" not in labeler.class_colors
     labeler._update_intervals_list()
-    assert (str(labeler.intervals_tree.tag_configure("orphan", "background"))
+    assert (str(labeler.intervals_tree.tag_configure("default|orphan",
+                                                    "background"))
             == "#cccccc")
 
 
@@ -499,14 +508,22 @@ def test_tag_configure_is_not_called_for_a_class_with_no_rows(labeler,
 
     monkeypatch.setattr(labeler.intervals_tree, "tag_configure", counting)
     labeler._update_intervals_list()
-    assert calls == [labeler.classes[0]]
+    assert calls == ["default|" + labeler.classes[0]]
 
 
 # ================================================== the no-regression fence
 
 
 def test_an_unfiltered_refill_is_what_it_always_was(labeler):
-    """R5 in one assertion: default scope, row for row, column for column."""
+    """R5 in one assertion: default scope, row for row, column for column.
+
+    Pack M2 amends the EXPECTED ROW, and only the two things it ships: a
+    fifth value (the lane's display NAME, last, so the four columns before
+    it keep their widths and their meaning) and the per-lane tag name.
+    Everything else -- the ordinal, the order, the strftime formats, the
+    duration string, one row per held interval at the default scope -- is
+    asserted exactly as M0 asserted it.
+    """
     labeler.intervals[:] = spread_intervals()
     labeler._update_intervals_list()
 
@@ -522,8 +539,9 @@ def test_an_unfiltered_refill_is_what_it_always_was(labeler):
                      (iv.start.strftime("%H:%M:%S"),
                       iv.end.strftime("%H:%M:%S"),
                       iv.label,
-                      str(iv.end - iv.start).split(".")[0]),
-                     (iv.label,)))
+                      str(iv.end - iv.start).split(".")[0],
+                      "Labels"),
+                     ("default|" + iv.label,)))
 
     assert got == want
 

@@ -30,9 +30,15 @@ class IntervalGapsMixin:
         Returns:
             List of (pd.Timestamp, pd.Timestamp) tuples for each gap
         """
-        # Collect covered intervals in current window
+        # Collect covered intervals in current window.
+        # Pack M2 R1, the third cross-lane path M1 shipped. MEASURED:
+        # "Label Unassigned" reported 0 gaps for a `region` lane holding NO
+        # INTERVALS AT ALL, because the locked `agent` lane covered the
+        # record -- a silent no-op on the one control whose whole job is
+        # to fill what is not labelled. A gap is a gap ON A LANE.
+        from chronotagger.core.tracks import active_id_of, intervals_on
         covered: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
-        for iv in self.intervals:
+        for iv in intervals_on(self.intervals, active_id_of(self)):
             if iv.end <= self.t0 or iv.start >= self.t1:
                 continue
             covered.append((max(iv.start, self.t0), min(iv.end, self.t1)))
@@ -246,6 +252,11 @@ class IntervalGapsMixin:
             label: The label to assign to all gaps
         """
         if not gaps:
+            return
+
+        # Pack M2 R1, lock path 2 of 9.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, what="fill gaps"):
             return
 
         # Create intervals for each gap with the specified label.

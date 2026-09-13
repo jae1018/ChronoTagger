@@ -42,8 +42,16 @@ class IntervalCRUDMixin:
         commit_spans = getattr(self, "_commit_spans", []) or []
         current_selection = getattr(self, "current_selection", None)
 
-        label = self.current_class_var.get()  # type: ignore[union-attr]
+        # Pack M2 R1, lock paths 3 and 8 of 9. Every Add reaches here: the
+        # box / two-click / strip gesture with `current_selection`, and the
+        # rules engine's commit with `_commit_spans` (rules.py sets that
+        # list and the user presses this same button). One guard therefore
+        # covers both. The refusal is a status line, never a modal.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, what="add"):
+            return
 
+        label = self.current_class_var.get()  # type: ignore[union-attr]
         # Determine which spans to work with
         if commit_spans:
             # Already in commit form: sample-aligned half-open for box lanes,
@@ -176,6 +184,14 @@ class IntervalCRUDMixin:
         if not self.selected_interval:
             messagebox.showwarning("No Selection", "Select an interval (strip or list) first.")
             return
+        # Pack M2 R1, lock path 5 of 9. The LANE THE INTERVAL SITS ON is
+        # what decides, not the active lane: a click on a locked lane
+        # SELECTS (you may read a model's interval) without activating it,
+        # so the selected interval can be on a lane that is not active.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, self.selected_interval.track,
+                            what="relabel"):
+            return
         new_label = self.current_class_var.get()  # type: ignore[union-attr]
         cmd = RelabelIntervalCommand(self, self.selected_interval, new_label)
         self._execute_command(cmd)
@@ -191,6 +207,12 @@ class IntervalCRUDMixin:
     def _delete_interval(self) -> None:
         if not self.selected_interval:
             messagebox.showwarning("No Selection", "Select an interval to delete.")
+            return
+        # Pack M2 R1, lock path 6 of 9. The selected interval's own lane
+        # decides -- see _relabel_interval.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, self.selected_interval.track,
+                            what="delete"):
             return
         cmd = DeleteIntervalCommand(self, self.selected_interval)
         self._execute_command(cmd)
@@ -247,6 +269,16 @@ class IntervalCRUDMixin:
         """
         import tkinter as tk
         from tkinter import ttk
+
+        # Pack M2 fold: the LOCK is judged BEFORE the modal. Without this
+        # a locked active lane still got the full "31 will be deleted, 2
+        # truncated" dialog, the Yes button changed nothing, and
+        # on_confirm's own status line overwrote the refusal with
+        # "Cleared intervals: " and an empty list -- measured on the C05
+        # session with `agent` active.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, what="clear range"):
+            return
 
         # Analyze what will be affected
         analysis = self._analyze_intervals_in_range(t0, t1)
@@ -381,6 +413,12 @@ class IntervalCRUDMixin:
             if results['split'] > 0:
                 parts.append(f"{results['split']} split")
 
+            if not parts:
+                # Nothing moved. Do NOT overwrite whatever put us here --
+                # a lock refusal is the one thing the user needs to read.
+                self._update_plot()
+                self._save_autosave()
+                return
             status_msg = "Cleared intervals: " + ", ".join(parts)
             self.status_var.set(status_msg)  # type: ignore[union-attr]
 
@@ -463,7 +501,13 @@ class IntervalCRUDMixin:
         to_truncate = 0
         to_split = 0
 
-        for iv in self.intervals:
+        # Pack M2 R1. The ACTIVE LANE ONLY -- the same scope
+        # _clear_intervals_in_range uses. These two bodies are the
+        # confirmation dialog and the edit it describes: if the count came
+        # from every lane and the clear touched one, the dialog would
+        # promise "50 deleted" and one interval would go.
+        from chronotagger.core.tracks import active_id_of, intervals_on
+        for iv in intervals_on(self.intervals, active_id_of(self)):
             # No overlap - skip
             if iv.end <= t0 or iv.start >= t1:
                 continue
@@ -523,8 +567,22 @@ class IntervalCRUDMixin:
         truncated = 0
         split = 0
 
-        # Snapshot intervals (commands will modify the list)
-        intervals_to_process = list(self.intervals)
+        # Pack M2 R1, the second cross-lane destruction path M1 shipped,
+        # and lock path 1 of 9. MEASURED on the real C05 session: with
+        # `region` active, one Clear over the window DELETED 50 and
+        # TRUNCATED 2 intervals on the LOCKED `agent` lane. Clear Range is
+        # a range on ONE lane -- the lane you are working on -- so it may
+        # only see that lane's intervals.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, what="clear range"):
+            return {'deleted': 0, 'truncated': 0, 'split': 0,
+                    'total_affected': 0}
+
+        # Snapshot intervals (commands will modify the list); the snapshot
+        # is the ACTIVE LANE's intervals, which is the whole fix.
+        from chronotagger.core.tracks import active_id_of, intervals_on
+        intervals_to_process = intervals_on(self.intervals,
+                                            active_id_of(self))
 
         # One user gesture -> one undo entry, matching the dialog's
         # promise of a single Undo.

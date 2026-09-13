@@ -473,6 +473,26 @@ class PlottingMixin:
     
         # Strip + sidebar
         self._update_strip()
+        # Pack M2: and EVERY OTHER PANE's strip, because the lanes are a
+        # property of the session and a pane the user tabs back to must not
+        # show the lane table as it was three gestures ago. The inactive
+        # CANVASES are deliberately NOT drawn: building all three strips
+        # costs 30.0 ms at 120 intervals and 76.7 ms at 2,000, while
+        # drawing the other two canvases costs 253 ms on top -- and
+        # _on_tab_changed (view_build/window.py) already calls _update_plot
+        # when the user actually gets there. Pack 6 deleted the dirty flag
+        # that would have made this lazy; this is the cheap half of it.
+        for _p in (getattr(self, "panes", None) or []):
+            if _p is self.active_pane:
+                continue
+            if getattr(_p, "strip_ax", None) is None:
+                continue
+            try:
+                self._update_strip(_p)
+            except Exception:
+                # A stale pane's strip is a cosmetic problem; the active
+                # pane's paint has already happened and must not be lost.
+                pass
         if hasattr(self, 'intervals_tree'):
             self._update_intervals_list()
     
@@ -774,8 +794,16 @@ class PlottingMixin:
     
         return out
 
-    def _update_strip(self) -> None:
-        """Redraw annotation strip (intervals + current selection preview)."""
+    def _update_strip(self, pane=None) -> None:
+        """Redraw annotation strip (intervals + current selection preview).
+
+        Pack M2: `pane` names WHICH pane's strip to repaint, defaulting to
+        the active one, which is what every one of the fifteen existing
+        callers means. It is a parameter rather than an active-pane swap
+        because the swap would change what every other reader on `self`
+        sees for the duration of the paint, and this method writes four
+        attributes onto the pane it paints.
+        """
         import matplotlib.dates as mdates
         # Pack 5 R14. Function-scoped on purpose: TOOL_GID_PREFIX lives in
         # mixins.events.base, and this module is imported BY that package,
@@ -787,11 +815,91 @@ class PlottingMixin:
         from matplotlib.transforms import blended_transform_factory
         from .events.base import TOOL_GID_PREFIX
 
-        ax = self.strip_ax  # type: ignore[assignment]
+        _pane = pane
+        if _pane is None:
+            _pane = self.active_pane if hasattr(self, "active_pane") else self
+        ax = getattr(_pane, "strip_ax", None)
+        if ax is None:
+            ax = self.strip_ax  # type: ignore[assignment]
+
+        # ---------------------------------------------------------- Pack M2
+        # THE LANE TABLE FOR THIS PAINT. Computed ONCE, here, and stored on
+        # the PANE, because both hit tests and the drag preview must read
+        # exactly what was painted. The gather measured what happens when a
+        # second reader keeps its own copy: paint pane 2 with one lane
+        # hidden while pane 0 still shows three and the active pane's hit
+        # test uses K=2 against an 18-face collection -- every click lands
+        # on the wrong lane, silently. `_strip_preview_pool` already lives
+        # on the pane (events/strip.py) for the same reason.
+        #
+        # AT K == 1 EVERYTHING BELOW IS A NO-OP AND THAT IS THE POINT: no
+        # lane name, no focus ring, no legend, pad 0.1, preview 0.05..0.95
+        # -- the strip renders byte-for-byte as it did before this pack
+        # (whole-figure PNG sha256, six conditions, measured). With one
+        # lane there is also nothing to switch to, so there is nothing for
+        # a lane name or a ring to tell you.
+        from chronotagger.core.lanes import active_band, lane_layout
+        from chronotagger.core.tracks import table_of, track_ids as _track_ids
+        _lay = lane_layout(self)
+        _lanes = _lay["lanes"]
+        _row_of = _lay["row_of"]
+        _K = _lay["k"]
+        _pad = _lay["pad"]
+        _active_row = _lay["active_row"]
+        _pane._strip_lane_count = _K
+        _pane._strip_pad_frac = _pad
+        _pane._strip_lane_ids = [t.id for t in _lanes]
+        _pane._strip_active_row = _active_row
+        # The active lane's PREVIEW band. The two painted preview
+        # rectangles below read it, so one paint asks for it once. The DRAG
+        # path deliberately does NOT read it and computes its own: a cached
+        # band is a stale band after any lane switch that does not repaint,
+        # and the live call measures 0.0023 ms against a 1.78 ms blit.
+        _pane._strip_active_band = active_band(self)
+        _known_ids = set(_track_ids(table_of(self)))
+        # The focus colour: the ACTIVE lane's colour for the class the
+        # dropdown is on right now, so the lane name and the ring say both
+        # WHERE the next Add lands and IN WHAT COLOUR. Falls back to a
+        # neutral blue when the lane does not declare that class (which is
+        # the state _repoint_class_controls exists to prevent).
+        _cur_class = ""
+        if getattr(self, "current_class_var", None) is not None:
+            try:
+                _cur_class = self.current_class_var.get()
+            except Exception:
+                _cur_class = ""
+        _focus_color = "#1f77b4"
+        if _active_row is not None:
+            _focus_color = (_lanes[_active_row].class_colors.get(_cur_class)
+                            or "#1f77b4")
+        if hasattr(self, "_refresh_lane_controls"):
+            self._refresh_lane_controls()
+
         with self._squelch_xlim_events():
             ax.clear()
             ax.set_ylim(0, 1)
-            ax.set_yticks([])
+            if _K > 1:
+                # ONE tick per lane, at the centre of its band, labelled
+                # with the lane's NAME -- 0 extra artists, and the only
+                # focus indicator that is visible when the active lane
+                # holds no interval in this window (a heavier per-face
+                # edge is invisible exactly then; measured).
+                from chronotagger.core.lanes import lane_band
+                _ticks = []
+                for _r in range(_K):
+                    _lo, _hi = lane_band(_r, _K, _pad)
+                    _ticks.append(0.5 * (_lo + _hi))
+                ax.set_yticks(_ticks)
+                ax.set_yticklabels([(t.name or t.id) for t in _lanes],
+                                   fontsize=7)
+                for _r, _lbl in enumerate(ax.get_yticklabels()):
+                    if _r == _active_row:
+                        _lbl.set_fontweight("bold")
+                        _lbl.set_color(_focus_color)
+                    else:
+                        _lbl.set_color("#555555")
+            else:
+                ax.set_yticks([])
             ax.set_ylabel("Labels", fontsize=9)
         
             # Reset limits/formatting because clearing resets formatter
@@ -816,21 +924,31 @@ class PlottingMixin:
         # 27.0 ms and takes the whole frame to 730.9 ms.
         # Per-face facecolor / edgecolor / linewidth keep the
         # selected-interval emphasis exactly as the Rectangles had it.
+        #
+        # Pack M2: STILL ONE COLLECTION AT EVERY K. The lanes are 4K faces
+        # with per-vertex y, not K artists -- measured flat in K: at 2,000
+        # intervals the build is 23.6-25.1 ms across K=1..4 against the
+        # one-lane painter's 24.3 ms. A per-lane artist would put R14's
+        # 1,419.9 ms back one lane at a time.
         spans = []
         faces = []
         edges = []
         widths = []
-        # Pack M1: the strip paints the ACTIVE track only -- ONE lane, in
-        # the same place, in the same colours, so the screen does not
-        # change while there is one track. M2 adds the lanes. Painting
-        # every track here through self.class_colors (which IS the active
-        # track's map) was measured to paint an imported machine label in
-        # exactly the human track's colour for a shared class name, and
-        # grey for a class the active track does not know.
-        from chronotagger.core.tracks import active_id_of
-        _active_track = active_id_of(self)
+        lane_rows = []      # the visual row of each face, parallel to spans
+        band_ivs = []       # the Interval behind each face, parallel to spans
+        strays = 0          # intervals on a track this table does not hold
         for iv in self.intervals:
-            if iv.track != _active_track:
+            # Each lane paints in ITS OWN colours: an imported machine
+            # label must not borrow the human lane's colour for a shared
+            # class name, and must not be grey because the ACTIVE lane
+            # does not know its class (both measured under M1's painter).
+            _t_row = _row_of.get(iv.track)
+            if _t_row is None:
+                # Either a hidden lane -- not painted, and therefore
+                # unreachable by both hit tests, which is the whole
+                # mechanism -- or a stray, counted and reported once.
+                if iv.track not in _known_ids:
+                    strays += 1
                 continue
             if iv.end <= self.t0 or iv.start >= self.t1:
                 continue
@@ -838,11 +956,13 @@ class PlottingMixin:
             e = min(iv.end, self.t1)
 
             selected = iv == self.selected_interval
-            color = self.class_colors.get(iv.label, "#cccccc")
+            color = _lanes[_t_row].class_colors.get(iv.label, "#cccccc")
             spans.append((s, e))
             faces.append(to_rgba(color, 0.8 if selected else 0.6))
             edges.append(to_rgba("red" if selected else "black", 1.0))
             widths.append(2.0 if selected else 0.5)
+            lane_rows.append(_t_row)
+            band_ivs.append(iv)
 
         if spans:
             x0 = mdates.date2num(
@@ -854,13 +974,31 @@ class PlottingMixin:
             verts[:, 1, 0] = x1
             verts[:, 2, 0] = x1
             verts[:, 3, 0] = x0
-            verts[:, 0, 1] = 0.1
-            verts[:, 1, 1] = 0.1
-            verts[:, 2, 1] = 0.9
-            verts[:, 3, 1] = 0.9
+            # Pack M2: per-face y, from ONE authority. At K == 1 with
+            # pad 0.1 lane_band(0, 1, 0.1) is exactly (0.1, 0.9) -- the
+            # four constants this block used to carry -- which is the
+            # first of the three rules the single-lane byte identity
+            # needs. Vectorised per lane: K slices, not N lookups.
+            from chronotagger.core.lanes import lane_band
+            _rows = np.asarray(lane_rows, dtype=int)
+            for _r in range(_K):
+                _lo, _hi = lane_band(_r, _K, _pad)
+                _m = _rows == _r
+                verts[_m, 0, 1] = _lo
+                verts[_m, 1, 1] = _lo
+                verts[_m, 2, 1] = _hi
+                verts[_m, 3, 1] = _hi
             bands = PolyCollection(
                 verts, facecolors=faces, edgecolors=edges,
                 linewidths=widths, picker=True)
+            # Pack M2: a pick must DECLINE in the gutter between two lanes
+            # and above/below every band, or the two hit paths disagree.
+            # At the default radius a click 5.1 px outside a band still
+            # picks the nearest face and names the wrong lane (measured at
+            # K=4: pick_row 2 where the geometry says row 3). Zero makes
+            # the collection answer for its own paint, and the press path's
+            # `lane_strict` declines in exactly the same places.
+            bands.set_pickradius(0)
             # y in AXES coordinates -- the strip's ylim is pinned to (0, 1)
             # a few lines above, so this is the same geometry the
             # Rectangles had, and it survives any future ylim change.
@@ -869,32 +1007,135 @@ class PlottingMixin:
             bands.set_gid(TOOL_GID_PREFIX + "strip-bands")
             ax.add_collection(bands, autolim=False)
 
+        # Pack M2: the two arrays the hit tests resolve `.ind` through, on
+        # the PANE, written on EVERY paint including the empty one -- a
+        # stale array from the previous window would name an interval that
+        # is no longer under the cursor.
+        _pane._strip_band_ivs = band_ivs
+        _pane._strip_band_rows = lane_rows
+
+        # Pack M2: the dashed preview lives ON THE ACTIVE LANE, bracketing
+        # its band by half the gutter. At K == 1 `preview_band(0, 1, 0.1)`
+        # is exactly (0.05, 0.9) -- the two constants this block used to
+        # carry -- and that bracket is the third of the three rules the
+        # single-lane byte identity needs: the shipped band is 0.1..0.9 and
+        # the shipped preview is 0.05..0.95, so the preview is NOT the
+        # band. It was the one condition that failed before the gather
+        # found it.
+        from chronotagger.core.lanes import (strip_focus_gid,
+                                             strip_preview_gid)
+        _pv_y, _pv_h = _pane._strip_active_band   # recorded a moment ago
+
         # single-span preview
         if self.current_selection:
             s, e = self.current_selection
             rect = Rectangle(
-                (mdates.date2num(s), 0.05),
+                (mdates.date2num(s), _pv_y),
                 mdates.date2num(e) - mdates.date2num(s),
-                0.9,
+                _pv_h,
                 facecolor="yellow",
                 edgecolor="orange",
                 linewidth=2,
                 alpha=0.3,
                 linestyle="--",
             )
+            rect.set_gid(strip_preview_gid())
             ax.add_patch(rect)
 
         # multi-span preview
         if getattr(self, "current_spans", None):
             for (s, e) in self.current_spans:
                 rect = Rectangle(
-                    (mdates.date2num(s), 0.05),
+                    (mdates.date2num(s), _pv_y),
                     mdates.date2num(e) - mdates.date2num(s),
-                    0.9,
+                    _pv_h,
                     facecolor="yellow",
                     edgecolor="orange",
                     linewidth=2,
                     alpha=0.3,
                     linestyle="--",
                 )
+                rect.set_gid(strip_preview_gid())
                 ax.add_patch(rect)
+
+        # ---------------------------------------------------------- Pack M2
+        # THE FOCUS RING: ONE Rectangle in transAxes over the active lane's
+        # band, full width. Constant in K -- it is not a per-lane artist --
+        # and NOT PICKABLE (a Patch with no picker can never produce a
+        # PickEvent, so _on_strip_click's `strip_ax.patches` gate never
+        # sees it; measured). It is the only indicator that marks the
+        # lane's whole width, and together with the bold tick label it is
+        # visible even when the active lane holds nothing in this window,
+        # which is when the user most needs to know where an Add would go.
+        if _K > 1 and _active_row is not None:
+            from chronotagger.core.lanes import lane_band
+            _rlo, _rhi = lane_band(_active_row, _K, _pad)
+            ring = Rectangle(
+                (0.0, _rlo), 1.0, _rhi - _rlo,
+                transform=ax.transAxes,
+                facecolor="none",
+                edgecolor=_focus_color,
+                linewidth=1.6,
+                linestyle="-",
+                zorder=3.0,
+                clip_on=False,
+            )
+            ring.set_gid(strip_focus_gid())
+            ax.add_patch(ring)
+
+            # ONE legend, for the ACTIVE lane, titled with the lane's name,
+            # OUTSIDE the axes. Measured +0.90 ms and 0 strip pixels. One
+            # legend PER LANE was the alternative and it is not survivable:
+            # 13 entries at fontsize 5 want ~91 px of stacked text, which is
+            # taller than the WHOLE strip on two of his four real layouts
+            # (78.3 px and 76.3 px).
+            _act = _lanes[_active_row]
+            _handles = [Rectangle((0, 0), 1, 1,
+                                  facecolor=to_rgba(
+                                      _act.class_colors.get(c, "#cccccc"),
+                                      0.6),
+                                  edgecolor="black", linewidth=0.5)
+                        for c in _act.classes]
+            if _handles:
+                _leg = ax.legend(
+                    _handles, list(_act.classes),
+                    title=(_act.name or _act.id),
+                    loc="upper left", bbox_to_anchor=(1.002, 1.0),
+                    borderaxespad=0.0, fontsize=6, title_fontsize=7,
+                    handlelength=1.0, handleheight=0.8, labelspacing=0.25,
+                    frameon=False)
+                _leg.set_zorder(3.5)
+
+        # Strays: an interval on a track the table does not hold paints
+        # nothing and is reachable by nothing. It is not silent -- the two
+        # load paths refuse it and the export refuses it -- but a repaint
+        # is where the user is looking, so say it here too, once, and do
+        # NOT invent a grey orphan lane for it: that would change K, and K
+        # changes every band's geometry.
+        if strays and getattr(self, "status_var", None) is not None:
+            try:
+                self.status_var.set(
+                    "%d interval(s) sit on tracks this table does not hold"
+                    % (strays,))
+            except Exception:
+                pass
+
+        # Pack M2 v2 fold: THE ACTIVE LANE IS HIDDEN. DR11 keeps this case
+        # distinct on purpose and the painter must not re-point the model,
+        # but silence here is the exact shape of the bug this pack exists
+        # to remove: measured, an undo across a visibility toggle leaves
+        # `a` active and hidden (K=2, active_row None, no ring, no legend,
+        # the preview back across the whole strip), and the next Add lands
+        # on a lane the user cannot see and says "Added 1 x interval(s)".
+        # Say it, once per paint, on the ACTIVE pane only.
+        elif (_K and _active_row is None
+                and _pane is getattr(self, "active_pane", _pane)
+                and getattr(self, "status_var", None) is not None):
+            try:
+                from chronotagger.core.lanes import track_display_name
+                self.status_var.set(
+                    "the active lane '%s' is HIDDEN -- an edit would land "
+                    "where you cannot see it (Ctrl+H shows it again)"
+                    % (track_display_name(self, _lay["active_id"]),))
+            except Exception:
+                pass

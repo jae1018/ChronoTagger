@@ -161,8 +161,34 @@ class CanvasMixin:
                                "Ensure layout was created with Layout Wizard.")
 
             # height ratios
+            # Pack M2 R5: when the layout does not say, the LABELS row gets
+            # max(1.0, 0.75 * K) and every other row 1.0. Measured on the
+            # user's four real pane layouts at K=4: 44.5 / 53.0 / 57.3 /
+            # 44.5 px per lane, all clear of the 40 px target, against
+            # 19.1-28.7 px without it -- at the cost of 22-33 % of every
+            # data panel's height, which is the trade and it only happens
+            # when lanes exist. At K == 1 the rule is exactly 1.0, so a
+            # single-lane figure is byte-for-byte the one he ships today.
+            #
+            # K IS READ AT BUILD TIME. A lane added later (an
+            # add_track_from_column after the window is up) does not resize
+            # the gridspec: the figure and its axes are built once, and
+            # re-solving a constrained layout under Pack 5 R4a's freeze is
+            # not M2's business. A driver that ingests after construction
+            # should either declare the lane in `tracks=` -- which is what
+            # the M2 feel-test driver does -- or pass its own
+            # height_ratios, which always wins.
             if height_ratios is None:
                 hrs = [1.0] * nrows
+                try:
+                    from chronotagger.core.lanes import labels_row_height
+                    _lane_k = (self._visible_lane_count()
+                               if hasattr(self, "_visible_lane_count") else 1)
+                    _lrow = int(labels_area.get("row", nrows - 1))
+                    if 0 <= _lrow < nrows:
+                        hrs[_lrow] = labels_row_height(_lane_k)
+                except Exception:
+                    hrs = [1.0] * nrows
             else:
                 if len(height_ratios) != nrows:
                     raise ValueError("layout_spec.height_ratios must have length == nrows")

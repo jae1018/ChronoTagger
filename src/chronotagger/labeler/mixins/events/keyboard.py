@@ -92,6 +92,27 @@ class KeyboardEventsMixin:
                 return
         # -----------------------------------------------------------------------
 
+        # ---- Pack M2: the lane keys ------------------------------------------
+        # Ctrl+Down / Ctrl+Up cycle the ACTIVE lane; Ctrl+L locks or unlocks
+        # it; Ctrl+H hides or shows it. All four are Control-modified ON
+        # PURPOSE: the focus-aware exit six lines above returns for any
+        # UNMODIFIED key while an editable widget has focus, and the class
+        # dropdown IS one (a TCombobox), so `l`, `h` and `v` are swallowed
+        # the moment the user has clicked it once. Measured free in all
+        # five modifier states, and no Tk-level bind on root collides
+        # (Ctrl+digit and Ctrl+Tab are the pane tabs). Ctrl+Up/Ctrl+Down
+        # are also ELAN's own lane bindings.
+        if key in ("Down", "Up") and (event.state & 0x4):
+            self._cycle_active_lane(1 if key == "Down" else -1)
+            return
+        if key in ("l", "L") and (event.state & 0x4):
+            self._toggle_active_lane_locked()
+            return
+        if key in ("h", "H") and (event.state & 0x4):
+            self._toggle_active_lane_visible()
+            return
+        # -----------------------------------------------------------------------
+
         # Class selection with digits 1..9
         if key.isdigit() and int(key) > 0:
             idx = int(key) - 1

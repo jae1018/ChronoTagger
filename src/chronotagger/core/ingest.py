@@ -246,11 +246,18 @@ def intervals_from_column(
             and n_splits > max_split_fraction * len(runs)):
         raise ValueError(
             "the gap tolerance %s would split %d of %d runs (%.1f %%), "
-            "which is more than the %.0f %% this ingest accepts. That is "
-            "the signature of a tolerance BELOW one of the record's own "
-            "cadence modes, not of real data gaps: pass an explicit "
-            "gap_tolerance (try a larger one) or check the frame's dt "
-            "distribution."
+            "which is more than the %.0f %% this ingest accepts. TWO things "
+            "look like this and the fix is different for each. (1) The "
+            "tolerance is BELOW one of the record's own cadence modes, so "
+            "every mode change cuts a run -- check the frame's dt "
+            "distribution. (2) The RECORD IS HOLEY: the tolerance is right "
+            "and the data really does stop and start, in which case a run "
+            "SHOULD be cut and the refusal is the guard being too strict "
+            "for this frame. Measured on the user's own C05 frame: 31 real "
+            "gaps above 15 min, 27 of them inside a run, and every "
+            "tolerance from 5 min to 45 min is refused while 1h is "
+            "accepted. Either way the answer is an explicit, LARGER "
+            "gap_tolerance."
             % (tol, n_splits, len(runs),
                100.0 * n_splits / len(runs), 100.0 * max_split_fraction))
 

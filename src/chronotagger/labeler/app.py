@@ -51,6 +51,7 @@ from .mixins.intervals import IntervalsMixin
 from .mixins.stats import StatsMixin
 from .mixins.io_export import IOExportMixin
 from .mixins.labels import LabelsMixin
+from .mixins.lane_controls import LaneControlMixin
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ class TimeIntervalLabeler(
     ZoomMixin,
     IntervalsMixin,
     LabelsMixin,
+    LaneControlMixin,
     StatsMixin,
     IOExportMixin,
 ):

@@ -66,9 +66,39 @@ class StripInteractionMixin:
 
         trans = blended_transform_factory(ax.transData, ax.transAxes)
 
+        # Pack M2: the pool's rectangles are built on the ACTIVE LANE's
+        # band, not on the whole strip. This pool is NOT reachable from the
+        # painter -- measured: after the painter had followed the active
+        # lane at every K, these rectangles were still `xy=(0, 0.05)
+        # height=0.9000`, full-strip -- so it has to ask for the band
+        # itself. At K == 1 `active_band` returns (0.05, 0.9), the two
+        # constants this file used to carry.
+        from chronotagger.core.lanes import (active_band,
+                                             strip_preview_gid)
+        _band_y, _band_h = active_band(self)
+
+        # Pack M2, and this one is a PRE-EXISTING DEFECT this pack is
+        # obliged to fix because it makes the four ops above invisible.
+        # `_update_strip` calls `ax.clear()`, which DETACHES every pooled
+        # rectangle (`r.axes` becomes None and it leaves `ax.patches`), and
+        # nothing ever re-adds it. BlitHelper.draw groups its artists BY
+        # `a.axes`, so from the first repaint onwards it draws NOTHING and
+        # the drag preview is invisible -- measured on `ded305a` itself:
+        # `after a repaint: r.axes is None, in ax.patches: False`, and the
+        # "blit" then costs 0.008 ms because it does nothing at all.
+        # DROP anything the clear took, and let the loop below build it
+        # again against the CURRENT axes. Re-adding the old object would
+        # also work today and is NOT what this does: the rectangle carries a
+        # blended transform built from the axes it was created on, and a
+        # rebuild cannot be wrong about that. (Measured: the blit costs the
+        # same either way -- what it buys is that it draws at all.)
+        pane._strip_preview_pool = [
+            _r for _r in pane._strip_preview_pool
+            if getattr(_r, "axes", None) is ax]
+
         while len(pane._strip_preview_pool) < needed:
             r = mpatches.Rectangle(
-                (0, 0), 0, 0.9,
+                (0, _band_y), 0, _band_h,
                 transform=trans,
                 facecolor="yellow",
                 edgecolor="orange",
@@ -77,6 +107,7 @@ class StripInteractionMixin:
                 linestyle="--",
                 visible=False,
             )
+            r.set_gid(strip_preview_gid())
             r.set_animated(True)
             ax.add_patch(r)
             pane._strip_preview_pool.append(r)
@@ -94,11 +125,26 @@ class StripInteractionMixin:
         Uses active pane's canvas for multi-pane support.
         """
         pool = self._ensure_strip_preview_pool(len(spans_float))
+        # Pack M2: the band is computed LIVE on every frame, because the
+        # pool is built once and the active lane moves -- and because a
+        # cached band is a STALE band after any lane switch that does not
+        # repaint. Measured: the live call is 0.0023 ms against a 1.78 ms
+        # blit, and everything this pack adds to the drag frame totals
+        # 0.013 ms, so there is nothing to cache away.
+        from chronotagger.core.lanes import active_band
+        band_y, band_h = active_band(self)
         artists = []
         for i, (x0, x1) in enumerate(spans_float):
             r = pool[i]
             left = min(x0, x1); width = max(abs(x1 - x0), 0.0)
-            r.set_xy((left, 0.05))
+            r.set_xy((left, band_y))
+            if r.get_height() != band_h:
+                # Only when it MOVED. Measured: an unconditional
+                # set_height() on every motion event cost +1.2 ms on a
+                # 1.68 ms blit -- the height only changes when the active
+                # lane does, which is once per lane switch, not once per
+                # frame.
+                r.set_height(band_h)
             r.set_width(width)
             if not r.get_visible():
                 r.set_visible(True)

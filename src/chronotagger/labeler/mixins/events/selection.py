@@ -375,13 +375,18 @@ class SelectionMixin:
         if pane is not self.active_pane:
             return
 
-        # The artist is only a GATE ("was the click on a band at all?") --
-        # the interval is re-derived from the mouse x below, so which
-        # artist was hit is never used. Pack 5 R14 draws the strip's bands
-        # as ONE PolyCollection, so the gate accepts collections too.
-        if (event.artist not in pane.strip_ax.patches  # type: ignore[union-attr]
-                and event.artist not in pane.strip_ax.collections):  # type: ignore[union-attr]
-            return
+        # Pack M2. The artist is a GATE and it is now gated on the GID the
+        # painter sets, not on artist identity: a handler that compared
+        # `event.artist is ax.collections[0]` was measured rejecting every
+        # pick, because THIS method calls _update_strip() a few lines below
+        # and the collection it compared against had already been replaced.
+        # Gate on the gid, and READ event.ind BEFORE any repaint.
+        from chronotagger.core.lanes import strip_band_gid
+        if getattr(event.artist, "get_gid", None) is None or \
+                event.artist.get_gid() != strip_band_gid():
+            if (event.artist not in pane.strip_ax.patches  # type: ignore[union-attr]
+                    and event.artist not in pane.strip_ax.collections):  # type: ignore[union-attr]
+                return
         if event.mouseevent.xdata is None:
             return
         dt = mdates.num2date(event.mouseevent.xdata)
@@ -389,7 +394,19 @@ class SelectionMixin:
             dt = dt.replace(tzinfo=None)
         click_ts = pd.Timestamp(dt)
 
-        for iv in self.intervals:
+        # Pack M2. THE LANE IS PART OF THE ANSWER. Before this pack the
+        # loop below scanned every interval the session held and selected
+        # the first one whose span contained the click -- with no lane
+        # filter and no track filter at all -- so a click on the strip
+        # could select an interval on a lane the painter deliberately does
+        # not draw. MEASURED on the post-M1 tree with two tracks: one real
+        # press selected ('agent', '2') while the only band visible at that
+        # x belonged to `region`, and the resize handles answered at every
+        # y from 0.02 to 0.98. The candidates come from the face the pick
+        # actually hit (event.ind), which cannot name a hidden lane because
+        # a hidden lane has no face, and clicking an UNLOCKED lane also
+        # makes it active so the next Add lands where the user is looking.
+        for iv in self._strip_click_candidates(event, pane, click_ts):
             if iv.contains(click_ts):
                 # Check if this is the already selected interval - if so, deselect it
                 if hasattr(self, 'selected_interval') and self.selected_interval is iv:

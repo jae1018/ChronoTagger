@@ -110,6 +110,15 @@ class EventsBaseMixin:
             messagebox.showerror("Invalid Time Format", f"Could not parse time: {e}")
 
     def _on_interval_tree_select(self, _event) -> None:
+        # Pack M2 DR6. The refill RE-ASSERTS the selection on the row whose
+        # iid still carries the selected interval, and a programmatic
+        # `selection_set` fires this same virtual event -- which would walk
+        # straight into the deselect branch below ("this is the already
+        # selected interval, so toggle it off") and silently drop the
+        # selection the refill was trying to keep. The flag is set only
+        # around that one call in _update_intervals_list.
+        if getattr(self, "_suppress_tree_select", False):
+            return
         sel = self.intervals_tree.selection()  # type: ignore[union-attr]
         if not sel:
             self.selected_interval = None

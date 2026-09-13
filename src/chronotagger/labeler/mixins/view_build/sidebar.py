@@ -115,8 +115,13 @@ class SidebarMixin:
         frame = ttk.LabelFrame(parent, text="Labeled Intervals", padding=5)
         frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
 
-        # Treeview for intervals
-        columns = ("Start", "End", "Label", "Duration")
+        # Treeview for intervals.
+        # Pack M2: a Lane column, LAST, because the three columns before it
+        # are the ones the user reads every second and their widths are
+        # muscle memory. Measured on this widget: the extra column costs
+        # +0.7 ms at 2,000 rows and +24 ms at 8,000 (+10 %), which the
+        # active-lane filter beside it returns many times over.
+        columns = ("Start", "End", "Label", "Duration", "Lane")
         self.intervals_tree = ttk.Treeview(
             frame, columns=columns, show="tree headings", height=15
         )
@@ -128,6 +133,7 @@ class SidebarMixin:
         self.intervals_tree.column("End", width=80)
         self.intervals_tree.column("Label", width=90)
         self.intervals_tree.column("Duration", width=70)
+        self.intervals_tree.column("Lane", width=80)
 
         sb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.intervals_tree.yview)
         self.intervals_tree.configure(yscrollcommand=sb.set)
@@ -141,6 +147,44 @@ class SidebarMixin:
         stats.pack(fill=tk.X, pady=5)
         self.stats_text = tk.Text(stats, height=8, width=30, state="disabled")
         self.stats_text.pack(fill=tk.BOTH, expand=True)
+
+        # ---- Pack M2: the LANE block -----------------------------------
+        # The keys (Ctrl+Up / Ctrl+Down) are the speed; this is the
+        # DISCOVERABILITY -- nothing else on screen says a lane switch is
+        # possible. Every widget here writes through one setter
+        # (_set_active_track), which is also where the class dropdown is
+        # re-pointed at the new lane's vocabulary.
+        #
+        # The list carries EVERY lane, hidden ones included and marked,
+        # because picking a hidden lane is the only way back to one.
+        lanes = ttk.LabelFrame(parent, text="Lane", padding=5)
+        lanes.pack(fill=tk.X, pady=5)
+        lane_row = ttk.Frame(lanes)
+        lane_row.pack(anchor=tk.W, fill=tk.X)
+        self.lane_var = tk.StringVar(value="")
+        self.lane_combo = ttk.Combobox(
+            lane_row, textvariable=self.lane_var,
+            values=[], state="readonly", width=18,
+        )
+        self.lane_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.lane_combo.bind("<<ComboboxSelected>>",
+                             self._on_lane_combo_change)
+        flags_row = ttk.Frame(lanes)
+        flags_row.pack(anchor=tk.W, fill=tk.X, pady=(3, 0))
+        self.lane_visible_var = tk.BooleanVar(value=True)
+        self.lane_visible_btn = ttk.Checkbutton(
+            flags_row, text="visible", variable=self.lane_visible_var,
+            command=self._toggle_active_lane_visible,
+        )
+        self.lane_visible_btn.pack(side=tk.LEFT)
+        self.lane_locked_var = tk.BooleanVar(value=False)
+        self.lane_locked_btn = ttk.Checkbutton(
+            flags_row, text="locked", variable=self.lane_locked_var,
+            command=self._toggle_active_lane_locked,
+        )
+        self.lane_locked_btn.pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(lanes, text="Ctrl+Up / Ctrl+Down switch lanes",
+                  foreground="#666666").pack(anchor=tk.W, pady=(3, 0))
 
         # Options
         opts = ttk.LabelFrame(parent, text="Options", padding=5)
@@ -171,6 +215,31 @@ class SidebarMixin:
             command=self._on_interval_scope_change,
         )
         self.interval_scope_window_btn.pack(side=tk.LEFT, padx=(4, 0))
+
+        # ---- Pack M2: the interval list's LANE scope -------------------
+        # DEFAULT IS "active": with four lanes and 8,000 intervals held,
+        # the unfiltered list costs 230.8 ms per refill and shows 8,000
+        # rows of four different vocabularies; filtered to the active lane
+        # it is 60.6 ms and 2,000 rows -- the cost the one-lane list has
+        # today. "all" is one click away and is what a cross-lane
+        # comparison wants. With ONE lane the two settings are the same
+        # list, so nothing changes for a single-track session.
+        track_row = ttk.Frame(opts)
+        track_row.pack(anchor=tk.W, fill=tk.X)
+        ttk.Label(track_row, text="Lanes:").pack(side=tk.LEFT)
+        self.interval_track_scope_var = tk.StringVar(value="active")
+        self.interval_track_active_btn = ttk.Radiobutton(
+            track_row, text="active", value="active",
+            variable=self.interval_track_scope_var,
+            command=self._on_interval_track_scope_change,
+        )
+        self.interval_track_active_btn.pack(side=tk.LEFT, padx=(4, 0))
+        self.interval_track_all_btn = ttk.Radiobutton(
+            track_row, text="all", value="all",
+            variable=self.interval_track_scope_var,
+            command=self._on_interval_track_scope_change,
+        )
+        self.interval_track_all_btn.pack(side=tk.LEFT, padx=(4, 0))
 
         self.snap_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(opts, text="Snap to samples", variable=self.snap_var).pack(anchor=tk.W)
