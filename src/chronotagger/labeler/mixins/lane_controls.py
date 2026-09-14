@@ -173,11 +173,23 @@ class LaneControlMixin:
         if tid is None:
             return
         row = find_track(table_of(self), tid)
+        unhid = False
         if row is not None and not getattr(row, "visible", True):
             row.visible = True
+            unhid = True
             set_status(self, "lane '%s' is visible again"
                        % (row.name or row.id,))
-        self._set_active_track(tid)
+        moved = self._set_active_track(tid)
+        # Pack M2.5: REPAINT ON THE VISIBILITY CHANGE TOO. The setter
+        # repaints only when the active id actually moved, so picking the
+        # lane that is ALREADY active while it is HIDDEN -- the state Pack
+        # M2's SECTION 0e item 10 says an Undo can restore -- flipped the
+        # model flag, said "Active lane: ...", and left every pane painting
+        # K-1 lanes until something unrelated redrew. Measured by the
+        # post-implementation interaction refuter: visible True, K stuck at
+        # [2, 2, 2] on all three panes.
+        if unhid and not moved:
+            self._update_plot()
 
     def _refresh_lane_controls(self) -> None:
         """Make the sidebar's lane widgets agree with the table.

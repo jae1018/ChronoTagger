@@ -161,7 +161,16 @@ class SidebarMixin:
         lanes.pack(fill=tk.X, pady=5)
         lane_row = ttk.Frame(lanes)
         lane_row.pack(anchor=tk.W, fill=tk.X)
-        self.lane_var = tk.StringVar(value="")
+        # Pack M2.5, the belt to the double build's braces: EVERY Tk
+        # variable in this sidebar names its master, the way controls.py's
+        # current_class_var always did. A variable built with no master binds
+        # to tk._default_root -- the FIRST Tk root the process ever made,
+        # which is not necessarily the window these widgets are children of
+        # (a wizard-launched labeler, or the double build _build_gui now
+        # refuses). Measured on the committed Pack M2 tree: nine variables in
+        # the wrong interpreter, and a Lane dropdown that drew empty because
+        # its own textvariable did not exist in its widget's interpreter.
+        self.lane_var = tk.StringVar(master=self.root, value="")
         self.lane_combo = ttk.Combobox(
             lane_row, textvariable=self.lane_var,
             values=[], state="readonly", width=18,
@@ -171,13 +180,13 @@ class SidebarMixin:
                              self._on_lane_combo_change)
         flags_row = ttk.Frame(lanes)
         flags_row.pack(anchor=tk.W, fill=tk.X, pady=(3, 0))
-        self.lane_visible_var = tk.BooleanVar(value=True)
+        self.lane_visible_var = tk.BooleanVar(master=self.root, value=True)
         self.lane_visible_btn = ttk.Checkbutton(
             flags_row, text="visible", variable=self.lane_visible_var,
             command=self._toggle_active_lane_visible,
         )
         self.lane_visible_btn.pack(side=tk.LEFT)
-        self.lane_locked_var = tk.BooleanVar(value=False)
+        self.lane_locked_var = tk.BooleanVar(master=self.root, value=False)
         self.lane_locked_btn = ttk.Checkbutton(
             flags_row, text="locked", variable=self.lane_locked_var,
             command=self._toggle_active_lane_locked,
@@ -202,7 +211,7 @@ class SidebarMixin:
         scope_row = ttk.Frame(opts)
         scope_row.pack(anchor=tk.W, fill=tk.X)
         ttk.Label(scope_row, text="Show:").pack(side=tk.LEFT)
-        self.interval_scope_var = tk.StringVar(value="all")
+        self.interval_scope_var = tk.StringVar(master=self.root, value="all")
         self.interval_scope_all_btn = ttk.Radiobutton(
             scope_row, text="all", value="all",
             variable=self.interval_scope_var,
@@ -227,7 +236,7 @@ class SidebarMixin:
         track_row = ttk.Frame(opts)
         track_row.pack(anchor=tk.W, fill=tk.X)
         ttk.Label(track_row, text="Lanes:").pack(side=tk.LEFT)
-        self.interval_track_scope_var = tk.StringVar(value="active")
+        self.interval_track_scope_var = tk.StringVar(master=self.root, value="active")
         self.interval_track_active_btn = ttk.Radiobutton(
             track_row, text="active", value="active",
             variable=self.interval_track_scope_var,
@@ -241,24 +250,24 @@ class SidebarMixin:
         )
         self.interval_track_all_btn.pack(side=tk.LEFT, padx=(4, 0))
 
-        self.snap_var = tk.BooleanVar(value=False)
+        self.snap_var = tk.BooleanVar(master=self.root, value=False)
         ttk.Checkbutton(opts, text="Snap to samples", variable=self.snap_var).pack(anchor=tk.W)
 
         # Overlay toggle
-        self.overlays_var = tk.BooleanVar(value=True)
+        self.overlays_var = tk.BooleanVar(master=self.root, value=True)
         ttk.Checkbutton(
             opts, text="Show interval overlays on panels", variable=self.overlays_var
         ).pack(anchor=tk.W)
 
         # Point highlighting toggle (performance optimization)
-        self.highlight_points_var = tk.BooleanVar(value=True)
+        self.highlight_points_var = tk.BooleanVar(master=self.root, value=True)
         ttk.Checkbutton(
             opts, text="Highlight Points", variable=self.highlight_points_var,
             command=self._on_highlight_points_toggle
         ).pack(anchor=tk.W)
 
         # Status
-        self.status_var = tk.StringVar(value="Ready")
+        self.status_var = tk.StringVar(master=self.root, value="Ready")
         ttk.Label(parent, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(
             side=tk.BOTTOM, fill=tk.X
         )

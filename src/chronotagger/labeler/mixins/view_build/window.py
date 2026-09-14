@@ -102,6 +102,30 @@ class WindowMixin:
     """
 
     def _build_gui(self) -> None:
+        # Pack M2.5: BUILD ONCE. `run()` calls this method as its first act,
+        # and every driver in test_drivers/ builds the window itself first so
+        # it can ingest a lane and choose the opening window before the
+        # mainloop starts -- so on the real launch path this ran TWICE and the
+        # process ended up with two tk.Tk() interpreters. Tk keeps
+        # `tk._default_root` pointing at the FIRST one for the life of the
+        # process, and every Tk variable built without an explicit master
+        # binds to `_default_root`, so nine of the app's ten variables and
+        # every dialog's own StringVar landed in an interpreter the visible
+        # widgets are not in: a blank Lane dropdown, Overlap Detected radios
+        # whose Confirm never enabled, Label by Rule radios that never
+        # selected, and the Save Changes? box behind the window. Returning
+        # here keeps run() safe to call after a manual build, which is what
+        # the drivers want -- run() is also what offers autosave recovery.
+        # winfo_exists() is asked inside try/except because a DESTROYED root
+        # raises instead of answering False, and a destroyed window must
+        # still be rebuildable.
+        _root = getattr(self, "root", None)
+        if _root is not None:
+            try:
+                if _root.winfo_exists():
+                    return
+            except Exception:
+                pass
         # Mount as Toplevel under an existing Tk root when one is provided
         # (e.g. when launched from the quick-start wizard).  This keeps the
         # process to a single tk.Tk root, which is required for tk.StringVar

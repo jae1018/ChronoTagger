@@ -850,6 +850,21 @@ class PlottingMixin:
         _pane._strip_pad_frac = _pad
         _pane._strip_lane_ids = [t.id for t in _lanes]
         _pane._strip_active_row = _active_row
+        # Pack M2.1: the lane names and the active lane's legend are
+        # artists the constrained-layout solver had never seen when this
+        # figure's geometry was frozen after its first draw (Pack 5 R4a),
+        # so on a layout with a narrow margin they fall off the figure --
+        # measured on the C05 feel-test driver: 43-62 px of every lane
+        # name and 78 % of the legend invisible on the Context tab. Ask
+        # for ONE more solve whenever the thing the solver must make room
+        # for changes (the lane count, the lane set, or the active lane,
+        # whose legend is the widest artist), and only above one lane, so
+        # a single-lane figure keeps its byte-identical geometry. The
+        # draw at the end of _update_plot re-solves and refreezes.
+        _sig = (_K, tuple(t.id for t in _lanes), self.active_track_id)
+        if _K > 1 and getattr(_pane, "_strip_layout_sig", None) != _sig:
+            self._invalidate_layout_freeze(_pane)
+        _pane._strip_layout_sig = _sig
         # The active lane's PREVIEW band. The two painted preview
         # rectangles below read it, so one paint asks for it once. The DRAG
         # path deliberately does NOT read it and computes its own: a cached

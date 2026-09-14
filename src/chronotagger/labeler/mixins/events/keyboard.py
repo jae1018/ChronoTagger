@@ -113,8 +113,21 @@ class KeyboardEventsMixin:
             return
         # -----------------------------------------------------------------------
 
+        # Pack M2.5: EVERY PLAIN SHORTCUT BELOW IS DEAD WHILE CONTROL IS
+        # HELD. The focus-aware exit above returns only for an UNMODIFIED
+        # key, so Ctrl+A in the Start box selected the text (Tk's own
+        # <<SelectAll>> on Windows) AND fired Add, which popped a "No
+        # Selection" modal over the user's hands -- found in the live window,
+        # twice. The same collision was live for Ctrl+D (delete the selected
+        # interval), Ctrl+N / Ctrl+P and Ctrl+Left / Ctrl+Right (the window
+        # navigation), Ctrl+U (set UNKNOWN) and Ctrl+1..9, which ALSO switch
+        # pane tabs at the Tk level, so one keystroke changed the tab and the
+        # class. The Control-DEFINED shortcuts are untouched: Ctrl+Up,
+        # Ctrl+Down, Ctrl+L, Ctrl+H, Ctrl+S, Ctrl+E, Ctrl+Z, Ctrl+Y.
+        plain = not (event.state & 0x4)   # 0x4 => Control modifier
+
         # Class selection with digits 1..9
-        if key.isdigit() and int(key) > 0:
+        if key.isdigit() and int(key) > 0 and plain:
             idx = int(key) - 1
             if idx < len(self.classes):
                 self.current_class_var.set(self.classes[idx])  # type: ignore[union-attr]
@@ -122,21 +135,21 @@ class KeyboardEventsMixin:
             return
 
         # Navigation
-        if key in ("n", "N", "Right"):
+        if key in ("n", "N", "Right") and plain:
             self._next_window()
             return
-        if key in ("p", "P", "Left"):
+        if key in ("p", "P", "Left") and plain:
             self._prev_window()
             return
 
         # Actions
-        if key in ("a", "A", "Return"):
+        if key in ("a", "A", "Return") and plain:
             self._add_interval()
             return
-        if key in ("d", "D", "Delete"):
+        if key in ("d", "D", "Delete") and plain:
             self._delete_interval()
             return
-        if key in ("u", "U"):
+        if key in ("u", "U") and plain:
             if "UNKNOWN" in self.classes:
                 self.current_class_var.set("UNKNOWN")  # type: ignore[union-attr]
                 self.status_var.set("Selected class: UNKNOWN")  # type: ignore[union-attr]
@@ -150,11 +163,20 @@ class KeyboardEventsMixin:
             self._export_intervals()
             return
 
-        # Undo / Redo (Ctrl+Z / Ctrl+Y) + Backspace ergonomics
-        if (key == "z" and (event.state & 0x4)) or key == "BackSpace":
+        # Undo / Redo (Ctrl+Z / Ctrl+Y) + Backspace ergonomics.
+        # Pack M2.5: plain BackSpace still undoes; Ctrl+BackSpace does not.
+        # Ctrl+BackSpace is "delete the previous word" in every text box on
+        # this platform, and in the Start / End boxes it used to undo the
+        # user's last data edit instead. THE REDO BRANCH NEEDS THE SAME
+        # GUARD: BackSpace reaches it whenever Shift is held, so guarding
+        # only the branch above moved Ctrl+Shift+BackSpace from UNDO to
+        # REDO instead of silencing it -- measured, and still a data
+        # command fired from inside a text box. Shift+BackSpace on its own
+        # still reaches Undo, as it has since long before Pack M2 (DR14).
+        if (key == "z" and (event.state & 0x4)) or (key == "BackSpace" and plain):
             self._undo()
             return
-        if (key == "y" and (event.state & 0x4)) or (key == "BackSpace" and (event.state & 0x1)):
+        if (key == "y" and (event.state & 0x4)) or (key == "BackSpace" and plain and (event.state & 0x1)):
             self._redo()
             return
 

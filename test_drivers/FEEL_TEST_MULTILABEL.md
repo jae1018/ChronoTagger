@@ -81,7 +81,8 @@ pre-existing trap in the key handler and this pack does not change it.
 
 ## DRAWING ON EACH LANE
 
-1. **Region.** Drag on a data panel or two-click on the strip, pick
+1. **Region.** Drag on a data panel or two-click on a data panel; the
+   strip is for selecting and dragging existing intervals. Pick
    `solar_wind`, press Add (or `a`). The band lands in lane 1. Measured:
    `Added 1 solar_wind interval(s)`.
 2. **Wake.** `Ctrl+Down` to `Wake (umbra)`. Draw a short interval INSIDE

@@ -357,12 +357,10 @@ def test_relabel_and_delete_judge_the_intervals_OWN_lane(app,
     assert _dialog_counter == []
 
 
-def test_a_drag_on_a_locked_lane_never_starts(app):
+def _locked_band_press(app):
+    """The event a plain left click INSIDE the locked agent band produces."""
     from matplotlib.backend_bases import MouseEvent
     from chronotagger.core.lanes import lane_band, pad_for
-    app.intervals[:] = agent_ivs()
-    app.selected_interval = app.intervals[1]
-    app._update_plot()
     ax = app.active_pane.strip_ax
     bb = ax.get_window_extent()
     iv = app.selected_interval
@@ -375,9 +373,104 @@ def test_a_drag_on_a_locked_lane_never_starts(app):
                     int(round(bb.x0 + xf * bb.width)),
                     int(round(bb.y0 + 0.5 * (lo + hi) * bb.height)),
                     button=1)
+    ev.inaxes = ax
+    return ev
+
+
+def _locked_setup(app):
+    app.intervals[:] = agent_ivs()
+    app.selected_interval = app.intervals[1]
+    app._update_plot()
+    return _locked_band_press(app)
+
+
+def test_a_drag_on_a_locked_lane_never_starts(app):
+    """AMENDED by Pack M2.5: the press no longer writes the refusal.
+
+    _drag_mode is still never set -- that is the whole contract -- but the
+    sentence the user reads after a plain press is now the confirmation of
+    the selection, with the lock named. The refusal arrives on MOTION; the
+    two pins below cover both halves.
+    """
+    ev = _locked_setup(app)
     app._drag_mode = None
     app._on_strip_press(ev, app.active_pane)
     assert app._drag_mode is None
+    assert "lane locked (Ctrl+L to unlock)" in app.status_var.get()
+    assert "drag refused" not in app.status_var.get()
+
+
+def test_a_press_on_a_locked_band_confirms_the_selection(app,
+                                                         _dialog_counter):
+    """Pack M2.5 item 8: press only, no motion. The user reads what they
+    selected AND that the lane is locked, in one line, with no dialog."""
+    ev = _locked_setup(app)
+    iv = app.selected_interval
+    app._on_strip_press(ev, app.active_pane)
+    want = ("Selected: %s [%s -> %s] -- lane locked (Ctrl+L to unlock)"
+            % (iv.label, iv.start.strftime("%H:%M:%S"),
+               iv.end.strftime("%H:%M:%S")))
+    assert app.status_var.get() == want
+    assert app.selected_interval is iv
+    assert app._drag_mode is None
+    assert _dialog_counter == []
+
+
+def test_the_drag_refusal_arrives_on_MOTION_and_only_once(app,
+                                                          _dialog_counter):
+    """Pack M2.5 item 8: the existing sentence, on the gesture it is about.
+
+    One press then one motion with the button still held writes the drag
+    refusal exactly once; a second motion writes nothing more.
+    """
+    ev = _locked_setup(app)
+    app._on_strip_press(ev, app.active_pane)
+    assert app._lock_refusal_owed is app.selected_interval
+    app._on_strip_motion(ev, app.active_pane)
+    assert app.status_var.get() == ("track 'Agent (C-MMAE)' is locked "
+                                    "(press Ctrl+L to unlock) -- drag "
+                                    "refused")
+    assert app._lock_refusal_owed is None
+    assert app._drag_mode is None
+    app.status_var.set("SENTINEL")
+    app._on_strip_motion(ev, app.active_pane)
+    assert app.status_var.get() == "SENTINEL"
+    assert _dialog_counter == []
+
+
+def test_a_press_and_release_with_no_motion_never_refuses(app):
+    """The release clears what the press owed, so a later hover over the
+    same band is a hover and not a refusal."""
+    ev = _locked_setup(app)
+    app._on_strip_press(ev, app.active_pane)
+    app._on_strip_release(ev, app.active_pane)
+    assert app._lock_refusal_owed is None
+    app.status_var.set("SENTINEL")
+    app._on_strip_motion(ev, app.active_pane)
+    assert app.status_var.get() == "SENTINEL"
+
+
+def test_a_motion_that_has_left_the_band_does_not_spend_the_refusal(app):
+    """DR7's second condition, pinned.
+
+    `mode is not None` is the "still on that band" test: a motion above the
+    top band after a press on the locked band leaves the refusal OWED and
+    the status bar untouched, so the sentence still arrives on the gesture
+    it is about.
+    """
+    ev = _locked_setup(app)
+    app._on_strip_press(ev, app.active_pane)
+    owed = app._lock_refusal_owed
+    assert owed is app.selected_interval
+    off = _locked_band_press(app)
+    bb = app.active_pane.strip_ax.get_window_extent()
+    off.y = int(round(bb.y0 + 0.999 * bb.height))
+    assert app._hit_test_selected(off) is None
+    app.status_var.set("SENTINEL")
+    app._on_strip_motion(off, app.active_pane)
+    assert app.status_var.get() == "SENTINEL"
+    assert app._lock_refusal_owed is owed
+    app._on_strip_motion(ev, app.active_pane)
     assert "drag refused" in app.status_var.get()
 
 

@@ -117,6 +117,15 @@ WINDOW = pd.Timedelta("6h")
 STEP = pd.Timedelta("3h")
 OPEN_AT = pd.Timestamp("2020-09-02 06:00:00")
 
+# OPEN ON A CLASS THAT HAS A COLOUR (Pack M2.5). The class dropdown opens on
+# the active lane's FIRST class, and `region`'s first class is UNKNOWN, whose
+# colour is grey #7f7f7f -- so the ACTIVE lane's bold name and its focus ring
+# came up PALER than the two inactive names (#555555) and only the bold
+# weight told you where you were. `solar_wind` is the first real class and
+# its #4e79a7 blue reads at a glance. The lane's own class list is NOT
+# changed: UNKNOWN is still in it, one keystroke (`u`) away.
+OPEN_CLASS = "solar_wind"
+
 PANES = [
     {"title": "Ion Spectra C0-C30", "plot_fn": C05.plot_fn_1,
      "layout_spec": C05.LAYOUT_1},
@@ -169,7 +178,24 @@ def build(run=True):
     # Open where the bands are.
     app.t0 = OPEN_AT
     app.t1 = OPEN_AT + WINDOW
-    app._update_plot()
+    app.current_class_var.set(OPEN_CLASS)
+    # Pack M2.5: _sync_entries_and_plot, NOT _update_plot. The Start and End
+    # boxes are written by the navigation mixin and by nothing else, so
+    # setting t0/t1 by hand and repainting left the two boxes reading the
+    # START OF THE RECORD (2020-09-01 00:00:38) while the strip showed
+    # 2020-09-02 06:00 -- measured in the live window, and the first thing a
+    # live tester noticed. This is the one call that writes the boxes, the
+    # plot and the status line together.
+    #
+    # And then FLUSH. _sync_entries_and_plot asks for a COALESCED redraw
+    # (Pack 5 R4d), which a real Tk root defers to its idle queue -- and this
+    # driver is also run headless with run=False, where no mainloop ever
+    # services that queue, so without the flush every headless consumer
+    # (the pins, the button sweep, the screenshot probes) would measure the
+    # figure at the record start. The live path is unaffected: the flush
+    # renders the same frame the idle callback would have.
+    app._sync_entries_and_plot()
+    app._flush_pending_redraw()
 
     if run:
         app.run()

@@ -419,10 +419,28 @@ class MouseEventsMixin:
         # _drag_mode is set, so no motion event can start a preview on a
         # locked lane and no release can commit a ResizeIntervalCommand.
         # The interval's OWN lane decides, not the active one.
-        from chronotagger.core.lanes import refuse_if_locked
-        if refuse_if_locked(self, self.selected_interval.track,
-                            what="drag"):
+        #
+        # Pack M2.5: A PLAIN PRESS IS NOT A DRAG. The press selects the
+        # interval, and then the hit test above answers "move" for any press
+        # INSIDE the band, so the refusal used to overwrite the
+        # "Selected: ..." line the click had just earned: on a locked lane a
+        # click was the one click in the app whose confirmation the user
+        # never saw. The refusal SENTENCE is unchanged and still belongs to
+        # the drag -- the press records that one is owed, the first MOTION
+        # with the button still held spends it once, and the release clears
+        # it. _drag_mode is still never set here, so nothing on a locked lane
+        # can move, and DR4's cursor behaviour is untouched.
+        from chronotagger.core.lanes import is_locked
+        if is_locked(self, self.selected_interval.track):
+            _iv = self.selected_interval
+            self._lock_refusal_owed = _iv
+            if self.status_var is not None:
+                self.status_var.set(
+                    "Selected: %s [%s -> %s] -- lane locked (Ctrl+L to "
+                    "unlock)" % (_iv.label, _iv.start.strftime("%H:%M:%S"),
+                                 _iv.end.strftime("%H:%M:%S")))
             return
+        self._lock_refusal_owed = None
 
         iv = self.selected_interval
         self._drag_mode = mode
@@ -459,6 +477,18 @@ class MouseEventsMixin:
                     self._set_cursor("sb_h_double_arrow")
                 else:
                     self._set_cursor(None)
+                # Pack M2.5: the drag refusal the press RECORDED, spent here.
+                # `_lock_refusal_owed` exists only between a press on a locked
+                # band and its release, so a motion that finds it set is a
+                # motion with the button still held -- which is the gesture
+                # the sentence is about. Spent ONCE, and only while the
+                # cursor is still on that band (the hit test above is
+                # lane-gated at K >= 2 and answers None off it).
+                _owed = getattr(self, "_lock_refusal_owed", None)
+                if _owed is not None and mode is not None:
+                    self._lock_refusal_owed = None
+                    from chronotagger.core.lanes import refuse_if_locked
+                    refuse_if_locked(self, _owed.track, what="drag")
             else:
                 self._set_cursor(None)
             return
@@ -495,6 +525,11 @@ class MouseEventsMixin:
         if pane is not self.active_pane:
             return
 
+        # Pack M2.5: the button is up, so no refusal is owed any more. A
+        # press on a locked band that never moved says "Selected: ..." and
+        # nothing else -- the refusal is the DRAG's sentence.
+        self._lock_refusal_owed = None
+
         if self._drag_mode is None:
             return
 
@@ -516,11 +551,20 @@ class MouseEventsMixin:
             cmd = ResizeIntervalCommand(self, self._drag_iv, s_new, e_new)
             self._execute_command(cmd)
 
-            # Reselect the interval covering the new midpoint (if any)
+            # Reselect the interval covering the new midpoint (if any) --
+            # Pack M2.2: ON THE DRAGGED INTERVAL'S OWN LANE. This was the
+            # one interval-scanning loop in the gesture layer that Pack M2
+            # left without a lane filter: with two lanes sharing a class
+            # name, a right-edge drag on lane A committed correctly but the
+            # selection landed on lane B's same-label interval when it came
+            # first in the list, the status bar reported lane B's span, and
+            # the next Delete removed lane B's interval, a hidden lane
+            # included (measured; only a lock stopped it).
             mid = s_new + (e_new - s_new) / 2
             self.selected_interval = None
             for iv in self.intervals:
-                if iv.contains(mid) and iv.label == self._drag_iv.label:
+                if iv.contains(mid) and iv.label == self._drag_iv.label \
+                        and iv.track == self._drag_iv.track:
                     self.selected_interval = iv
                     break
 
