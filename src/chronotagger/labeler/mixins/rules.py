@@ -29,7 +29,7 @@ class RulesMixin:
 
     # ---------- Public entrypoint ----------
     def _open_label_by_rule_dialog(self) -> None:
-        """Open the Label by Rule dialog and handle the result."""
+        """Open the Label by Rule dialog and COMMIT what OK accepted."""
         numeric_cols = self._rule_numeric_columns()
         dlg = LabelByRuleDialog(
             parent=self.root,                     # type: ignore[arg-type]
@@ -39,9 +39,66 @@ class RulesMixin:
         )
         self.root.wait_window(dlg)               # type: ignore[union-attr]
         if dlg.result is None:
+            # Cancel, unchanged: the dialog has already cleared the
+            # preview through its own callback, so nothing is staged and
+            # nothing is built.
             return
-        # Remember selected overlap policy; _commit_spans already prepared by preview
-        self._overlap_policy = dlg.result.overlap_policy or "skip"
+        self._commit_rule_result(dlg.result)
+
+    def _commit_rule_result(self, res) -> int:
+        """OK COMMITS. One gesture, on the active lane, with THAT policy.
+
+        Pack M2.6, and it closes three defects in one place.
+
+        WHAT IT USED TO DO. OK stored `self._overlap_policy` and
+        returned; the spans sat in `_commit_spans` until the user pressed
+        Add. `_add_interval` never reads `_overlap_policy`, so it
+        detected the same overlaps all over again and PROMPTED A SECOND
+        TIME. Measured (probe_s3_refute PART B): choose Replace in the
+        rule box, answer Skip in that second prompt, and the commit is 2
+        carved spans over 125 points where the preview showed 1 replacing
+        span over 134. Cancel in the second prompt wiped the whole
+        staging -- at scope=dataset, a 30-day rule result -- while the
+        status bar still advertised the preview. And because nothing
+        bound the staging to a LANE, staging a rule on Region, switching
+        to Wake and pressing Add put Region-carved geometry on Wake with
+        the class silently substituted and no prompt at all.
+
+        WHAT IT DOES NOW. The spans the preview computed are committed
+        here, at once, as ONE gesture, on the ACTIVE lane, with the class
+        in the dropdown, and with the policy the user picked IN THIS BOX.
+        No OverlapResolutionDialog is ever constructed for a rule commit:
+        the question it asks was answered by the radio button the user
+        already clicked. The lock is judged first, and a refusal is a
+        status line with nothing built and nothing left staged.
+
+        Returns the number of intervals added -- which is NOT len(spans),
+        because the skip policy carves. It is a method rather than the
+        tail of the opener above so a test can drive the whole commit
+        without building a Toplevel.
+        """
+        from chronotagger.core.lanes import refuse_if_locked
+        spans = list(getattr(self, "_commit_spans", []) or [])
+        policy = getattr(res, "overlap_policy", None) or "skip"
+        self._overlap_policy = policy
+        if refuse_if_locked(self, what="add"):
+            self._clear_preview_state()
+            return 0
+        if not spans:
+            self._clear_preview_state()
+            if self.status_var is not None:
+                self.status_var.set("Rule added 0 interval(s) -- nothing "
+                                    "left after the overlap policy")
+            return 0
+        label = self.current_class_var.get()   # type: ignore[union-attr]
+        n = self._add_intervals_with_policy(spans, label, policy)
+        n = int(n or 0)
+        self._clear_preview_state()
+        if self.status_var is not None:
+            self.status_var.set(
+                "Added %d %s interval(s) by rule (%s overlaps)"
+                % (n, label, policy))
+        return n
 
     # ---------- Preview plumbing ----------
     def _rule_preview_apply(self, res: LabelByRuleResult) -> tuple[int, int]:

@@ -99,9 +99,20 @@ class KeyboardEventsMixin:
         # UNMODIFIED key while an editable widget has focus, and the class
         # dropdown IS one (a TCombobox), so `l`, `h` and `v` are swallowed
         # the moment the user has clicked it once. Measured free in all
-        # five modifier states, and no Tk-level bind on root collides
-        # (Ctrl+digit and Ctrl+Tab are the pane tabs). Ctrl+Up/Ctrl+Down
-        # are also ELAN's own lane bindings.
+        # five modifier states. Ctrl+Up/Ctrl+Down are also ELAN's own lane
+        # bindings.
+        #
+        # PACK M2.6 CORRECTS WHAT THIS COMMENT USED TO CLAIM. It said "no
+        # Tk-level bind on root collides (Ctrl+digit and Ctrl+Tab are the
+        # pane tabs)", and that was the wrong question: it checked ROOT
+        # binds, and the collision is a CLASS bind. The ttk Entry class
+        # binds <Control-Key-h> to ttk::entry::Backspace, <Control-Key-d>
+        # to ttk::entry::Delete and <Control-Key-k> to "delete to end of
+        # line", none of them ending in `break` -- so Ctrl+H typed in the
+        # Start box deleted a character AND hid the lane. Those three are
+        # now overridden app-wide at build time, by
+        # `_neutralize_entry_class_keys` below, which is why Ctrl+H can
+        # go on being the hide key everywhere.
         if key in ("Down", "Up") and (event.state & 0x4):
             self._cycle_active_lane(1 if key == "Down" else -1)
             return
@@ -180,6 +191,79 @@ class KeyboardEventsMixin:
             self._redo()
             return
 
+
+    # Tk's OWN emacs keys on a ttk Entry, and the three sequences this
+    # app has to take back. Measured on this machine
+    # (probe_s3_ctrl_d_entry.txt): the bindtags on the Start / End boxes
+    # are (the widget, 'TEntry', '.', 'all'), and the TEntry CLASS binds
+    #
+    #   <Control-Key-d>   ttk::entry::Delete %W      delete the character
+    #   <Control-Key-h>   ttk::entry::Backspace %W   delete the one before
+    #   <Control-Key-k>   %W delete insert end       delete to end of line
+    #
+    # NONE of those three scripts ends in `break`, so after each of them
+    # edits the text the event carries on down the bindtags to the root's
+    # own <Key> handler as well.
+    ENTRY_CLASS_KEYS = ("<Control-Key-d>", "<Control-Key-h>",
+                        "<Control-Key-k>")
+
+    def _neutralize_entry_class_keys(self) -> None:
+        """Stop Tk's Ctrl+D / Ctrl+H / Ctrl+K editing the time boxes.
+
+        Pack M2.6. Ctrl+H in the Start box did TWO things: Tk's own class
+        binding deleted the character before the cursor, and then the
+        root handler hid the active lane. Measured end to end:
+        "2020-09-02 07:00:00" became "2020-09-02 7:00:00" AND the Region
+        lane went, with no undo entry for the hide. Ctrl+D deleted a
+        character (that is what computer-use session 3 reported as "the
+        Start box reverted to 00:00:00"), and Ctrl+K deleted to the end
+        of the line.
+
+        Each of the three is rebound APP-WIDE, on the TEntry CLASS, to a
+        Python no-op that returns None -- NOT "break". Returning None is
+        the point: Tk carries on down the bindtags to the root's <Key>
+        handler, which is the half that must keep working, because Ctrl+H
+        is the app's hide-lane key and the lane keys are Control-defined
+        precisely so they fire while a text box has focus. After this,
+        Ctrl+H hides the lane exactly ONCE and edits nothing, and Ctrl+D
+        and Ctrl+K edit nothing and do nothing at all -- Pack M2.5's
+        `plain` guard already made those two inert while Control is held.
+
+        Ctrl+A is deliberately NOT touched: it reaches the entry through
+        the virtual event <<SelectAll>> (` %W selection range 0 end `),
+        not through a Control-Key binding, and selecting all the text in
+        the box you are typing in is what the user wants. Pack M2.5
+        already stopped it from also firing Add.
+
+        Called once, from `_build_gui`. bind_class is per Tcl
+        interpreter, and since Pack M2.5 there is exactly one.
+
+        TCombobox and TSpinbox carry the SAME three scripts and are NOT
+        overridden. Measured: every editable box in this window and in
+        the By-Rule dialog is a TEntry, and both comboboxes are
+        state=readonly, which the ttk scripts decline to edit. Make one
+        editable and this method has to grow two more class names.
+        """
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        for seq in self.ENTRY_CLASS_KEYS:
+            try:
+                root.bind_class("TEntry", seq, self._entry_class_key_noop)
+            except Exception:
+                pass
+
+    def _entry_class_key_noop(self, event=None):
+        """The override itself. Does nothing, and RETURNS None.
+
+        Returning None rather than "break" is the entire contract, and it
+        is a named method rather than a lambda so a test can assert it:
+        None lets Tk keep walking the bindtags to the root's <Key>
+        handler, so Ctrl+H typed in a text box still hides the lane.
+        "break" would edit nothing AND silence the app's own key, which
+        would trade one defect for another.
+        """
+        return None
 
     def _cancel_active_selection(self) -> None:
         """

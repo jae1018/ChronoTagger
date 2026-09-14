@@ -702,14 +702,38 @@ class TimeIntervalLabeler(
                 # with; invalidate undo history/selection; validate in
                 # strict mode; mark modified. The testable core lives in
                 # IOExportMixin._apply_recovered_autosave (Pack 2 D1).
-                self._apply_recovered_autosave(autosave_data)
-                # Sync intervals across all panes
-                self.sync_manager.sync_intervals_changed()
-                # Refresh UI to show loaded intervals
-                self._update_plot()
-                if hasattr(self, '_update_intervals_list'):
-                    self._update_intervals_list()
-                self.status_var.set(f"Recovered {len(self.intervals)} intervals from autosave")
+                #
+                # Pack M2.6: A REFUSED RECOVERY IS A MESSAGE, NOT A
+                # TRACEBACK. _apply_recovered_autosave RAISES ValueError
+                # when the payload carries an interval on a track its own
+                # saved table does not hold, and nothing caught it -- so
+                # the window never opened and the user got a traceback in
+                # the terminal. That payload is exactly what the stale-id
+                # fail-open above used to write, and one driver autosave
+                # on this machine still holds one. The root fix stops NEW
+                # ones being written; this makes an OLD one survivable:
+                # say why, then carry on exactly as "start fresh" does,
+                # leaving the file untouched for a later look.
+                try:
+                    self._apply_recovered_autosave(autosave_data)
+                except ValueError as exc:
+                    from tkinter import messagebox
+                    messagebox.showerror(
+                        "Recovery Failed",
+                        "This autosave could not be recovered:\n\n%s\n\n"
+                        "Starting a fresh session instead. The autosave "
+                        "file has been left where it is." % (exc,))
+                    self.status_var.set(
+                        "Recovery failed -- starting fresh session "
+                        "(autosave not loaded)")
+                else:
+                    # Sync intervals across all panes
+                    self.sync_manager.sync_intervals_changed()
+                    # Refresh UI to show loaded intervals
+                    self._update_plot()
+                    if hasattr(self, '_update_intervals_list'):
+                        self._update_intervals_list()
+                    self.status_var.set(f"Recovered {len(self.intervals)} intervals from autosave")
 
             elif choice == 'start_fresh':
                 # Don't load autosave, keep empty intervals

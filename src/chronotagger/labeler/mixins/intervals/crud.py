@@ -87,7 +87,19 @@ class IntervalCRUDMixin:
 
             if dialog.policy is None:
                 # User canceled - clear preview
+                #
+                # Pack M2.6: AND SAY SO. Cancelling here has always
+                # cleared the whole selection -- ratified, unchanged --
+                # and it did it in SILENCE: the status bar kept the
+                # PREVIOUS line, which on the feel-test session was
+                # "Added 1 umbra interval(s)", so a cancelled Add looked
+                # exactly like a successful one. The sentence is written
+                # AFTER _clear_preview_state, because that call repaints
+                # and the repaint would otherwise be the last thing to
+                # touch the bar.
                 self._clear_preview_state()
+                if getattr(self, "status_var", None) is not None:
+                    self.status_var.set("Add cancelled -- selection cleared")
                 return
 
             # User confirmed - use selected policy
@@ -107,7 +119,7 @@ class IntervalCRUDMixin:
         spans: List[Tuple[pd.Timestamp, pd.Timestamp]],
         label: str,
         policy: str
-    ) -> None:
+    ) -> int:
         """
         Add intervals with the specified overlap policy.
 
@@ -178,6 +190,13 @@ class IntervalCRUDMixin:
                 "Nothing Added",
                 "No intervals added after applying overlap policy."
             )
+        # Pack M2.6: REPORT WHAT WAS ADDED. The rule commit
+        # (rules.py::_commit_rule_result) has to say how many intervals
+        # its ONE gesture actually produced, and it must not re-derive
+        # that from len(spans): under the skip policy the carve can turn
+        # one span into two or into none. Every existing caller ignores
+        # the return value and none of them changes behaviour.
+        return count
 
     # ---- UPDATE operations ----
     def _relabel_interval(self) -> None:
@@ -655,6 +674,20 @@ class IntervalCRUDMixin:
 
         After range selection, shows confirmation dialog with details.
         """
+        # Pack M2.6, opener guard 1 of 3. THE GUARD MOVES TO THE DOOR.
+        # Pack M2 judges the lock at the COMMIT (_show_clear_confirmation
+        # and _clear_intervals_in_range, both still guarded and both
+        # still pinned), which is correct and is not enough: on a locked
+        # lane this opener still built the whole mode picker, took the
+        # user's choice, and only then refused. Measured in session 3 and
+        # reproduced headless (probe_s3_locked_dialogs): the picker
+        # opens, Next is answered, and one status line throws the work
+        # away. A refusal the user reads BEFORE he starts is the same
+        # refusal, three seconds earlier.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, what="clear range"):
+            return
+
         import tkinter as tk
         from tkinter import ttk
 

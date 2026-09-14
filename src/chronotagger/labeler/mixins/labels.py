@@ -12,6 +12,17 @@ class LabelsMixin:
     """Label schema management (add/rename/delete/reorder/change color)."""
 
     def _open_label_manager(self) -> None:
+        # Pack M2.6, opener guard 3 of 3. On a locked lane this dialog
+        # opened with Add / Rename / Change color / Move / Delete ALL
+        # ENABLED, and OK discarded every one of them with a single
+        # status line. The commit guard in _apply_label_manager_result is
+        # unchanged and still pinned -- it is what makes the refusal true
+        # for a programmatic caller; this is what makes it true for a
+        # pair of hands.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, what="edit the label schema"):
+            return
+
         # Compute usage counts for nicer UX.
         # Pack M2: counted on the ACTIVE lane only. This dialog edits ONE
         # lane's vocabulary -- self.classes is a property over the active

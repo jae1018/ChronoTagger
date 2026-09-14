@@ -73,6 +73,18 @@ class IntervalGapsMixin:
         time range, and calculates how many intervals will be created.
         User selects a label and confirms to assign all gaps to that label.
         """
+        # Pack M2.6, opener guard 2 of 3, and the worst of the three.
+        # With a REAL coverage hole in the window the full "Label
+        # Unassigned Points" dialog opened on the LOCKED lane, listed its
+        # classes, promised "Will create 1 interval(s)" in blue, and
+        # threw the lot away on OK. Measured: the locked agent lane of
+        # the feel-test driver has 19 holes across the record
+        # (probe_s3_refute_datasafety Q1). The commit guard in
+        # _assign_gaps_to_label is unchanged and still pinned.
+        from chronotagger.core.lanes import refuse_if_locked
+        if refuse_if_locked(self, what="fill gaps"):
+            return
+
         import tkinter as tk
         from tkinter import ttk
 

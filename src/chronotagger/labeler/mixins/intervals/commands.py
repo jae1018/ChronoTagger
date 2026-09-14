@@ -167,7 +167,29 @@ class IntervalCommandsMixin:
 
         self._repoint_selected_interval()
 
-        self.status_var.set("Undo")  # type: ignore[union-attr]
+        # Pack M2.6, two things on one line of screen. NAME THE GESTURE:
+        # "Undo" alone never said WHAT came back, and the gesture's label
+        # has existed since Pack 1 -- it was simply never printed.
+        # RECONCILE: this undo may have removed the very lane
+        # `_active_track_id` names (an ingest creates its lane inside one
+        # gesture), and when it did, the reconcile's own sentence is the
+        # one that stays on the bar, because a lane disappearing under
+        # the user's hands outranks the name of what he undid.
+        # getattr, because the GUI-free hosts in tests/ bind a NAMED LIST
+        # of mixin methods and must not be forced to grow an entry.
+        _name = getattr(cmd, "name", "") or ""
+        # A command pushed WITHOUT a gesture wrapper is named
+        # `type(cmd).__name__` by _execute_command above, so Delete,
+        # Re-label and a drag-resize would put "DeleteIntervalCommand" on
+        # the status bar. An internal class name is not a sentence: drop
+        # it and say plain "Undo", which is what those three said before.
+        if _name.endswith("Command"):
+            _name = ""
+        self.status_var.set(  # type: ignore[union-attr]
+            ("Undo: %s" % _name) if _name else "Undo")
+        _rec = getattr(self, "_reconcile_active_track", None)
+        if callable(_rec):
+            _rec()
         self._update_plot()
         self._save_autosave()
 
@@ -192,6 +214,17 @@ class IntervalCommandsMixin:
 
         self._repoint_selected_interval()
 
-        self.status_var.set("Redo")  # type: ignore[union-attr]
+        # Pack M2.6, the same two things as _undo above: name the gesture,
+        # then reconcile a stale active lane (a redo can put a lane BACK,
+        # and it can also redo the removal of one).
+        _name = getattr(cmd, "name", "") or ""
+        # See _undo: a bare command's "name" is its class name.
+        if _name.endswith("Command"):
+            _name = ""
+        self.status_var.set(  # type: ignore[union-attr]
+            ("Redo: %s" % _name) if _name else "Redo")
+        _rec = getattr(self, "_reconcile_active_track", None)
+        if callable(_rec):
+            _rec()
         self._update_plot()
         self._save_autosave()

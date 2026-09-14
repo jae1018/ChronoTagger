@@ -144,6 +144,33 @@ class WindowMixin:
         self.root.geometry("1600x900")
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
+        # Pack M2.6: THE STATUS BAR IS A FULL-WIDTH BAR ON THE WINDOW.
+        # It used to be the last widget packed into the ~322 px SIDEBAR
+        # column, with no wraplength -- and the sidebar overflows the
+        # window bottom, so the bar was clipped at BOTH edges: about 52
+        # characters of a 70-character refusal survived and the bottom
+        # half of the glyphs was cut off. Every lock refusal lost exactly
+        # its reason clause ("-- drag refused", "-- delete refused"), and
+        # not one of the 130 screenshots from computer-use session 3
+        # carries a complete one.
+        #
+        # It is built HERE, on the root, and packed side=BOTTOM BEFORE
+        # the main pane frame, so the packer hands it its strip of the
+        # window before anything else can claim the space and no sidebar
+        # overflow can push it off screen again. `wraplength` is
+        # refreshed from the bar's own width on every <Configure>, so a
+        # long line wraps onto a second line instead of being cut. Hide
+        # Panel cannot hide it any more: it is not a child of the sidebar.
+        # `self.status_var` is the same StringVar with the same name --
+        # every reader and writer in the tree is untouched.
+        self.status_var = tk.StringVar(master=self.root, value="Ready")
+        self.status_label = ttk.Label(
+            self.root, textvariable=self.status_var, relief=tk.SUNKEN,
+            anchor=tk.W, justify=tk.LEFT)
+        self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status_label.bind("<Configure>",
+                               self._on_status_label_configure)
+
         top = ttk.Frame(self.root)
         top.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         self._build_top_controls(top)
@@ -192,6 +219,14 @@ class WindowMixin:
         # F9 toggles sidebar visibility
         self.root.bind("<F9>", lambda e: self._toggle_sidebar())
 
+        # Pack M2.6: and take Tk's OWN Ctrl+D / Ctrl+H / Ctrl+K off the
+        # ttk Entry class, so a shortcut typed in the Start or End box
+        # stops editing the text on its way to the handler above. See
+        # events/keyboard.py::_neutralize_entry_class_keys for what each
+        # of the three did and why the override returns None rather than
+        # "break".
+        self._neutralize_entry_class_keys()
+
         # Multi-pane tab navigation shortcuts
         if self.multi_pane_mode:
             # Ctrl+Tab / Ctrl+Shift+Tab for next/prev tab
@@ -205,6 +240,61 @@ class WindowMixin:
 
             # Ctrl+0 for tab 10
             self.root.bind('<Control-Key-0>', lambda e: self._go_to_tab(9))
+
+    # The gutter the sunken relief and its internal padding take off the
+    # bar's usable width, and the floor the wraplength never goes below
+    # (a window dragged narrow must still wrap rather than stop wrapping).
+    STATUS_WRAP_GUTTER = 8
+    STATUS_WRAP_MIN = 120
+
+    def _on_status_label_configure(self, event=None) -> None:
+        """Keep the status bar's wraplength equal to the bar's own width.
+
+        Pack M2.6. Without a wraplength a ttk.Label NEVER wraps: a line
+        longer than the widget is simply cut off, which is what ate the
+        reason clause of every lock refusal on screen. `wraplength` has
+        to be a number of PIXELS, and the only honest number is the
+        width the bar actually has, so it is refreshed from the widget's
+        own <Configure> -- which Tk fires when the window is built and
+        again on every resize.
+
+        Called with no event (or with one carrying no usable width) it
+        falls back to asking the widget, so a caller that just wants the
+        bar re-measured can say so.
+        """
+        lbl = getattr(self, "status_label", None)
+        if lbl is None:
+            return
+        width = 0
+        if event is not None:
+            try:
+                width = int(getattr(event, "width", 0) or 0)
+            except Exception:
+                width = 0
+        if width <= 1:
+            try:
+                width = int(lbl.winfo_width())
+            except Exception:
+                width = 0
+        want = max(int(width) - self.STATUS_WRAP_GUTTER,
+                   self.STATUS_WRAP_MIN)
+        # An un-set wraplength reads back as the EMPTY STRING, not as 0 --
+        # so the "has it changed?" test has to tolerate that, or the very
+        # first <Configure> raises inside the guard and the bar is left
+        # with no wraplength at all, which is the cutting behaviour this
+        # whole PART exists to remove. Measured: it did exactly that.
+        try:
+            cur = int(lbl.cget("wraplength"))
+        except (TypeError, ValueError):
+            cur = None
+        except Exception:
+            return
+        if cur == want:
+            return
+        try:
+            lbl.configure(wraplength=want)
+        except Exception:
+            pass
 
     def _on_tab_changed(self, event) -> None:
         """Handle notebook tab change event."""

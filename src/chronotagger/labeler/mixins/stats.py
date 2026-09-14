@@ -114,6 +114,14 @@ class StatsMixin:
         # index, because the index moves whenever the filter or the scope
         # changes -- which is the whole point of the row map.
         if _reselect is not None:
+            # Pack M2.6: the selected interval is BACK in the list, so
+            # the "it sits on a lane this list hides" sentence below is
+            # no longer true and its memory is dropped. Without this, a
+            # round trip -- filter to `all`, then back to `active` --
+            # would compare equal to what was last announced and say
+            # nothing, which is the one case where the user really did
+            # ask the question again.
+            self._hidden_selection_announced = None
             # The flag stops _on_interval_tree_select from treating this as
             # the user clicking the already-selected row, which is its
             # DESELECT gesture (events/base.py). Without it a refill would
@@ -148,14 +156,32 @@ class StatsMixin:
             # out. Say so rather than letting the user wonder where the
             # highlight went; the interval is still selected and Delete
             # still works on it.
-            if getattr(self, "status_var", None) is not None:
-                try:
-                    self.status_var.set(
-                        "the selected interval sits on lane '%s', which this "
-                        "list is not showing"
-                        % (track_display_name(self, _want.track),))
-                except Exception:
-                    pass
+            #
+            # Pack M2.6: SAY IT ONCE, WHEN IT BECOMES TRUE. This branch
+            # used to run on EVERY refill -- a repaint, a lane switch, an
+            # add, a rule preview -- and overwrite whatever was on the
+            # status bar. It is what ate the rule preview line in
+            # computer-use session 3: rules.py writes "Rule preview: 134
+            # points -> 2 spans", then its own _update_plot() reaches
+            # this refill, which writes straight over it, and the figure
+            # the user asked for never reaches the bar at all. The
+            # sentence is worth writing when the SELECTION or the FILTER
+            # changes and not otherwise, so the pair that makes it true
+            # is remembered and compared. A plain refill now leaves the
+            # status bar exactly as it found it.
+            _key = (id(_want), _want.track, track_scope, active_track)
+            if _key != getattr(self, "_hidden_selection_announced", None):
+                self._hidden_selection_announced = _key
+                if getattr(self, "status_var", None) is not None:
+                    try:
+                        self.status_var.set(
+                            "the selected interval sits on lane '%s', which this "
+                            "list is not showing"
+                            % (track_display_name(self, _want.track),))
+                    except Exception:
+                        pass
+        else:
+            self._hidden_selection_announced = None
 
         self._update_statistics()
         

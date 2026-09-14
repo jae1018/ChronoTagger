@@ -46,7 +46,11 @@ class SidebarMixin:
     - stats_text: tk.Text - Text widget for statistics display
     - snap_var: tk.BooleanVar - BooleanVar for snap-to-samples option
     - overlays_var: tk.BooleanVar - BooleanVar for interval overlays option
-    - status_var: tk.StringVar - StringVar for status messages
+    - status_var: tk.StringVar - StringVar for status messages. Pack M2.6:
+      CREATED IN view_build/window.py, not here. The status bar is a
+      full-width bar on the root, below the main panes, so the sidebar
+      can no longer clip it and Hide Panel can no longer hide it. The
+      variable's name and every reader of it are unchanged.
 
     Methods provided:
     - _build_sidebar(parent) - Build the sidebar with scrollable content
@@ -267,10 +271,16 @@ class SidebarMixin:
         ).pack(anchor=tk.W)
 
         # Status
-        self.status_var = tk.StringVar(master=self.root, value="Ready")
-        ttk.Label(parent, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(
-            side=tk.BOTTOM, fill=tk.X
-        )
+        #
+        # Pack M2.6: THE STATUS BAR MOVED OUT OF THE SIDEBAR. It used to
+        # be packed here, into the ~322 px sidebar column with no
+        # wraplength, and the sidebar overflows the window bottom -- so
+        # the bar was clipped at both edges and every lock refusal lost
+        # its reason clause. It is now built in
+        # view_build/window.py::_build_gui and packed on the ROOT at
+        # side=BOTTOM, before the main pane frame. `self.status_var` is
+        # created there, with the same name and the same master, so no
+        # reader in this file or anywhere else changes.
 
     # ========== Sidebar Scrolling Helper Methods ==========
 

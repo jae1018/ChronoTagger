@@ -67,7 +67,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from .tracks import active_id_of, find_track, table_of
+from .tracks import active_id_of, find_track, table_of, visible_rows
 
 # The gutter, as a fraction of ONE lane's height, taken off the top and
 # off the bottom of every band.
@@ -259,6 +259,12 @@ def frac_from_event(ax, event) -> Optional[float]:
 def visible_lanes(host) -> List[Any]:
     """The tracks the strip paints, top to bottom.
 
+    Pack M2.6: the SORT now lives in `core.tracks.visible_rows` and this
+    is the host-side wrapper over it. It has to be one function, because
+    `resolve_active_row` falls back to the first VISIBLE lane and that
+    fallback must be the lane this list starts with -- byte for byte,
+    not "the same idea".
+
     Sorted by `order` with the table position as the tie-break, so a
     table whose orders are all 0 (a hand-written driver table) paints in
     the order the driver wrote it. A track with `visible=False` is not
@@ -267,8 +273,7 @@ def visible_lanes(host) -> List[Any]:
     falls out of the painter for free rather than needing a second
     filter.
     """
-    rows = [t for t in table_of(host) if getattr(t, "visible", True)]
-    return sorted(rows, key=lambda t: (int(getattr(t, "order", 0) or 0),))
+    return visible_rows(table_of(host))
 
 
 def lane_layout(host) -> Dict[str, Any]:
@@ -358,7 +363,17 @@ def track_display_name(host, track_id) -> str:
 
 
 def is_locked(host, track_id=None) -> bool:
-    """True when the named track (default: the ACTIVE one) refuses edits."""
+    """True when the named track (default: the ACTIVE one) refuses edits.
+
+    Pack M2.6: with no `track_id` this asks `active_id_of`, which now
+    RESOLVES a stale `_active_track_id` to the lane on screen -- so the
+    guard judges the row the user is looking at and the row every writer
+    is about to stamp, which are now the same row. It used to answer
+    False for a stale id (unknown id -> no row -> not locked) while the
+    writers fell back to the first row, which is the fail-open this pack
+    closes. An EXPLICIT `track_id` that names no row still answers False,
+    which is correct: a lane that is not in the table is not locked.
+    """
     if track_id is None:
         track_id = active_id_of(host)
     row = find_track(table_of(host), track_id)
@@ -376,8 +391,14 @@ def refuse_if_locked(host, track_id=None, what: str = "edit") -> bool:
     NO MODAL, EVER. `crud.py` already carries five `showwarning` calls
     on the label hot path and the campaign's acceptance floor is zero
     unexpected modals, so a refusal that is CORRECT must not be the
-    thing that stops the user's hands. Measured across all nine guarded
-    paths: 7 distinct status lines, 0 dialogs.
+    thing that stops the user's hands. Measured across all TWELVE
+    guarded paths: 7 distinct status lines, 0 dialogs. Pack M2 guarded
+    NINE, every one of them at the COMMIT. Pack M2.6 adds the three
+    OPENERS -- Clear..., Fill Gaps... and Manage Labels... -- because a
+    guard that fires only at the commit lets a locked lane present a
+    live editor and then throw the work away. The commit guards STAY:
+    they are what makes the refusal true for a programmatic caller, and
+    the openers are what makes it true for a pair of hands.
 
     The ingest (`add_track_from_column`) is deliberately NOT guarded: it
     is the writer that CREATES a locked lane, not a user gesture on

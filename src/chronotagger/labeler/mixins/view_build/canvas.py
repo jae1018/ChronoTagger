@@ -577,11 +577,13 @@ class CanvasMixin:
         """
         The widgets displaying ``status_var``, found once and cached.
 
-        ``sidebar.py`` builds the status bar as an anonymous
-        ``ttk.Label(parent, textvariable=self.status_var, ...)`` and keeps
-        no reference to it, so colouring it means finding it. The match is
-        exact: the widget's own ``textvariable`` option compared against
-        the StringVar's Tk name.
+        Pack M2.6: the status bar is now built in
+        ``view_build/window.py`` as ``self.status_label``, packed on the
+        ROOT -- it used to be an anonymous ``ttk.Label`` inside the
+        sidebar. This search is unchanged and still correct, because it
+        walks the WHOLE widget tree from the root down and matches on the
+        widget's own ``textvariable`` option against the StringVar's Tk
+        name, wherever the widget happens to be parented.
         """
         found = getattr(self, "_status_widgets_cache", None)
         if found is not None:

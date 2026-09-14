@@ -63,14 +63,35 @@ class LaneControlMixin:
             return False
         was = active_id_of(self)
         self._active_track_id = row.id
+        # Pack M2.6: A LANE SWITCH DROPS A STAGED RULE. The rule preview
+        # stages its spans in `_commit_spans` and paints them yellow in
+        # `current_spans`, and neither was bound to a lane -- so staging a
+        # rule on Region, switching to Wake and pressing Add put
+        # Region-carved geometry on Wake, with the class auto-substituted
+        # and no prompt (measured, probe_s3_refute A3-A4). Those spans
+        # were computed against the lane you were ON, including its
+        # overlaps; one lane down they do not mean the same thing. It
+        # says so only when something really was staged, and it says it
+        # in the SAME sentence as the lane change, because the announce
+        # below would otherwise write straight over it.
+        dropped = False
+        if was != row.id and (getattr(self, "_commit_spans", None)
+                              or getattr(self, "current_spans", None)):
+            self._clear_preview_state()
+            dropped = True
         # The class dropdown and the current class BOTH have to follow, or
         # the next Add builds an off-vocabulary interval on the new lane.
         self._repoint_class_controls()
         self._refresh_lane_controls()
         if announce:
-            set_status(self, "Active lane: %s%s"
+            set_status(self, "Active lane: %s%s%s"
                        % (row.name or row.id,
-                          "  (locked)" if row.locked else ""))
+                          "  (locked)" if row.locked else "",
+                          " -- rule preview cleared (it belonged to the "
+                          "lane you left)" if dropped else ""))
+        elif dropped:
+            set_status(self, "rule preview cleared -- it belonged to the "
+                             "lane you left")
         if repaint and was != row.id:
             self._update_plot()
         return was != row.id
@@ -109,6 +130,44 @@ class LaneControlMixin:
                     var.set(cur)
                 except Exception:
                     pass
+
+    # ---- the reconcile ---------------------------------------------------
+
+    def _reconcile_active_track(self) -> bool:
+        """Re-point a STALE active lane at the row the user can see.
+
+        Pack M2.6, the second half of the stale-id fix. EDIT 539 makes
+        every READER agree about which row a stale id means; this makes
+        the MODEL agree too, so the id stops being stale at the moment it
+        becomes stale instead of being resolved again on every call.
+
+        `_active_track_id` is VIEW state and does not ride in the gesture
+        snapshot, so the undo of an ingest -- which removes the lane the
+        ingest created, inside one gesture -- leaves the id naming a row
+        the table no longer holds. Called after every undo and redo. The
+        other two table-snapshot restores, `_load_session` and
+        `_apply_recovered_autosave`, already re-point `_active_track_id`
+        themselves before they publish, so there is nothing stale there
+        for this to find.
+
+        Returns True when it re-pointed, and then the status bar carries
+        the sentence -- the user pressed one key and the lane he was
+        working on went away, which he has to be told.
+        """
+        from chronotagger.core.tracks import resolve_active_row
+        old = getattr(self, "_active_track_id", None)
+        if not old:
+            self._active_track_id = resolve_active_row(self).id
+            return False
+        if find_track(table_of(self), old) is not None:
+            return False
+        row = resolve_active_row(self)
+        self._active_track_id = row.id
+        self._repoint_class_controls()
+        self._refresh_lane_controls()
+        set_status(self, "lane '%s' no longer exists -- active lane is "
+                         "now '%s'" % (old, row.name or row.id))
+        return True
 
     # ---- cycling --------------------------------------------------------
 
@@ -177,9 +236,26 @@ class LaneControlMixin:
         if row is not None and not getattr(row, "visible", True):
             row.visible = True
             unhid = True
-            set_status(self, "lane '%s' is visible again"
-                       % (row.name or row.id,))
-        moved = self._set_active_track(tid)
+        # Pack M2.6: ONE SENTENCE, NOT TWO. Unhiding a lane from this
+        # list wrote "lane 'Wake (umbra)' is visible again" and then the
+        # setter wrote "Active lane: Wake (umbra)" straight over it, so
+        # the thing the user had just done never reached the bar. The
+        # setter is told not to announce, and the one combined line is
+        # written after it.
+        # Whether a staged rule is about to be dropped has to be read
+        # BEFORE the setter runs, because the setter is the thing that
+        # drops it -- and when `unhid` silenced the setter's own
+        # announcement, the setter's note about the drop is the line this
+        # combined sentence would otherwise write over.
+        _had_staging = bool(getattr(self, "_commit_spans", None)
+                            or getattr(self, "current_spans", None))
+        moved = self._set_active_track(tid, announce=not unhid)
+        if unhid and row is not None:
+            set_status(self, "lane '%s' is visible again -- active lane%s"
+                       % (row.name or row.id,
+                          " -- rule preview cleared (it belonged to the "
+                          "lane you left)"
+                          if (_had_staging and moved) else ""))
         # Pack M2.5: REPAINT ON THE VISIBILITY CHANGE TOO. The setter
         # repaints only when the active id actually moved, so picking the
         # lane that is ALREADY active while it is HIDDEN -- the state Pack

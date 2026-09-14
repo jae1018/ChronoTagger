@@ -330,9 +330,32 @@ def test_add_on_a_locked_lane_is_refused(app, _dialog_counter):
 
 
 def test_the_rules_commit_on_a_locked_lane_is_refused(app):
-    """The rules engine sets _commit_spans and the user presses the same
-    Add button, so one guard covers both doors."""
+    """AMENDED by Pack M2.6, not deleted: the rule commit moved doors.
+
+    Pack M2's sentence was "the rules engine sets _commit_spans and the
+    user presses the same Add button, so one guard covers both doors".
+    Since M2.6 the By-Rule dialog's OK COMMITS, through
+    `_commit_rule_result`, and that is the door a rule comes in by -- so
+    it is pinned here first. The OLDER door is pinned straight after it,
+    unchanged in substance: `_add_interval` still reads `_commit_spans`
+    and still refuses on a locked lane, which is what keeps the box and
+    two-click gestures honest.
+    """
+    from chronotagger.labeler.dialogs.label_by_rule import (
+        LabelByRuleResult, RuleCondition)
     app._set_active_track("agent", announce=False, repaint=False)
+    app._commit_spans = [(ts("00:02:00"), ts("00:05:00")),
+                         (ts("00:10:00"), ts("00:12:00"))]
+    res = LabelByRuleResult(
+        conditions=[RuleCondition(column="a", op=">=", value=0.0)],
+        combine_mode="AND", nan_as_true=False, overlap_policy="replace",
+        scope="window")
+    assert app._commit_rule_result(res) == 0
+    assert app.intervals == []
+    assert "add refused" in app.status_var.get()
+    assert list(app._commit_spans) == [], "a refusal leaves nothing staged"
+
+    # the older door, unchanged
     app._commit_spans = [(ts("00:02:00"), ts("00:05:00")),
                          (ts("00:10:00"), ts("00:12:00"))]
     app._add_interval()

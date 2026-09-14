@@ -325,27 +325,81 @@ def table_of(host) -> List[Track]:
                          dict(getattr(host, "class_colors", None) or {}))
 
 
+def visible_rows(tracks) -> List[Track]:
+    """The rows the strip PAINTS, top to bottom. ONE authority.
+
+    Sorted by `order` with the table position as the tie-break, so a
+    table whose orders are all 0 -- a hand-written driver table -- paints
+    in the order the driver wrote it. A row with `visible=False` is not
+    in this list.
+
+    `core.lanes.visible_lanes` is a one-line host-side wrapper over this
+    and nothing else re-implements the sort, because Pack M2.6's
+    resolution rule below has to agree with the PAINTER exactly, and two
+    copies of one sort is how they stop agreeing.
+    """
+    rows = [t for t in (tracks or []) if getattr(t, "visible", True)]
+    return sorted(rows, key=lambda t: (int(getattr(t, "order", 0) or 0),))
+
+
+def resolve_active_row(host) -> Track:
+    """THE ONE RESOLUTION RULE for "which lane is active". Pack M2.6.
+
+    The row `_active_track_id` names -- and, when it names NO ROW OF THE
+    TABLE, the FIRST VISIBLE lane, which is exactly the lane
+    `lane_layout` already falls back to for painting. With no visible
+    lane at all it is the first row, because a table always has one and
+    an edit has to land somewhere nameable.
+
+    WHY IT EXISTS. `add_track_from_column` creates a lane INSIDE ONE
+    GESTURE, so a single Ctrl+Z removes the row while `_active_track_id`
+    still names it: the id is view state and is not part of the gesture
+    snapshot. Before this rule the guard and the writers disagreed about
+    that state -- `is_locked` looked the id up, found no row and answered
+    False, while every writer stamped the STALE ID onto the interval it
+    built. Measured end to end on the feel-test driver
+    (`probe_s3_refute_reach`): Fill Gaps was NOT refused and wrote an
+    interval onto a lane no table holds (256 -> 257, painted nowhere and
+    counted nowhere); Manage Labels rewrote the FIRST row's vocabulary,
+    reported "Labels updated" and wiped the undo stack; Clear Range
+    deleted; and the autosave then persisted an interval whose recovery
+    raises ValueError at launch.
+
+    A HIDDEN active lane is NOT stale and is NOT resolved away: the row
+    exists, it simply is not painted, and `lane_layout` keeps its
+    `active_row` None on purpose.
+    """
+    tbl = table_of(host)
+    tid = getattr(host, "_active_track_id", None)
+    if tid:
+        row = find_track(tbl, tid)
+        if row is not None:
+            return row
+    vis = visible_rows(tbl)
+    return vis[0] if vis else tbl[0]
+
+
 def active_id_of(host) -> str:
     """The id of the track a gesture writes to and the screen reads.
 
-    M1 has no control that changes it, so in practice it is "default"
-    for every session the user opens -- but the add path already names
-    it explicitly rather than leaning on Interval.track's field
-    default, so a table built by a driver with no "default" row works.
+    Pack M2.6: this is `resolve_active_row(host).id`, so a STALE
+    `_active_track_id` -- one naming no row of the table -- reads as the
+    lane the user can actually SEE rather than as a ghost. Every writer
+    that stamps this id therefore stamps a real row, and `is_locked` /
+    `refuse_if_locked`, which resolve through the same call, judge the
+    same row.
+
+    It went through `getattr(host, "tracks")` before and it goes through
+    `table_of(host)` now, so a host built before tracks existed still
+    reads as exactly one default track: `DEFAULT_TRACK_ID` is that
+    table's only id, which is the answer it always gave.
     """
-    tid = getattr(host, "_active_track_id", None)
-    if tid:
-        return str(tid)
-    tbl = getattr(host, "tracks", None)
-    if tbl:
-        return tbl[0].id
-    return DEFAULT_TRACK_ID
+    return resolve_active_row(host).id
 
 
 def active_track_of(host) -> Track:
-    """The active row, or the first row when the active id is stale."""
-    tbl = table_of(host)
-    return find_track(tbl, active_id_of(host)) or tbl[0]
+    """The active row. Pack M2.6: resolved by `resolve_active_row`."""
+    return resolve_active_row(host)
 
 
 def intervals_on(intervals, track_id) -> List[Any]:
