@@ -8,6 +8,27 @@ from typing import Dict
 import tkinter as tk
 
 
+def hidden_selection_key(interval, track_scope, active_track):
+    """The FACT's own terms: which interval, which filter, which lane.
+
+    Pack M2.7. This key decides whether "the selected interval sits on
+    lane 'X', which this list is not showing" is said AGAIN. It used to
+    start with `id(interval)`, and a snapshot restore replaces every
+    interval object with a value-equal copy -- so one Ctrl+Z looked like
+    a brand new selection and re-announced the sentence straight over
+    "Undo: add sw interval(s)" (probe_s4_undo_status Q1). A VALUE key
+    survives the re-point and still tells two DIFFERENT intervals apart,
+    which is what Pack M2.6's own pins require.
+
+    It is not the whole answer. A drag-resize genuinely moves the bounds
+    and a lane switch genuinely changes `active_track`, so no key can
+    tell either apart from a real change; those gestures CLAIM the
+    sentence instead -- StatsMixin._claim_hidden_selection_line below.
+    """
+    return (interval.track, interval.label, interval.start, interval.end,
+            track_scope, active_track)
+
+
 class StatsMixin:
     def _update_intervals_list(self) -> None:
         """Refresh the sidebar list and statistics."""
@@ -169,7 +190,7 @@ class StatsMixin:
             # changes and not otherwise, so the pair that makes it true
             # is remembered and compared. A plain refill now leaves the
             # status bar exactly as it found it.
-            _key = (id(_want), _want.track, track_scope, active_track)
+            _key = hidden_selection_key(_want, track_scope, active_track)
             if _key != getattr(self, "_hidden_selection_announced", None):
                 self._hidden_selection_announced = _key
                 if getattr(self, "status_var", None) is not None:
@@ -188,6 +209,43 @@ class StatsMixin:
         # Update sidebar scroll region (for scrollable right panel)
         if hasattr(self, '_update_sidebar_scroll_region'):
             self._update_sidebar_scroll_region()
+
+    def _claim_hidden_selection_line(self) -> str:
+        """Take the hidden-selection sentence for the CALLER's own line.
+
+        Pack M2.7. `_update_intervals_list` says "the selected interval
+        sits on lane 'X', which this list is not showing" when that fact
+        becomes true or changes. Three gestures write their OWN sentence
+        and then immediately trigger the repaint that refills the list,
+        and the refill wrote straight over them -- Undo and Redo
+        (intervals/commands.py), the drag-resize commit (events/mouse.py,
+        where the redraw is coalesced onto idle so the refill lands a
+        moment later) and a lane switch (lane_controls.py). All four
+        measured, probe_s4_undo_status Q2.
+
+        A gesture calls this BEFORE it repaints. It marks the fact as
+        already said, so the refill leaves the bar alone, and it hands
+        back the clause for a caller that wants to say both things in ONE
+        sentence -- which is what a lane switch does, because a switch
+        can be the very thing that pushes the selection out of the list.
+        When the fact is not true it returns "" and forgets it.
+        """
+        _want = getattr(self, "selected_interval", None)
+        if _want is None:
+            self._hidden_selection_announced = None
+            return ""
+        from chronotagger.core.lanes import track_display_name
+        from chronotagger.core.tracks import active_id_of
+        _scope_fn = getattr(self, "_interval_track_scope", None)
+        track_scope = _scope_fn() if callable(_scope_fn) else "all"
+        active_track = active_id_of(self)
+        if track_scope != "active" or _want.track == active_track:
+            self._hidden_selection_announced = None
+            return ""
+        self._hidden_selection_announced = hidden_selection_key(
+            _want, track_scope, active_track)
+        return (" -- the selected interval stays on '%s', which this list "
+                "is not showing" % (track_display_name(self, _want.track),))
 
     def _release_tree_select_suppression(self) -> None:
         """Drop DR6's suppression once Tk has delivered the queued event.

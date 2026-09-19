@@ -190,6 +190,19 @@ class IntervalCommandsMixin:
         _rec = getattr(self, "_reconcile_active_track", None)
         if callable(_rec):
             _rec()
+        # Pack M2.7: THIS GESTURE'S SENTENCE SURVIVES ITS OWN REPAINT.
+        # _update_plot below refills the interval list, and the refill
+        # re-announced "the selected interval sits on lane '...'" over the
+        # line just written, because the snapshot restore had swapped the
+        # selected object for a value-equal copy. The value key in
+        # stats.py closes that from one side; claiming the sentence closes
+        # it from the other and covers the case where the undo really did
+        # move the selected interval's bounds.
+        # getattr, because the GUI-free hosts in tests/ bind a NAMED LIST
+        # of mixin methods and must not be forced to grow an entry.
+        _claim = getattr(self, "_claim_hidden_selection_line", None)
+        if callable(_claim):
+            _claim()
         self._update_plot()
         self._save_autosave()
 
@@ -226,5 +239,10 @@ class IntervalCommandsMixin:
         _rec = getattr(self, "_reconcile_active_track", None)
         if callable(_rec):
             _rec()
+        # Pack M2.7: see _undo above -- the redo's own sentence has to
+        # survive the repaint the redo asks for.
+        _claim = getattr(self, "_claim_hidden_selection_line", None)
+        if callable(_claim):
+            _claim()
         self._update_plot()
         self._save_autosave()

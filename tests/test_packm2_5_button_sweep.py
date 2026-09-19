@@ -9,33 +9,39 @@ What it holds is not any one button's behaviour -- it is that NO button
 raises, that the process still has exactly ONE Tk interpreter afterwards,
 that no Toplevel is left behind, and that the window still repaints.
 
-THE CENSUS, measured on the committed Pack M2 tree (py3.11, Agg,
-1600x900 window, 3 panes, 3 lanes, 256 ingested agent intervals). 37
-buttons, 0 exceptions, 0 buttons that could not be invoked, 8 dialog calls
-(3 showwarning, 1 askopenfilename, 4 asksaveasfilename), 6 Toplevels built
+THE CENSUS, RE-MEASURED ON PACK M2.7 (py3.11, Agg, 1600x900 window,
+3 panes, 3 lanes, 256 ingested agent intervals). Pack M2.6 made Undo and
+Redo name the gesture and Pack M2.7 adds the Export Intervals... button,
+so every number and half the status column moved: 38 buttons, 0
+exceptions, 0 buttons that could not be invoked, 9 dialog calls (3
+showwarning, 1 askopenfilename, 5 asksaveasfilename), 6 Toplevels built
 and destroyed, one interpreter throughout:
 
   button              dialogs tops  what it left on the status bar
-  Update Window       0       0     Window updated: 00:00:38 -> 06:00:38
-  x2 (window)         0       0     Window: 00:00:38 -> 12:00:38
-  /2 (window)         0       0     Window: 03:00:38 -> 09:00:38
-  <- Prev             0       0     Window: 00:00:38 -> 06:00:38
-  Next ->             0       0     Window: 03:00:38 -> 09:00:38
+  Update Window       0       0     Window updated: 06:00:00 -> 12:00:00
+  x2 (window)         0       0     Window: 03:00:00 -> 15:00:00
+  /2 (window)         0       0     Window: 06:00:00 -> 12:00:00
+  <- Prev             0       0     Window: 03:00:00 -> 09:00:00
+  Next ->             0       0     Window: 06:00:00 -> 12:00:00
   x2 (step)           0       0     Step: 0 days 06:00:00
   /2 (step)           0       0     Step: 0 days 03:00:00
-  Re-label            1       0     (No Selection warning)
-  Add                 1       0     (No Selection warning)
-  Undo                0       0     Undo
-  Manage...           0       1     Undo
-  Fill Gaps...        0       1     Undo
-  Delete              1       0     (No Selection warning)
-  Redo                0       0     Redo
-  By-Rule...          0       1     Redo
-  Clear...            0       1     Redo
+  Re-label            1       0     (No Selection warning; bar unchanged)
+  Add                 1       0     (No Selection warning; bar unchanged)
+  Undo                0       0     Undo: import track agent from
+                                    column:prediction
+  Manage...           0       1     (bar unchanged)
+  Fill Gaps...        0       1     (bar unchanged)
+  Delete              1       0     (No Selection warning; bar unchanged)
+  Redo                0       0     Redo: import track agent from
+                                    column:prediction
+  By-Rule...          0       1     (bar unchanged)
+  Clear...            0       1     (bar unchanged)
   Save Session        1       0     (asksaveasfilename -> "")
   Load Session        1       0     (askopenfilename -> "")
-  Export Labels...    0       1     Redo
-  Help (F1)           0       1     Redo
+  Export Labels...    0       1     (bar unchanged)
+  Export Intervals... 1       0     (asksaveasfilename -> ""; no file,
+                                    no second dialog)
+  Help (F1)           0       1     (bar unchanged)
   Reset Scale         0       0     Scales reset to auto
   Hide Panel          0       0     Scales reset to auto
   Home/Back/Forward/Subplots/Save  x3 panes, matplotlib's own toolbar;
@@ -43,7 +49,7 @@ and destroyed, one interpreter throughout:
 
 The toolbar half of that list is matplotlib's and its size depends on the
 matplotlib version, so the pin asserts the APP's own buttons by name and
-then asserts the invariants over whatever else it found. NINETEEN of the 22
+then asserts the invariants over whatever else it found. TWENTY of the 23
 are named in the module's `APP_BUTTONS`; the other three carry non-ASCII
 text (the window `x2` / `/2` pair and Hide Panel's arrow) and are swept
 without being named.
@@ -73,13 +79,14 @@ pytestmark = pytest.mark.skipif(
 
 # The app's own buttons, by the text they carry. THREE more exist whose text
 # is not ASCII (the window x2 / /2 pair and Hide Panel's arrow) and they are
-# swept like the rest; they are simply not named here. 19 named + 3 = the 22
-# app buttons of the 37 this sweep finds.
+# swept like the rest; they are simply not named here. Pack M2.7 adds
+# "Export Intervals...", so it is 20 named + 3 = the 23 app buttons of the 38
+# this sweep finds.
 APP_BUTTONS = (
     "Update Window", "<- Prev", "Next ->", "x2", "/2", "Re-label", "Add",
     "Undo", "Redo", "Delete", "Manage...", "Fill Gaps...", "By-Rule...",
     "Clear...", "Save Session", "Load Session", "Export Labels...",
-    "Help (F1)", "Reset Scale",
+    "Export Intervals...", "Help (F1)", "Reset Scale",
 )
 
 DIALOG_KINDS = ("showinfo", "showwarning", "showerror", "askyesno",

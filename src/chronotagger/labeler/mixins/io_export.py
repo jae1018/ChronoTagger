@@ -727,9 +727,29 @@ class IOExportMixin:
         new_intervals = [Interval.from_dict(d) for d in data["intervals"]]
         unknown = stray_tracks(new_intervals, new_tracks)
         if unknown:
-            raise ValueError(
-                "Session has intervals on tracks that are not in its track "
-                "table: " + ", ".join(unknown))
+            # Pack M2.7: TWO CHANNELS, the pattern refuse_future_version
+            # above already uses. A GUI session got a bare traceback here
+            # while the RECOVERY path caught the identical error and made
+            # it a message (app.py, Pack M2.6): "a refused load is a
+            # message, not a traceback" has to hold on both doors. A
+            # head-less caller -- app.load(path), and the GUI-free hosts
+            # in tests/test_persistence_safety.py -- still gets the raise,
+            # because a modal would hang a display-less script forever.
+            # Nothing has been published at this point, so live state is
+            # untouched either way.
+            _why = ("Session has intervals on tracks that are not in its "
+                    "track table: " + ", ".join(unknown))
+            if getattr(self, "root", None) is None:
+                raise ValueError(_why)
+            messagebox.showerror(
+                "Load Failed",
+                "%s\n\nIt has NOT been loaded. Nothing in this session "
+                "changed.\n\n%s" % (_why, path))
+            if getattr(self, "status_var", None) is not None:
+                self.status_var.set(
+                    "Refused %s -- it holds intervals on tracks its own "
+                    "track table does not list" % (path,))
+            return
         # Validate against the table being INSTALLED, not the live one.
         check_interval_invariants(new_intervals, new_tracks)
         new_window = pd.Timedelta(data["window"])
@@ -741,9 +761,33 @@ class IOExportMixin:
             self.tracks = new_tracks
         else:
             self.tracks[:] = new_tracks
-        self._active_track_id = (new_active
-                                 if find_track(self.tracks, new_active)
-                                 else self.tracks[0].id)
+        # Pack M2.7: ONE SENTENCE AT THE END, and this is where its first
+        # clause is earned. _load_session's closing status_var.set is the
+        # LAST write on this path and erases anything set before it -- the
+        # "ONE SENTENCE, NOT TWO" lesson Pack M2.6 took on the lane
+        # switch. So everything this load has to tell the user is
+        # collected here and said once, at the bottom.
+        _load_note = []
+        if find_track(self.tracks, new_active):
+            self._active_track_id = new_active
+        else:
+            # A saved active_track that names no lane used to fall back to
+            # tracks[0], which can be a HIDDEN row -- a state the GUI
+            # itself refuses to reach (_toggle_active_lane_visible moves
+            # the active lane rather than hide it, and _cycle_active_lane
+            # visits visible lanes only). resolve_active_row is Pack
+            # M2.6's one authority and picks the first VISIBLE lane,
+            # exactly as the painter's fallback does. The id is cleared
+            # first so the resolution cannot latch onto the PREVIOUS
+            # session's active lane when the new table happens to carry a
+            # row of that name.
+            from chronotagger.core.tracks import resolve_active_row
+            self._active_track_id = None
+            _row = resolve_active_row(self)
+            self._active_track_id = _row.id
+            _load_note.append(" -- lane '%s' no longer exists -- active "
+                              "lane is now '%s'"
+                              % (new_active, _row.name or _row.id))
         self._migrated_from_v1 = migrated_from_v1
         self.window = new_window
         self.step = new_step
@@ -758,6 +802,19 @@ class IOExportMixin:
         self.selected_interval = None
         if hasattr(self, '_clear_selected_interval_highlights'):
             self._clear_selected_interval_highlights()
+        # Pack M2.7: A LOAD DROPS A STAGED RULE, exactly as a lane switch
+        # does (Pack M2.6, lane_controls.py). The spans in `_commit_spans`
+        # and the yellow in `current_spans` were carved against the
+        # session being replaced, so one press of Add after a load
+        # committed the PREVIOUS session's geometry onto the loaded one --
+        # measured, and the Replace branch wrote three UNKNOWN intervals
+        # over the loaded lane and destroyed its one interval
+        # (probe_s4_save_load Q2).
+        if (getattr(self, "_commit_spans", None)
+                or getattr(self, "current_spans", None)):
+            if hasattr(self, "_clear_preview_state"):
+                self._clear_preview_state()
+                _load_note.append(" -- rule preview cleared")
 
         self.modified = False
 
@@ -792,16 +849,29 @@ class IOExportMixin:
                         self.notebook.tab(i, text=saved_pane["title"])
 
         self._update_plot()
+        # Pack M2.7: THE AUTOSAVE FOLLOWS THE LOAD. Without this the
+        # autosave on disk still described the DISCARDED pre-load session,
+        # and because the load also sets modified=False a close right
+        # afterwards asks nothing -- so the next launch offered the work
+        # the user had just loaded away from, with "Recover Session" as
+        # the focused default button (probe_s4_save_load Q3/Q5, refuter
+        # case_D). The signature skip in _save_autosave makes this free
+        # whenever the load changed nothing.
+        self._save_autosave()
         # Pack M1: a migrated v1 session SAYS SO, once, where the user is
         # already looking. It is the only signal that the file on disk is
         # still v1 and that the lane being labeled was synthesized from
         # the file's flat "classes" list.
+        # Pack M2.7: and it says it in the SAME sentence as everything
+        # else this load has to report -- a saved active lane that no
+        # longer exists, a staged rule that was dropped. This set() is the
+        # last write on the path and would erase any earlier line.
         if getattr(self, "_migrated_from_v1", False):
-            self.status_var.set(  # type: ignore[union-attr]
-                f"Loaded from {path} as a single track "
-                f"('{DEFAULT_TRACK_ID}')")
+            _said = (f"Loaded from {path} as a single track "
+                     f"('{DEFAULT_TRACK_ID}')")
         else:
-            self.status_var.set(f"Loaded from {path}")  # type: ignore[union-attr]
+            _said = f"Loaded from {path}"
+        self.status_var.set(_said + "".join(_load_note))  # type: ignore[union-attr]
         
     def _compute_label_id_series(self) -> pd.Series:
         """The ACTIVE track's per-sample label ids.
@@ -821,7 +891,7 @@ class IOExportMixin:
     def _export_labels_dialog(self) -> None:
         """
         Enhanced modal with live preview that lets the user choose:
-          - Scope: Full dataset  |  Selected intervals only
+          - Scope: Full dataset  |  Labeled rows only (active lane)
           - Content: Index + labels (CSV)  |  Full DF + labels (CSV)
         
         Shows real-time preview of first 10 rows and estimated total.
@@ -884,7 +954,14 @@ class IOExportMixin:
         ).pack(anchor="w", pady=2, padx=5)
         
         ttk.Radiobutton(
-            scope_grp, text="Selected intervals only",
+            # Pack M2.7: THE WORDS, NOT THE VALUE. This scope has never
+            # meant "the intervals you selected" -- app.selected_interval
+            # is never consulted. It means the rows the ACTIVE lane has
+            # labeled, which is what _export_labels_do writes. The VALUE
+            # stays "selected": seven assertions in the suite pass that
+            # literal string into the writer and the preview, and a wire
+            # value is not a sentence.
+            scope_grp, text="Labeled rows only (active lane)",
             variable=scope_var, value="selected"
         ).pack(anchor="w", pady=2, padx=5)
     
@@ -1133,8 +1210,10 @@ class IOExportMixin:
             preview_input, total_estimate = self._get_first_labeled_rows(limit)
             if len(preview_input) == 0:
                 raise ValueError("No labeled intervals found in current data range")
+            _act = active_track_of(self)
             info = {
-                "scope_desc": "Selected intervals only", 
+                "scope_desc": ("Labeled rows only (active lane: %s)"
+                               % (_act.name or _act.id,)),
                 "total_unlabeled": "All rows are labeled"
             }
         else:
@@ -1157,17 +1236,39 @@ class IOExportMixin:
             # duplicated rows while "index + labels" showed 14.
             preview_input = preview_input[~_pidx.duplicated()]
             _pidx = preview_input.index
+        # Pack M2.7: THE PREVIEW NAMES ITS LABEL COLUMN THE WAY THE FILE
+        # NAMES IT. It was the bare "label_id", which label_id_column
+        # reserves for the track whose id is "default" -- a column no
+        # K-lane session can produce. Measured: preview ['a','label_id']
+        # against a file ['time','a','label_id','label_id__human',
+        # 'label_id__auto'] (probe_s4_export Q5).
+        _preview_track = active_track_of(self)
+        _label_col = label_id_column(_preview_track.id)
+        info["label_column"] = _label_col
+        # And what the FILE will actually cost per row, for the size
+        # estimate below: the writer emits one label column PER LANE
+        # beside the index, and the full-DF content carries every source
+        # column as well. About 30 bytes for the ISO timestamp, 3 for a
+        # label id, 20 for a source value. The old estimate multiplied the
+        # PREVIEW's one label column by a row total that was itself wrong
+        # -- ~0.2 MB announced for a 1,004-byte file and ~0.2 MB for a
+        # 374,502-byte one.
+        _n_label_cols = len(table_of(self))
+        _n_data_cols = (len(self.df.columns)
+                        if content == "full_df_labels_csv" else 0)
+        info["est_bytes_per_row"] = (30 + 3 * _n_label_cols
+                                     + 20 * _n_data_cols)
         label_id = label_id_series_for_track(
-            self.intervals, _pidx, active_track_of(self))
+            self.intervals, _pidx, _preview_track)
         
         # Apply content formatting
         if content == "index_labels_csv":
-            preview_df = pd.DataFrame({"label_id": label_id}, index=label_id.index)
+            preview_df = pd.DataFrame({_label_col: label_id}, index=label_id.index)
             preview_df.index.name = "time"
             info["content_desc"] = "Index + labels only"
         elif content == "full_df_labels_csv":
             preview_df = preview_input.copy()
-            preview_df["label_id"] = label_id.astype(label_id.dtype)
+            preview_df[_label_col] = label_id.astype(label_id.dtype)
             if preview_df.index.name is None:
                 preview_df.index.name = "time"
             info["content_desc"] = "Full DataFrame + labels"
@@ -1191,37 +1292,32 @@ class IOExportMixin:
             (preview_df, total_labeled_count)
         """
         import pandas as pd
-        
+
         if not self.intervals:
             return pd.DataFrame(), 0
-        
-        collected_rows = []
-        total_labeled_count = 0
-        
-        # Sort intervals by start time for consistent preview
-        sorted_intervals = sorted(self.intervals, key=lambda iv: iv.start)
-        
-        for interval in sorted_intervals:
-            # Calculate total labeled count (half-open, matching the CSV's
-            # _compute_label_id_series -- Pack 3 R13)
-            interval_mask = (self.df.index >= interval.start) & (self.df.index < interval.end)
-            interval_size = interval_mask.sum()
-            total_labeled_count += interval_size
-            
-            # For preview, only collect what we need
-            if len(collected_rows) < limit:
-                interval_df = self.df.loc[interval_mask]
-                remaining_needed = limit - len(collected_rows)
-                
-                if len(interval_df) > 0:
-                    rows_to_take = min(remaining_needed, len(interval_df))
-                    collected_rows.append(interval_df.iloc[:rows_to_take])
-        
-        if collected_rows:
-            preview_df = pd.concat(collected_rows)
-        else:
-            preview_df = pd.DataFrame()
-        
+
+        # Pack M2.7: THE PREVIEW ANSWERS THE SAME QUESTION THE WRITER
+        # ANSWERS. This walked EVERY lane's intervals, so the preview for
+        # a scope that writes ONE lane showed rows from lanes the file
+        # never selects -- Agent rows a full day before any Wake interval.
+        # Its `limit` counted interval CHUNKS, not rows, so a limit of 10
+        # returned 37. And its total was a per-interval sum across every
+        # lane -- 9,633 against a 9,602-row frame and 25 rows actually
+        # written (probe_s4_export Q2). All three fall out of asking
+        # _export_labels_do's own question instead:
+        #     mask = (the ACTIVE lane's label id series) != -1
+        # which is that method's `scope == "selected"` branch verbatim, so
+        # the preview's total is the file's row count by construction and
+        # cannot drift from it again.
+        active = active_track_of(self)
+        label_id = label_id_series_for_track(
+            self.intervals, self.df.index, active)
+        mask = label_id.values != -1
+        total_labeled_count = int(mask.sum())
+        if not total_labeled_count:
+            return pd.DataFrame(), 0
+        preview_df = self.df.loc[mask].head(limit)
+
         return preview_df, total_labeled_count
     
     # Pack M1: _compute_label_id_series_for_subset IS GONE.
@@ -1286,10 +1382,17 @@ class IOExportMixin:
         # For wide DataFrames, show only first few columns + label_id
         max_cols = 6
         if len(display_df.columns) > max_cols:
-            # Keep label_id if it exists, otherwise just take first max_cols-1
-            if 'label_id' in display_df.columns:
-                other_cols = [col for col in display_df.columns if col != 'label_id']
-                cols_to_show = other_cols[:max_cols-1] + ['label_id']
+            # Keep the label column if it exists, otherwise just take the
+            # first max_cols-1. Pack M2.7: the NAME comes from the same
+            # helper the preview built it with (label_id_column of the
+            # active lane). The literal 'label_id' matched nothing in any
+            # session whose track id is not 'default', so the wide preview
+            # silently dropped the one column the user opened it for.
+            _label_col = info.get("label_column", "label_id")
+            if _label_col in display_df.columns:
+                other_cols = [col for col in display_df.columns
+                              if col != _label_col]
+                cols_to_show = other_cols[:max_cols-1] + [_label_col]
             else:
                 cols_to_show = list(display_df.columns[:max_cols])
             
@@ -1336,7 +1439,15 @@ class IOExportMixin:
         lines.append(f"  Scope: {info['scope_desc']}")
         lines.append(f"  Content: {info['content_desc']}")
         if total_estimate > 1000:
-            est_size_mb = total_estimate * len(display_df.columns) * 20 / (1024 * 1024)  # Rough estimate
+            # Pack M2.7: the TRUE row total -- the writer's own mask.sum()
+            # -- times what a row of the FILE costs, not what a row of the
+            # PREVIEW costs. The old line multiplied the row count by the
+            # preview's single label column and a flat 20 bytes, and read
+            # "~0.2 MB" for a 1,004-byte file and "~0.2 MB" for a
+            # 374,502-byte one.
+            _per_row = info.get("est_bytes_per_row",
+                                20 * len(display_df.columns))
+            est_size_mb = total_estimate * _per_row / (1024 * 1024)
             lines.append(f"  Estimated file size: ~{est_size_mb:.1f} MB")
         
         # Label mapping preview. Pack M1: the ACTIVE track's map, and it
@@ -1363,6 +1474,24 @@ class IOExportMixin:
     def _export_intervals(self) -> None:
         if not self.intervals:
             messagebox.showwarning("No Data", "No intervals to export.")
+            return
+        # Pack M2.7: THE SAME ORPHAN GATE THE TWIN HAS. export_intervals
+        # (above) calls refuse_export_orphans and this copy never did --
+        # two copies of one contract, drifting, which is the exact thing
+        # this method's own comment below says must not happen. Pack M2.7
+        # puts a BUTTON on this path, and it would otherwise have been the
+        # one export control in the window with no orphan check behind it.
+        # Same gate, GUI channel: a message instead of a traceback, and no
+        # file.
+        try:
+            refuse_export_orphans(self.intervals, table_of(self),
+                                  "intervals export")
+        except ValueError as exc:
+            messagebox.showerror("Export Blocked", str(exc))
+            if getattr(self, "status_var", None) is not None:
+                self.status_var.set(
+                    "Intervals export refused -- labels outside their own "
+                    "track's schema")
             return
         path = filedialog.asksaveasfilename(
             defaultextension=".csv",

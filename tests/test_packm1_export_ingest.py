@@ -358,21 +358,33 @@ def test_the_preview_is_a_slice_of_the_real_writer(tmp_path):
 
 
 def test_the_preview_survives_a_DUPLICATED_index(tmp_path):
-    """_get_first_labeled_rows concatenates rows interval by interval, so
-    once cross-track overlap is legal its index can carry DUPLICATES --
-    and a duplicated index makes searchsorted slices ambiguous. This is a
-    real edge the preview has never had to face."""
+    """Pack M2.7 AMENDMENT -- the same edge, from the other side.
+
+    _get_first_labeled_rows used to concatenate rows interval by
+    interval ACROSS EVERY LANE, so with cross-track overlap its index
+    really did carry DUPLICATES, and a duplicated index makes
+    searchsorted slices ambiguous. It now selects rows by MASK out of the
+    frame's own index, on the ACTIVE lane only -- the writer's own
+    arithmetic -- so a duplicate is unreachable by construction. The
+    de-dup in _generate_export_preview stays as a guard; what is pinned
+    here is what the user gets: unique rows, a limit that counts ROWS,
+    and a preview that still agrees with the writer stamp for stamp.
+    """
     lbl = _labeler(_frame(), tracks=[
         {"id": DEFAULT_TRACK_ID, "classes": ["UNKNOWN", "sw"]},
         {"id": "rules", "classes": ["umbra"]},
     ])
     idx = lbl.df.index
-    # two intervals covering the SAME rows on DIFFERENT lanes: the preview
-    # builder walks both and hands the same timestamps over twice
+    # two intervals covering the SAME rows on DIFFERENT lanes: the
+    # preview builder used to walk both and hand the same timestamps over
+    # twice. Now it walks the ACTIVE lane and nothing else.
     lbl.intervals = [Interval(idx[10], idx[40], "sw"),
                      Interval(idx[10], idx[40], "umbra", track="rules")]
     raw, _total = lbl._get_first_labeled_rows(10)
-    assert not raw.index.is_unique          # the edge is real, not theory
+    assert raw.index.is_unique, \
+        "a mask over the frame's index cannot hand one stamp over twice"
+    assert len(raw) == 10, "and the limit counts ROWS, not chunks"
+    assert _total == 30, "the ACTIVE lane's 30 rows, not both lanes' 60"
     preview_df, _t, _i = lbl._generate_export_preview(
         "selected", "index_labels_csv", limit=10)
     assert preview_df.index.is_unique
@@ -565,6 +577,12 @@ def test_the_ingested_track_is_locked_and_rides_in_the_autosave(tmp_path):
     lbl = _labeler(pd.DataFrame({"rule": ["sw"] * 15 + ["msh"] * 15},
                                 index=idx),
                    classes=["UNKNOWN"])
+    # Pack M2.7 AMENDMENT -- not a deletion. The ingest's autosave now
+    # waits until run() has settled the recovery question, so a labeler
+    # that never calls run() writes nothing at all. Model a RUNNING
+    # window, which is the only state in which this assertion was ever
+    # about the ingest, and keep every assertion below exactly as it was.
+    lbl._recovery_resolved = True
     row = lbl.add_track_from_column("rule", "rules", name="Rule labels")
     assert row.locked is True
     assert row.name == "Rule labels"
@@ -761,10 +779,18 @@ def test_the_selected_scope_is_the_ACTIVE_lanes_rows_and_slices_them_all(
 
 
 def test_the_full_df_preview_drops_duplicated_rows_too(tmp_path):
-    """The de-dup in _generate_export_preview must de-duplicate the FRAME,
-    not just the index: .loc[a de-duplicated index] on a frame whose index
-    HAS duplicates returns every matching row again -- measured, 19 rows
-    for 14 unique stamps, in pandas 2.3.3 and 3.0.2 alike."""
+    """Pack M2.7 AMENDMENT -- the same two shapes, the same one answer.
+
+    The de-dup in _generate_export_preview had to de-duplicate the FRAME
+    and not just the index, because .loc[a de-duplicated index] on a
+    frame whose index HAS duplicates returns every matching row again --
+    measured, 19 rows for 14 unique stamps, in pandas 2.3.3 and 3.0.2
+    alike. _get_first_labeled_rows no longer produces that input: it
+    masks the ACTIVE lane's own label series over the frame's index. So
+    the rows are unique before the de-dup ever sees them, and what this
+    pin holds is the contract the user reads -- both content shapes, one
+    row per stamp, the same stamps.
+    """
     lbl = _labeler(_frame(), tracks=[
         {"id": DEFAULT_TRACK_ID, "classes": ["UNKNOWN", "sw"]},
         {"id": "rules", "classes": ["umbra"]},
@@ -773,13 +799,15 @@ def test_the_full_df_preview_drops_duplicated_rows_too(tmp_path):
     lbl.intervals = [Interval(idx[10], idx[20], "sw"),
                      Interval(idx[15], idx[40], "umbra", track="rules")]
     raw, _total = lbl._get_first_labeled_rows(10)
-    assert not raw.index.is_unique              # the edge is real
+    assert raw.index.is_unique
+    assert _total == 10, "the ACTIVE lane's rows, not the union"
     idx_only, _t, _i = lbl._generate_export_preview(
         "selected", "index_labels_csv", limit=10)
     full_df, _t2, _i2 = lbl._generate_export_preview(
         "selected", "full_df_labels_csv", limit=10)
     assert full_df.index.is_unique
     assert len(full_df) == len(idx_only)
+    assert list(full_df.index) == list(idx_only.index)
 
 
 def test_the_selected_mask_follows_a_NON_FIRST_active_lane(tmp_path):

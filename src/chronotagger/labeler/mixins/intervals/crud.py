@@ -67,7 +67,7 @@ class IntervalCRUDMixin:
             # selected that sample -- convert to half-open so it is labeled.
             spans_to_check = self._exact_spans_to_half_open([(s, e)])
         else:
-            messagebox.showwarning("No Selection", "Select a time range first (drag or click×2).")
+            messagebox.showwarning("No Selection", "Select a time range first (drag or click x2).")
             return
 
         # Check for overlaps

@@ -491,7 +491,7 @@ The set of panels is fully determined by `layout_spec.areas`: every entry with a
 
 Click **Export Labels...** in the labeler's I/O group to produce a CSV of per-sample integer label IDs paired with a JSON label-map (programmatic access is on the roadmap). The dialog lets you pick:
 
-- **Scope** — full dataset or selected intervals only
+- **Scope** — full dataset or labeled rows only (active lane)
 - **Content** — index + labels, or the full DataFrame joined with labels
 - **Format** — CSV (always) plus the `*_label_map.json` mapping
 

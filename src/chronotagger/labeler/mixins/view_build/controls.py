@@ -44,6 +44,7 @@ class ControlsMixin:
     - _save_session() - Callback for saving session
     - _load_session() - Callback for loading session
     - _export_labels_dialog() - Callback for exporting labels
+    - _export_intervals() - Callback for exporting one row per interval
     - _open_help_dialog() - Callback for opening help dialog
     - _reset_all_yscales() - Callback for resetting all y-scales
     - _toggle_sidebar() - Callback for toggling sidebar
@@ -207,12 +208,26 @@ class ControlsMixin:
             io_grid, text="Load Session", command=self._load_session
         ).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
 
-        # Row 1: Export Labels... | (empty)
+        # Row 1: Export Labels... | Export Intervals...
         ttk.Button(
             io_grid, text="Export Labels...", command=self._export_labels_dialog
         ).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
 
-        # Column 1, Row 1 is intentionally left empty
+        # Pack M2.7: the intervals file -- one row per interval, every
+        # lane, with the `track` column -- has existed since Pack M1 and
+        # was reachable only by Ctrl+E. This cell was already here and
+        # already marked "intentionally left empty", so the button needs
+        # no re-layout. It writes EVERY lane by contract, which is what
+        # the `track` column is for and what the tooltip says.
+        _export_intervals_btn = ttk.Button(
+            io_grid, text="Export Intervals...",
+            command=self._export_intervals
+        )
+        _export_intervals_btn.grid(row=1, column=1, sticky="ew",
+                                   padx=2, pady=2)
+        self._create_tooltip(
+            _export_intervals_btn,
+            "Write one row per interval, every lane (Ctrl+E)")
 
         # --- Help and Reset Scale (aligned with grid rows) ---
         help_section = ttk.LabelFrame(parent, text="Help", padding=5)

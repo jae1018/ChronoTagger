@@ -83,12 +83,25 @@ class LaneControlMixin:
         # the next Add builds an off-vocabulary interval on the new lane.
         self._repoint_class_controls()
         self._refresh_lane_controls()
+        # Pack M2.7: A LANE SWITCH THAT PUSHES THE SELECTION OUT OF THE
+        # LIST SAYS BOTH THINGS IN ONE LINE. The switch changes which lane
+        # the list shows, so the selected interval can leave it -- a fact
+        # the user has to be told, and one the repaint below would
+        # otherwise announce as its own line straight over "Active lane:
+        # ...". That is the two-writes-one-line defect Pack M2.6 removed
+        # one door back, arriving through a different door. The claim
+        # marks the fact as said AND hands back the clause.
+        _hidden = ""
+        _claim = getattr(self, "_claim_hidden_selection_line", None)
+        if callable(_claim):
+            _hidden = _claim()
         if announce:
-            set_status(self, "Active lane: %s%s%s"
+            set_status(self, "Active lane: %s%s%s%s"
                        % (row.name or row.id,
                           "  (locked)" if row.locked else "",
                           " -- rule preview cleared (it belonged to the "
-                          "lane you left)" if dropped else ""))
+                          "lane you left)" if dropped else "",
+                          _hidden))
         elif dropped:
             set_status(self, "rule preview cleared -- it belonged to the "
                              "lane you left")

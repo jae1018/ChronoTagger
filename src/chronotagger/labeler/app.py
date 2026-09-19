@@ -300,6 +300,21 @@ class TimeIntervalLabeler(
             self.autosave_folder
             / f"chronotagger_autosave_{self._dataset_fingerprint()}.json"
         )
+        # Pack M2.7: THE RECOVERY QUESTION HAS NOT BEEN ASKED YET.
+        # add_track_from_column ends in an unconditional _save_autosave(),
+        # and a driver that ingests a model column BEFORE run() therefore
+        # wrote an agent-only autosave over the previous session's file
+        # before the user was ever offered it. Measured end to end
+        # (probe_s4_recovery_clobber Q1-Q3): session one left 259
+        # intervals on disk, relaunch one rewrote the main file to 256
+        # agent-only and demoted the good file to .bak -- which
+        # _check_autosave reads ONLY when main is unreadable -- and after
+        # relaunch two the hand labels were on no file in the folder.
+        # run() sets this True the moment the recovery question is
+        # settled; until then the INGEST does not write. Nothing else is
+        # gated: the ten other _save_autosave call sites are GUI gesture
+        # handlers, reachable only once the window is up.
+        self._recovery_resolved: bool = False
         self.modified: bool = False
 
         # GUI state.  When `parent` is provided (e.g. the quick-start wizard),
@@ -681,7 +696,17 @@ class TimeIntervalLabeler(
                    info["runs"], info["splits"], info["unlabeled_rows"]))
         if getattr(self, 'canvas', None) is not None:
             self._update_plot()
-        self._save_autosave()
+        # Pack M2.7: THE LAUNCH-TIME INGEST MUST NOT OVERWRITE THE
+        # RECOVERABLE AUTOSAVE. This call sits OUTSIDE the `with
+        # self._gesture(...)` block above, so holding it back leaves the
+        # ingest fully undoable and the in-memory state exactly as it was
+        # -- only the disk write waits. It waits for run() to settle the
+        # recovery question, because a driver that ingests before
+        # app.run() (test_drivers/drive_multilabel_thb.py:173, ahead of
+        # app.run() at :201) otherwise writes a model-only autosave over
+        # the very file the recovery dialog is about to offer.
+        if getattr(self, "_recovery_resolved", False):
+            self._save_autosave()
         return row
 
     # -------- Public entrypoint --------
@@ -693,6 +718,15 @@ class TimeIntervalLabeler(
 
         # Check for autosave BEFORE starting mainloop
         autosave_data = self._check_autosave()
+
+        # Pack M2.7: NOTHING TO OFFER IS ALSO AN ANSWER. _check_autosave
+        # returns None when no autosave exists, when the only candidate
+        # was unreadable, and when a FUTURE-VERSION file was refused with
+        # "It has NOT been loaded. Nothing in this session changed." In
+        # all three the user has been told everything he is going to be
+        # told, so the ingest may write from here on.
+        if autosave_data is None:
+            self._recovery_resolved = True
 
         if autosave_data is not None:
             choice = self._show_recovery_dialog(autosave_data)
@@ -748,6 +782,14 @@ class TimeIntervalLabeler(
                 # User wants to exit
                 self.root.destroy()
                 return  # Exit without starting mainloop
+
+            # Pack M2.7: EVERY BRANCH THAT REACHES THIS LINE KEEPS THE
+            # WINDOW -- recover (whether it loaded or showed "Recovery
+            # Failed"), start fresh, and save-backup-then-start-fresh. The
+            # recovery question has been answered, so the ingest may write
+            # again. 'cancel' returned above and never gets here, which is
+            # right: there is no session left to autosave.
+            self._recovery_resolved = True
 
         # Update plot and start GUI event loop.
         # When the labeler is a child Toplevel (launched from the wizard),

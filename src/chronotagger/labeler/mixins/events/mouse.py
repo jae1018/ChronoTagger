@@ -577,6 +577,17 @@ class MouseEventsMixin:
                 else:
                     self.status_var.set("Resized interval")
 
+            # Pack M2.7: the "Resized: ..." line above has to survive the
+            # redraw this commit asks for. The redraw is COALESCED onto
+            # idle, so the interval list's refill lands a moment LATER and
+            # wrote "the selected interval sits on lane '...'" over it.
+            # No key can help here: the resize really did move the bounds
+            # and ResizeIntervalCommand really did build a new object, so
+            # to the refill it looks exactly like a new selection. The
+            # gesture claims the sentence instead.
+            _claim = getattr(self, "_claim_hidden_selection_line", None)
+            if callable(_claim):
+                _claim()
             # Clear preview & refresh -- coalesced (Pack 5 R4d): a strip
             # drag-resize ends in a burst of release-adjacent redraws.
             self.current_selection = None
