@@ -209,7 +209,28 @@ def test_the_painted_order_of_the_files_own_lanes_is_the_files_order(
     assert [t.order for t in three.tracks] == [0, 1, 2]
 
 
-def test_a_refused_file_publishes_nothing(three, tmp_path):
+@pytest.fixture(autouse=True)
+def boxes(monkeypatch):
+    """Every message box in this module is RECORDED, never shown.
+
+    Pack M3.0.1. A refused Load Session shows a real "Load Failed" error
+    box on the GUI channel (io_export.py, Pack M2.7), and the two refusal
+    pins below reached it un-stubbed. Every local runner forces a GLOBAL
+    dialog stub, so they passed on this machine; GitHub's CI runs plain
+    pytest and failed both with `TclError: can't invoke "image" command`,
+    and on a desk without the stub the box would have waited for a click.
+    A pin that reaches a box answers for it itself.
+    """
+    import tkinter.messagebox as mb
+    seen = []
+    for name in ("showerror", "showinfo", "showwarning"):
+        monkeypatch.setattr(
+            mb, name,
+            lambda *a, _n=name, **k: seen.append((_n,) + tuple(a[:1])))
+    return seen
+
+
+def test_a_refused_file_publishes_nothing(three, tmp_path, boxes):
     data = session_payload(tmp_path, [REGION, WAKE])
     data["intervals"] = [{"start": str(ts("00:20:00")),
                           "end": str(ts("00:25:00")),
@@ -217,6 +238,7 @@ def test_a_refused_file_publishes_nothing(three, tmp_path):
     before_ids = ids(three)
     before_active = three.active_track_id
     three._load_session(write(tmp_path, "bad.json", data))
+    assert boxes == [("showerror", "Load Failed")]
     assert ids(three) == before_ids
     assert three.active_track_id == before_active
     assert three.intervals == []
@@ -224,13 +246,14 @@ def test_a_refused_file_publishes_nothing(three, tmp_path):
 
 
 def test_a_stray_is_refused_even_when_a_kept_lane_carries_that_id(
-        three, tmp_path):
+        three, tmp_path, boxes):
     """`agent` is live but is NOT in this file's table: still refused."""
     data = session_payload(tmp_path, [REGION, WAKE])
     data["intervals"] = [{"start": str(ts("00:20:00")),
                           "end": str(ts("00:25:00")),
                           "label": "0", "track": "agent"}]
     three._load_session(write(tmp_path, "inconsistent.json", data))
+    assert boxes == [("showerror", "Load Failed")]
     assert ids(three) == ["region", "wake", "agent"]
     assert three.intervals == []
     assert "Refused" in three.status_var.get()
