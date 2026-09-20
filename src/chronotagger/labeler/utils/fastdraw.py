@@ -32,6 +32,19 @@ class BlitHelper:
         self.axes = ordered
         self.recache()
 
+    def invalidate(self) -> None:
+        """Throw the cached backgrounds away. Pack M3.1.
+
+        A blit restores a background COPIED AT THE OLD GEOMETRY, so
+        between a gridspec change and the draw that re-solves it there
+        must be NOTHING cached: `draw` below raises "no background" on
+        an empty cache and falls back to a full `draw_idle`, which is
+        the right picture at the wrong price rather than the wrong
+        picture. `recache` cannot be used for this -- it would copy the
+        canvas as it still stands, which is the old geometry.
+        """
+        self._bg.clear()
+
     def recache(self, _evt=None) -> None:
         # called on draw_event and when layout changes
         self._bg.clear()

@@ -149,23 +149,15 @@ def validate_track_table(rows, what):
     perfectly legal label as an orphan because it keys a dict by id and
     the last row wins. A classless row loaded and then died on a bare
     IndexError out of self.current_class_var.set(self.classes[0]).
+
+    Pack M3.1: the rules themselves moved to
+    `core.tracks.check_track_table`, which _build_track_table (app.py)
+    now calls too, so there is ONE copy of them and the Manage Lanes
+    box did not add a third. The MESSAGES are unchanged: passing `what`
+    selects this door's voice.
     """
-    if not rows:
-        raise ValueError("%s has an empty track table and cannot be "
-                         "loaded." % (what,))
-    seen = set()
-    for row in rows:
-        if row.id in seen:
-            raise ValueError(
-                "%s has two tracks with the id %r: a track id names an "
-                "export column and a label-map sidecar, so it must be "
-                "unique." % (what, row.id))
-        seen.add(row.id)
-        if not row.classes:
-            raise ValueError(
-                "%s has a track (%r) with no classes; every track needs "
-                "its own vocabulary." % (what, row.id))
-    return rows
+    from chronotagger.core.tracks import check_track_table
+    return check_track_table(rows, what)
 
 
 def label_id_column(track_id) -> str:

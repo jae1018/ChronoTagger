@@ -72,6 +72,60 @@ MAX_SPLIT_FRACTION = 0.10
 MIN_SPLITS_BEFORE_REFUSAL = 5
 
 
+# Pack M3.1: what the Manage Lanes box's "From column..." list offers.
+# A column with more distinct values than this is not a label column --
+# it is data -- and run-length decoding it would make one interval per
+# sample. Twenty is the ruled number.
+LABEL_COLUMN_MAX_DISTINCT = 20
+
+
+def column_is_labelish(values) -> bool:
+    """True when this column could be a per-sample LABEL column. M3.1.
+
+    TEXT or WHOLE NUMBERS, which is what a run-length decoder can turn
+    into intervals whose boundaries mean something:
+
+      * str / object / categorical -- yes, as long as no value is a
+        non-integral number;
+      * bool -- yes, it is two whole numbers;
+      * integer -- yes;
+      * float -- yes ONLY when every value is integral. A rule label
+        that arrived through a column with holes is float64 (NaN is a
+        float), and that is exactly the case this feature exists for;
+        a float column of physical measurements is not.
+
+    Datetimes and timedeltas are not labels. Called with the column's
+    NON-NULL values, because NaN decides nothing.
+    """
+    try:
+        import numpy as np
+    except Exception:            # pragma: no cover - numpy is required
+        return False
+    t = pd.api.types
+    try:
+        if t.is_bool_dtype(values) or t.is_integer_dtype(values):
+            return True
+        if t.is_datetime64_any_dtype(values) or \
+                t.is_timedelta64_dtype(values):
+            return False
+        if t.is_float_dtype(values):
+            arr = np.asarray(values, dtype="float64")
+            return bool(arr.size) and bool(np.all(arr == np.floor(arr)))
+        if isinstance(getattr(values, "dtype", None),
+                      pd.CategoricalDtype):
+            return True
+        if t.is_object_dtype(values) or t.is_string_dtype(values):
+            for v in values:
+                if isinstance(v, bool):
+                    continue
+                if isinstance(v, float) and v != int(v):
+                    return False
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def index_unit_epsilon(index) -> pd.Timedelta:
     """ONE step of `index`'s own datetime64 resolution.
 

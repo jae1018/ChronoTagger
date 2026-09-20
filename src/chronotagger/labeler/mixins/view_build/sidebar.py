@@ -196,6 +196,19 @@ class SidebarMixin:
             command=self._toggle_active_lane_locked,
         )
         self.lane_locked_btn.pack(side=tk.LEFT, padx=(8, 0))
+        # Pack M3.1: THE DOOR TO THE LANE LIST ITSELF. Until this pack a
+        # lane could only be DECLARED in a driver script; this button
+        # adds, renames, reorders and deletes them. It opens EVEN WHEN
+        # THE ACTIVE LANE IS LOCKED -- unlike Manage Labels, whose lock
+        # guard refuses at the door -- because this box is where you
+        # unlock. It lives in this frame because this frame already owns
+        # every lane control and already calls _refresh_lane_controls;
+        # the top bar's Label Actions grid is full.
+        self.manage_lanes_btn = ttk.Button(
+            lanes, text="Manage Lanes...",
+            command=self._open_manage_lanes,
+        )
+        self.manage_lanes_btn.pack(anchor=tk.W, fill=tk.X, pady=(5, 0))
         ttk.Label(lanes, text="Ctrl+Up / Ctrl+Down switch lanes",
                   foreground="#666666").pack(anchor=tk.W, pady=(3, 0))
 

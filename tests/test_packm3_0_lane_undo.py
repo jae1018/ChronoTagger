@@ -18,9 +18,12 @@ lane, so the bar can say `Undo: lock lane Region (human)`.
 WHAT IS DELIBERATELY UNCHANGED, and pinned here as such:
 
   * the REFUSAL paths write nothing and push nothing;
-  * `modified` is what it was before the toggle -- a bare lane write did
-    not mark the session modified and did not autosave, and this pack
-    does not change that;
+  * `modified` -- AMENDED BY PACK M3.1. Pack M3.0 kept today's flag: a
+    bare lane write had never marked the session modified, so the
+    wrapper put the value back. J.E. ruled otherwise for Pack M3.1 --
+    every lane-list write marks the session modified, so closing the
+    window after a lock now ASKS, and the lock is not lost. The pin
+    below measures the new rule and names the old one;
   * hiding still MOVES the active lane, and undoing a hide brings the
     lane back without moving the active lane back: the active lane is
     view state and is in no snapshot.
@@ -145,11 +148,21 @@ def test_the_sidebar_checkbox_follows_an_undo(app):
 
 
 def test_a_lock_still_does_not_mark_the_session_modified(app):
-    """Today's behaviour, kept on purpose -- the pack changes no save."""
+    """AMENDED BY PACK M3.1: a lock DOES mark the session modified now.
+
+    Pack M3.0 kept the old behaviour and this pin measured it:
+    `_lane_gesture` read `modified` before the block and put it back, so
+    a lock toggled and the window closed asked nothing and the lock was
+    lost. J.E. ruled that every lane-list write -- the Manage Lanes OK,
+    Ctrl+L, Ctrl+H and un-hiding from the sidebar's Lane list -- marks
+    the session modified, so the close guard asks. The name is kept so
+    the history of this pin is findable.
+    """
     app.modified = False
     app._toggle_active_lane_locked()
-    assert app.modified is False
-    app.modified = True
+    assert app.modified is True, \
+        "Pack M3.1: a lock is unsaved work and must mark the session"
+    app.modified = False
     app._toggle_active_lane_locked()
     assert app.modified is True
 

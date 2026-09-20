@@ -504,23 +504,16 @@ class TimeIntervalLabeler(
         """
         rows = [t if isinstance(t, Track) else Track.from_dict(t)
                 for t in (tracks or [])]
-        if not rows:
-            raise ValueError(
-                "'tracks' must contain at least one track; pass "
-                "classes=[...] for the single-track default instead.")
-        seen = set()
+        # Pack M3.1: THE THREE CHECKS LIVE IN ONE PLACE. They were
+        # written here and again in io_export.validate_track_table, and
+        # the Manage Lanes box is a third door -- so they are now
+        # core.tracks.check_track_table, which keeps BOTH voices (this
+        # one refuses a caller's argument, the other refuses a file)
+        # byte for byte.
+        from chronotagger.core.tracks import check_track_table
+        check_track_table(rows)
         for i, row in enumerate(rows):
-            if row.id in seen:
-                raise ValueError(
-                    "duplicate track id %r: a track id names an export "
-                    "column and a label-map sidecar, so it must be "
-                    "unique" % (row.id,))
-            seen.add(row.id)
             row.order = i
-            if not row.classes:
-                raise ValueError(
-                    "track %r has no classes; every track needs its own "
-                    "vocabulary" % (row.id,))
             if not row.class_colors:
                 row.class_colors = colors_for(row.classes,
                                               self.DEFAULT_COLORS)
@@ -626,66 +619,24 @@ class TimeIntervalLabeler(
         that dataset unreachable and pops the identity-mismatch dialog.
         That is a rule, not a note.
         """
-        from chronotagger.core.ingest import intervals_from_column
-
-        if isinstance(column, str):
-            if self.df is None or column not in self.df.columns:
-                raise ValueError(
-                    "no column %r in the frame; pass a column name that "
-                    "exists, or a Series aligned to df.index" % (column,))
-            values = self.df[column]
-            source = "column:%s" % column
-        else:
-            values = column
-            if len(values) != len(self.df.index):
-                raise ValueError(
-                    "the series has %d rows and the frame has %d; an "
-                    "ingested column must be aligned to df.index"
-                    % (len(values), len(self.df.index)))
-            source = "column:%s" % (getattr(column, "name", None) or "series")
-
-        existing = self.track_by_id(track_id)
-        if existing is None:
-            # Validate the id before anything else touches the model: the
-            # id becomes an export column name and a sidecar filename.
-            Track(id=track_id)
-
-        ivs, info = intervals_from_column(
-            self.df.index, values, track_id,
-            gap_tolerance=gap_tolerance,
-            source=source,
-            class_order=class_order,
-            end_after_inclusive=self._end_after_inclusive,
-            data_end=self.data_end,
-        )
+        # Pack M3.1: THE BODY IS FACTORED, THE BEHAVIOUR IS NOT. The
+        # Manage Lanes box imports a column INSIDE its own one gesture,
+        # and its preview line has to say "would make N intervals in M
+        # classes" while touching nothing at all -- so the part that
+        # only computes is `_column_ingest_plan` and the part that only
+        # writes is `_publish_column_ingest`. This method still opens
+        # the same gesture with the same name, raises the same errors,
+        # writes the same status line and holds its autosave back for
+        # the same reason.
+        _plan = self._column_ingest_plan(
+            column, track_id, gap_tolerance=gap_tolerance,
+            class_order=class_order)
+        ivs, info, source = (_plan["intervals"], _plan["info"],
+                             _plan["source"])
 
         with self._gesture("import track %s from %s" % (track_id, source)):
-            if existing is None:
-                classes = list(info["classes"])
-                row = Track(
-                    id=track_id,
-                    name=name or track_id,
-                    classes=classes,
-                    class_colors=colors_for(classes, self.DEFAULT_COLORS),
-                    locked=bool(locked),
-                    order=len(self.tracks),
-                )
-                self.tracks.append(row)
-            else:
-                unknown = sorted(set(info["present"])
-                                 - set(existing.classes))
-                if unknown:
-                    raise ValueError(
-                        "track %r already exists and its class set does "
-                        "not contain %s; ingesting into an EXISTING track "
-                        "must not silently change its schema. Pass a new "
-                        "track_id, or add the class through Manage "
-                        "Labels first." % (track_id, ", ".join(unknown)))
-                row = existing
-                if locked:
-                    row.locked = True
-            self.intervals.extend(ivs)
-            self._sort_and_merge_intervals()
+            row = self._publish_column_ingest(track_id, name, locked,
+                                              ivs, info)
 
         if getattr(self, 'status_var', None) is not None:
             self.status_var.set(
@@ -708,6 +659,174 @@ class TimeIntervalLabeler(
         if getattr(self, "_recovery_resolved", False):
             self._save_autosave()
         return row
+
+    # -------- Pack M3.1: the halves of that ingest --------
+
+    def _column_ingest_plan(self, column, track_id, gap_tolerance=None,
+                            class_order=None) -> Dict[str, Any]:
+        """Everything the ingest can work out WITHOUT touching anything.
+
+        The column is resolved, the id is validated and the intervals
+        are decoded -- and not one of `self.tracks`, `self.intervals`,
+        `self.df` or the undo stack is written. That is what lets the
+        Manage Lanes box print `would make N intervals in M classes`
+        before the user has pressed anything, and what lets a staged
+        import run inside the box's ONE gesture instead of opening a
+        second one.
+
+        Raises exactly what `add_track_from_column` raised, in the same
+        order and with the same words: an unknown column name, a
+        misaligned series, an invalid track id, and core/ingest.py's
+        own refusals -- the "more than 10 % of the runs would be split"
+        guard above all.
+
+        Returns {"intervals": [...], "info": {...}, "source": "..."}.
+        """
+        from chronotagger.core.ingest import intervals_from_column
+
+        if isinstance(column, str):
+            if self.df is None or column not in self.df.columns:
+                raise ValueError(
+                    "no column %r in the frame; pass a column name that "
+                    "exists, or a Series aligned to df.index" % (column,))
+            values = self.df[column]
+            source = "column:%s" % column
+        else:
+            values = column
+            if len(values) != len(self.df.index):
+                raise ValueError(
+                    "the series has %d rows and the frame has %d; an "
+                    "ingested column must be aligned to df.index"
+                    % (len(values), len(self.df.index)))
+            source = "column:%s" % (getattr(column, "name", None) or "series")
+
+        if self.track_by_id(track_id) is None:
+            # Validate the id before anything else touches the model: the
+            # id becomes an export column name and a sidecar filename.
+            Track(id=track_id)
+
+        ivs, info = intervals_from_column(
+            self.df.index, values, track_id,
+            gap_tolerance=gap_tolerance,
+            source=source,
+            class_order=class_order,
+            end_after_inclusive=self._end_after_inclusive,
+            data_end=self.data_end,
+        )
+        return {"intervals": ivs, "info": info, "source": source}
+
+    def _publish_column_ingest(self, track_id, name, locked, ivs,
+                               info) -> Track:
+        """Write a planned ingest into the model. INSIDE A GESTURE.
+
+        The other half of `add_track_from_column`: the row is created
+        or, when the lane already exists, checked against its declared
+        vocabulary -- ingesting into an EXISTING lane must not silently
+        change its schema.
+        """
+        existing = self.track_by_id(track_id)
+        if existing is None:
+            classes = list(info["classes"])
+            row = Track(
+                id=track_id,
+                name=name or track_id,
+                classes=classes,
+                class_colors=colors_for(classes, self.DEFAULT_COLORS),
+                locked=bool(locked),
+                order=len(self.tracks),
+            )
+            self.tracks.append(row)
+        else:
+            unknown = sorted(set(info["present"]) - set(existing.classes))
+            if unknown:
+                raise ValueError(
+                    "track %r already exists and its class set does "
+                    "not contain %s; ingesting into an EXISTING track "
+                    "must not silently change its schema. Pass a new "
+                    "track_id, or add the class through Manage "
+                    "Labels first." % (track_id, ", ".join(unknown)))
+            row = existing
+            if locked:
+                row.locked = True
+        self.intervals.extend(ivs)
+        self._sort_and_merge_intervals()
+        return row
+
+    def _ingest_staged_column(self, staged) -> int:
+        """One staged 'From column...' import, inside the box's gesture.
+
+        The lane ROW is already in the table the Manage Lanes apply just
+        published -- the box staged it with the classes the preview
+        found -- so this only decodes the column again and adds the
+        intervals. Returns how many it added.
+        """
+        plan = self._column_ingest_plan(
+            staged.get("column"), staged.get("id"),
+            gap_tolerance=staged.get("gap_tolerance"),
+            class_order=staged.get("classes"))
+        self.intervals.extend(plan["intervals"])
+        self._sort_and_merge_intervals()
+        return len(plan["intervals"])
+
+    # -------- Pack M3.1: what the "From column..." box is shown --------
+
+    def _lane_column_choices(self) -> List[Dict[str, Any]]:
+        """Every data column that could be a label column. Pack M3.1.
+
+        At most 20 distinct non-null values, and those values text or
+        whole numbers -- `core.ingest.column_is_labelish` is the rule
+        and it says why. Each entry carries its distinct count, which is
+        what the box shows beside the name, and the AUTOMATIC gap
+        tolerance the ingest would use if the user changed nothing.
+
+        A CALLABLE, handed to the dialog: the box never sees the app.
+        """
+        from chronotagger.core.ingest import (LABEL_COLUMN_MAX_DISTINCT,
+                                              column_is_labelish,
+                                              default_gap_tolerance)
+        out: List[Dict[str, Any]] = []
+        df = getattr(self, "df", None)
+        if df is None:
+            return out
+        try:
+            auto = str(default_gap_tolerance(df.index))
+        except Exception:
+            auto = ""
+        for col in list(df.columns):
+            try:
+                vals = df[col].dropna()
+                if len(vals) == 0:
+                    continue
+                n = int(len(vals.unique()))
+            except Exception:
+                continue
+            if n > LABEL_COLUMN_MAX_DISTINCT:
+                continue
+            if not column_is_labelish(vals):
+                continue
+            out.append({"name": str(col), "distinct": n,
+                        "default_gap_tolerance": auto})
+        return out
+
+    def _lane_column_preview(self, column,
+                             gap_tolerance=None) -> Dict[str, Any]:
+        """`would make N intervals in M classes`, touching nothing.
+
+        A CALLABLE, handed to the dialog. On a refusal it hands back the
+        ingest's own words, which already name the numbers and say what
+        to do about it.
+        """
+        try:
+            plan = self._column_ingest_plan(column, "preview",
+                                            gap_tolerance=gap_tolerance)
+        except (ValueError, TypeError) as exc:
+            return {"ok": False, "why": str(exc), "n_intervals": 0,
+                    "n_classes": 0, "classes": []}
+        info = plan["info"]
+        return {"ok": True, "why": "",
+                "n_intervals": len(plan["intervals"]),
+                "n_classes": len(info["classes"]),
+                "classes": list(info["classes"])}
 
     # -------- Public entrypoint --------
 

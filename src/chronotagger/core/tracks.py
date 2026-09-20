@@ -422,6 +422,256 @@ def stray_tracks(intervals, tracks) -> List[str]:
     return sorted({iv.track for iv in intervals} - known)
 
 
+def check_track_table(rows, what=None) -> List[Track]:
+    """THE THREE TABLE RULES, IN ONE PLACE. Pack M3.1.
+
+    The table must not be empty, no two rows may share an id, and every
+    row must declare at least one class. Those three were written TWICE
+    -- `TimeIntervalLabeler._build_track_table` for a caller's `tracks=`
+    argument and `io_export.validate_track_table` for a table read off
+    disk -- and Pack M3.1 adds a third door (the Manage Lanes box), so
+    they are factored here rather than copied again.
+
+    THE TWO VOICES ARE KEPT BYTE FOR BYTE. `what` names the FILE a
+    table arrived in; with it the messages read as a refusal to LOAD,
+    and without it as a refusal of a caller's argument. The per-row
+    order of the checks is the one both callers had, so a table that
+    breaks two rules still names the same one first.
+
+    Display-name uniqueness is NOT checked here: it is a rule about
+    what the Manage Lanes box may WRITE, not about what a file or a
+    driver may hold. See `duplicate_lane_name`.
+    """
+    if not rows:
+        if what is None:
+            raise ValueError(
+                "'tracks' must contain at least one track; pass "
+                "classes=[...] for the single-track default instead.")
+        raise ValueError("%s has an empty track table and cannot be "
+                         "loaded." % (what,))
+    seen = set()
+    for row in rows:
+        if row.id in seen:
+            if what is None:
+                raise ValueError(
+                    "duplicate track id %r: a track id names an export "
+                    "column and a label-map sidecar, so it must be "
+                    "unique" % (row.id,))
+            raise ValueError(
+                "%s has two tracks with the id %r: a track id names an "
+                "export column and a label-map sidecar, so it must be "
+                "unique." % (what, row.id))
+        seen.add(row.id)
+        if not row.classes:
+            if what is None:
+                raise ValueError(
+                    "track %r has no classes; every track needs its own "
+                    "vocabulary" % (row.id,))
+            raise ValueError(
+                "%s has a track (%r) with no classes; every track needs "
+                "its own vocabulary." % (what, row.id))
+    return rows
+
+
+def lane_display_key(name) -> str:
+    """One display name, as the uniqueness rule compares them.
+
+    Whitespace-trimmed and collapsed, lower-cased. `Wake (umbra)` and
+    ` wake  (UMBRA) ` are the same name to a pair of eyes and are the
+    same name here.
+    """
+    return " ".join(str(name or "").split()).lower()
+
+
+def duplicate_lane_name(rows, only_ids=None):
+    """The first lane whose DISPLAY NAME collides, or None. Pack M3.1.
+
+    Returns `(lane_id, name)` -- the OFFENDING row, the second one seen.
+
+    `only_ids` limits the answer to the lanes the Manage Lanes box
+    actually touched. THAT IS THE WHOLE POINT: display names have never
+    been checked for uniqueness, two of the user's own lanes may
+    legitimately share one, and a pack that started refusing existing
+    files or driver tables would break sessions that open today. The
+    rule is "the box may not WRITE a duplicate", not "a duplicate may
+    not exist".
+    """
+    seen = {}
+    for row in (rows or []):
+        key = lane_display_key(getattr(row, "name", "") or row.id)
+        if key in seen:
+            if only_ids is None or row.id in set(only_ids):
+                return row.id, (getattr(row, "name", "") or row.id)
+            if seen[key] in set(only_ids):
+                return seen[key], (getattr(row, "name", "") or row.id)
+        else:
+            seen[key] = row.id
+    return None
+
+
+def lane_id_from_name(name, existing=()) -> str:
+    """The id a NEW lane gets from its display name. Pack M3.1.
+
+    Lower-cased; every run of characters outside `[a-z0-9]` becomes ONE
+    underscore; leading and trailing underscores trimmed; cut to 32
+    characters and trimmed again; empty answers `lane`; a collision with
+    `existing` takes `_2`, `_3`, and so on.
+
+    The id is shown and is EDITABLE in the Add Lane box, and is FROZEN
+    the moment the lane exists -- it names an export column and a
+    sidecar filename, so changing it would strand every interval on it
+    (see the module docstring).
+    """
+    out = []
+    prev_us = False
+    for ch in str(name or "").lower():
+        if ("a" <= ch <= "z") or ("0" <= ch <= "9"):
+            out.append(ch)
+            prev_us = False
+        elif not prev_us:
+            out.append("_")
+            prev_us = True
+    base = "".join(out).strip("_")[:_ID_MAX].strip("_")
+    if not base:
+        base = "lane"
+    taken = {str(e) for e in (existing or ())}
+    if base not in taken:
+        return base
+    n = 2
+    while True:
+        suffix = "_%d" % n
+        cand = (base[:_ID_MAX - len(suffix)]).strip("_") + suffix
+        if cand not in taken:
+            return cand
+        n += 1
+
+
+def renumber_lane_rows(rows) -> List[Track]:
+    """`order` becomes the list position, 0..K-1. Pack M3.1.
+
+    The table list is kept in PAINTED order, which is what Pack M3.0's
+    DR3 established for the merge: `visible_rows` sorts on `order` with
+    the table position only as a tie-break, so a list whose `order`
+    values disagree with its positions paints in an order nobody wrote.
+    Every edit through the Manage Lanes box ends here.
+    """
+    for i, t in enumerate(rows or []):
+        t.order = i
+    return rows
+
+
+def lane_delete_refusal(rows, lane_id) -> str:
+    """Why this lane must not be deleted, in plain words, or "". M3.1.
+
+    Two rules, both ratified: the LAST lane can never be deleted (a
+    session with no lane cannot label), and a LOCKED lane must be
+    unlocked first (locked says "this came from a file and you must not
+    edit it", and deleting it with its intervals is the largest edit
+    there is).
+    """
+    row = find_track(rows, lane_id)
+    if row is None:
+        return "there is no lane %r" % (lane_id,)
+    if len(rows) <= 1:
+        return ("'%s' is the only lane -- a session needs at least one, "
+                "so it cannot be deleted" % (row.name or row.id,))
+    if getattr(row, "locked", False):
+        return ("'%s' is locked -- unlock it first"
+                % (row.name or row.id,))
+    return ""
+
+
+def lane_hide_refusal(rows, lane_id) -> str:
+    """Why this lane must not be hidden, in plain words, or "". M3.1.
+
+    The existing rule, in the box's voice: the LAST VISIBLE lane refuses
+    to hide, because a strip with no lane is not a state worth being
+    able to reach (`_toggle_active_lane_visible`).
+    """
+    row = find_track(rows, lane_id)
+    if row is None:
+        return "there is no lane %r" % (lane_id,)
+    if not getattr(row, "visible", True):
+        return ""
+    others = [t for t in rows
+              if t.id != row.id and getattr(t, "visible", True)]
+    if not others:
+        return ("'%s' is the only lane you can see -- hiding it is "
+                "refused" % (row.name or row.id,))
+    return ""
+
+
+def lane_rows_add(rows, name, classes, palette=None, lane_id=None,
+                  locked=False, visible=True) -> Track:
+    """Append ONE new lane to `rows` and return it. Pack M3.1.
+
+    The id is `lane_id` when the caller gives one -- the Add Lane box
+    shows it and lets the user edit it -- and is otherwise made from the
+    display name by `lane_id_from_name`. Colours come from `palette`,
+    which is the constructor's own `DEFAULT_COLORS`, so a lane made in
+    the box is coloured exactly as a lane declared in a driver.
+
+    `order` is the new last position. The caller validates the result;
+    nothing is refused here.
+    """
+    classes = [str(c) for c in (classes or [])]
+    tid = lane_id or lane_id_from_name(name, track_ids(rows))
+    row = Track(
+        id=validate_track_id(tid),
+        name=str(name or "") or tid,
+        classes=classes,
+        class_colors=colors_for(classes, palette),
+        locked=bool(locked),
+        visible=bool(visible),
+        order=len(rows or []),
+    )
+    rows.append(row)
+    return row
+
+
+def lane_rows_move(rows, lane_id, delta) -> bool:
+    """Move one lane `delta` places up (-1) or down (+1). Pack M3.1.
+
+    Returns False at the ends rather than wrapping: the two buttons are
+    Move up and Move down, and a lane that jumped from the top to the
+    bottom would be a surprise. `order` is renumbered.
+    """
+    idx = next((i for i, t in enumerate(rows or [])
+                if t.id == lane_id), -1)
+    if idx < 0:
+        return False
+    j = idx + int(delta)
+    if j < 0 or j >= len(rows):
+        return False
+    rows[idx], rows[j] = rows[j], rows[idx]
+    renumber_lane_rows(rows)
+    return True
+
+
+def lane_rows_delete(rows, intervals, lane_id) -> int:
+    """Remove one lane AND every interval on it. Pack M3.1.
+
+    Returns how many intervals went. NEVER leaves strays: an interval
+    whose `track` names no row of the table is the orphan state that
+    blocks every export, refuses the session on reload and paints
+    nowhere (see `stray_tracks`), so the two always move together.
+
+    Both lists are edited IN PLACE, because the live ones are
+    `labeler.tracks` and `labeler.intervals` and the gesture snapshot
+    restores by slice assignment onto those same objects.
+    """
+    idx = next((i for i, t in enumerate(rows or [])
+                if t.id == lane_id), -1)
+    if idx < 0:
+        return 0
+    del rows[idx]
+    renumber_lane_rows(rows)
+    keep = [iv for iv in intervals if iv.track != lane_id]
+    n = len(intervals) - len(keep)
+    intervals[:] = keep
+    return n
+
+
 def merge_track_tables(file_rows, live_rows):
     """The file's lanes, then the lanes only the driver knows. Pack M3.0.
 

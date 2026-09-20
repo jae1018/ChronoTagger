@@ -64,12 +64,16 @@ class LaneControlMixin:
         is the wrapper and nothing else: no new command class, no second
         stack, no new state.
 
-        TODAY'S `modified` FLAG IS KEPT. A bare lane write did not mark
-        the session modified and did not autosave, so closing the window
-        after a lock asked nothing; `_gesture` marks it at the end of
-        every block, which would have changed that without anyone ruling
-        it. The value is put back. Undo and redo mark modified exactly as
-        they do for every other gesture.
+        PACK M3.1 AMENDS PACK M3.0's DR2: A LANE-LIST WRITE NOW MARKS
+        THE SESSION MODIFIED. M3.0 read `modified` before the block and
+        put it back after, because a bare write had never marked it and
+        no one had ruled that it should. The consequence was real and is
+        now closed: lock a lane, close the window, and nothing asked --
+        the lock was simply lost. A lane's lock, its visibility, its
+        name and its very existence all persist in the session file, so
+        an unsaved lane edit is unsaved work. `_gesture` marks the flag
+        at the end of every block and the flag is now left where it
+        leaves it.
 
         A host without the gesture machinery -- the GUI-free hosts in
         tests/ bind a NAMED LIST of mixin methods -- writes bare, as it
@@ -79,10 +83,8 @@ class LaneControlMixin:
         if not callable(_g):
             yield
             return
-        _was_modified = bool(getattr(self, "modified", False))
         with _g(name):
             yield
-        self.modified = _was_modified
 
     # ---- the setter -----------------------------------------------------
     def _set_active_track(self, track_id, announce: bool = True,
@@ -507,7 +509,132 @@ class LaneControlMixin:
             self._update_plot()
         return "break"
 
-    # ---- click-to-activate ----------------------------------------------
+    # ---- the lane-list edit functions (Pack M3.1) ------------------------
+    #
+    # There were NONE before this pack: the table could be locked, hidden
+    # and re-pointed, and that was all. A lane could only be DECLARED in a
+    # driver. These six are the model half of the Manage Lanes box -- each
+    # one write, each ONE undo step -- and every rule they enforce is a
+    # free function in core/tracks.py, so the box's STAGED copies and this
+    # LIVE table can never disagree about what is allowed.
+
+    def _lane_add(self, name, classes, lane_id=None, locked=False,
+                  visible=True):
+        """Add a lane at the END of the table. Returns the row, or None.
+
+        Colours come from the constructor's own palette, so a lane made
+        here is coloured exactly as a lane a driver declares. The id is
+        made from the NAME unless the caller gives one, and is frozen
+        from this moment: it names an export column and a sidecar file.
+        """
+        from chronotagger.core.tracks import (check_track_table,
+                                              lane_rows_add)
+        rows = table_of(self)
+        if rows is not getattr(self, "tracks", None):
+            return None
+        try:
+            with self._lane_gesture("add lane %s" % (name or lane_id,)):
+                row = lane_rows_add(
+                    rows, name, classes,
+                    palette=getattr(self, "DEFAULT_COLORS", None),
+                    lane_id=lane_id, locked=locked, visible=visible)
+                check_track_table(rows)
+        except ValueError as exc:
+            set_status(self, "cannot add that lane: %s" % (exc,))
+            return None
+        self._refresh_lane_controls()
+        return row
+
+    def _lane_rename(self, track_id, name) -> bool:
+        """Change one lane's DISPLAY NAME. Never its id.
+
+        The id is what every interval on the lane holds and what the
+        export column is called, so a rename is history-preserving by
+        construction: it touches one field of one row.
+        """
+        row = find_track(table_of(self), track_id)
+        if row is None:
+            return False
+        new = " ".join(str(name or "").split())
+        if not new or new == row.name:
+            return False
+        with self._lane_gesture("rename lane %s" % (row.name or row.id,)):
+            row.name = new
+        self._refresh_lane_controls()
+        return True
+
+    def _lane_move(self, track_id, delta) -> bool:
+        """Move one lane up (-1) or down (+1); `order` is renumbered."""
+        from chronotagger.core.tracks import lane_rows_move
+        rows = table_of(self)
+        if rows is not getattr(self, "tracks", None):
+            return False
+        row = find_track(rows, track_id)
+        if row is None:
+            return False
+        moved = False
+        with self._lane_gesture("move lane %s" % (row.name or row.id,)):
+            moved = lane_rows_move(rows, track_id, delta)
+        if moved:
+            self._refresh_lane_controls()
+        return moved
+
+    def _lane_set_locked(self, track_id, locked) -> bool:
+        """Lock or unlock ANY lane, not only the active one."""
+        row = find_track(table_of(self), track_id)
+        if row is None or bool(row.locked) == bool(locked):
+            return False
+        with self._lane_gesture("%s lane %s"
+                                % ("lock" if locked else "unlock",
+                                   row.name or row.id)):
+            row.locked = bool(locked)
+        self._refresh_lane_controls()
+        return True
+
+    def _lane_set_visible(self, track_id, visible) -> bool:
+        """Show or hide ANY lane. The LAST VISIBLE one refuses to hide."""
+        from chronotagger.core.tracks import lane_hide_refusal
+        rows = table_of(self)
+        row = find_track(rows, track_id)
+        if row is None or bool(row.visible) == bool(visible):
+            return False
+        if not visible:
+            why = lane_hide_refusal(rows, track_id)
+            if why:
+                set_status(self, "lane %s" % (why,))
+                return False
+        with self._lane_gesture("%s lane %s"
+                                % ("show" if visible else "hide",
+                                   row.name or row.id)):
+            row.visible = bool(visible)
+        self._refresh_lane_controls()
+        return True
+
+    def _lane_delete(self, track_id) -> int:
+        """Delete a lane AND every interval on it. Returns how many went.
+
+        -1 means REFUSED, and the bar says why: the last lane can never
+        be deleted and a locked lane must be unlocked first.
+        """
+        from chronotagger.core.tracks import (lane_delete_refusal,
+                                              lane_rows_delete)
+        rows = table_of(self)
+        if rows is not getattr(self, "tracks", None):
+            return -1
+        why = lane_delete_refusal(rows, track_id)
+        if why:
+            set_status(self, "cannot delete that lane: %s" % (why,))
+            return -1
+        n = 0
+        with self._lane_gesture("delete lane %s"
+                                % (find_track(rows, track_id).name
+                                   or track_id,)):
+            n = lane_rows_delete(rows, self.intervals, track_id)
+        self._reconcile_active_track()
+        self._refresh_lane_controls()
+        return n
+
+    # ---- click-to-activate: the BAND path --------------------------------
 
     def _activate_lane_from_click(self, track_id) -> bool:
         """A click on a band: activate that lane unless it is LOCKED.
@@ -707,7 +834,212 @@ class LaneControlMixin:
                     break
         return cands
 
-    # ---- the guard, as a method for the gesture sites -------------------
+    # ---- the Manage Lanes box (Pack M3.1) -------------------------------
+
+    def _open_manage_lanes(self, event=None) -> str:
+        """Open the Manage Lanes box, wait for it, apply its answer.
+
+        NO LOCK GUARD, and that is deliberate: Manage Labels refuses to
+        open on a locked lane because everything in it would be
+        discarded, and this box is where you UNLOCK. A box you cannot
+        open because the thing it exists to change is set would be a
+        door locked from the inside.
+
+        Nothing happens to the app until OK. `dlg.result is None` is
+        Cancel, and Cancel discards staged deletes and staged imports
+        with everything else.
+        """
+        from chronotagger.core.tracks import intervals_on
+        root = getattr(self, "root", None)
+        if root is None:
+            return "break"
+        from ..dialogs.manage_lanes import ManageLanesDialog
+        rows = table_of(self)
+        counts = {t.id: len(intervals_on(self.intervals, t.id))
+                  for t in rows}
+        # Pack M3.1, PART E: the column feature reaches the box as two
+        # CALLABLES and never as the app object. With PART E cut they
+        # are both None and the 'From column...' button is not built.
+        dlg = ManageLanesDialog(
+            parent=root,
+            lanes=rows,
+            interval_counts=counts,
+            columns_fn=getattr(self, "_lane_column_choices", None),
+            preview_fn=getattr(self, "_lane_column_preview", None),
+        )
+        root.wait_window(dlg)
+        if dlg.result is None:
+            return "break"
+        self._apply_manage_lanes_result(dlg.result)
+        return "break"
+
+    def _apply_manage_lanes_result(self, result) -> bool:
+        """Publish the box's staged end state, in ONE undo step.
+
+        THE WHOLE OK IS ONE GESTURE -- adds, renames, reorders, lock and
+        visibility changes, deletes WITH their intervals and column
+        imports WITH theirs -- so ONE Ctrl+Z puts every one of them
+        back, a deleted lane with its intervals included, and one Ctrl+Y
+        re-applies the lot. `GestureCommand` already snapshots the whole
+        lane table beside the interval list, so this needs no new
+        command class and no second stack.
+
+        ALL OR NOTHING. The end state is validated BEFORE anything is
+        published; on a refusal nothing changes at all and the bar says
+        why. An OK that changes nothing pushes nothing and says nothing
+        new.
+        """
+        from chronotagger.core.tracks import (Track, check_track_table,
+                                              colors_for,
+                                              duplicate_lane_name,
+                                              renumber_lane_rows)
+        if getattr(self, "tracks", None) is None:
+            return False
+        try:
+            rows = [Track.from_dict(d) for d in (result.lanes or [])]
+        except (ValueError, TypeError) as exc:
+            set_status(self, "Manage Lanes changed nothing: %s" % (exc,))
+            return False
+        renumber_lane_rows(rows)
+        # THE COLOURS. The box builds a bare `Track` for a lane it adds
+        # and for a staged column import, and `Track.from_dict` copies
+        # exactly what it is given -- so a lane made in the box arrived
+        # here with an EMPTY class_colors and every band on it painted
+        # the #cccccc fallback. `_build_track_table` fills the same gap
+        # for a caller's `tracks=` argument and `add_track_from_column`
+        # fills it for a driver's import; this is that one rule at this
+        # door, so a lane made in the box is coloured exactly as a lane
+        # a driver declares.
+        for _row in rows:
+            if not _row.class_colors:
+                _row.class_colors = colors_for(
+                    _row.classes, getattr(self, "DEFAULT_COLORS", None))
+        try:
+            check_track_table(rows)
+        except ValueError as exc:
+            set_status(self, "Manage Lanes changed nothing: %s" % (exc,))
+            return False
+        # The display-name rule applies to what the BOX WROTE, never to
+        # what a file or a driver already held: two lanes have always
+        # been allowed to share a name and sessions that do must keep
+        # opening.
+        _touched = (set(result.added or ())
+                    | set((result.renamed or {}).keys())
+                    | {d.get("id") for d in (result.imports or [])})
+        _dup = duplicate_lane_name(rows, _touched)
+        if _dup is not None:
+            set_status(self, "Manage Lanes changed nothing: two lanes "
+                             "are called '%s'" % (_dup[1],))
+            return False
+        # THE LAST VISIBLE LANE, CHECKED ON THE END STATE. Show/Hide
+        # refuses to hide the last visible lane ONE PRESS AT A TIME, but
+        # a hide and a DELETE are two presses the box allows separately
+        # that together leave every lane hidden: measured -- hide one of
+        # two lanes, delete the other, press OK, and the session is left
+        # with one invisible lane, a blank strip and a gesture writing
+        # to a lane the user cannot see.
+        if rows and not any(getattr(t, "visible", True) for t in rows):
+            set_status(self, "Manage Lanes changed nothing: that would "
+                             "leave no lane visible")
+            return False
+        if result.is_empty():
+            return False
+
+        _gone = set(result.deleted or ())
+        _was_active = active_id_of(self)
+        _n_deleted = 0
+        _n_imported = 0
+        # `_gesture`, NOT `_lane_gesture`: this OK is a structural change
+        # to the session and marks it modified the way every other
+        # gesture does. `_lane_gesture` exists for the THREE bare writes
+        # Pack M3.0's DR2 was about -- Ctrl+L, Ctrl+H and the un-hide --
+        # and whichever way that ruling finally goes must not decide
+        # whether adding and deleting lanes counts as unsaved work.
+        # ALL OR NOTHING, INCLUDING THE STAGED IMPORTS. `_gesture` is
+        # transactional and rolls the model back on its own, but the
+        # exception used to travel on out of a Tk button callback: a
+        # traceback on stderr, nothing on the bar, and the user left
+        # looking at the line that was there before.
+        try:
+            with self._gesture("manage lanes"):
+                if _gone:
+                    _keep = [iv for iv in self.intervals
+                             if iv.track not in _gone]
+                    _n_deleted = len(self.intervals) - len(_keep)
+                    self.intervals[:] = _keep
+                # The table FIRST: an import puts intervals on a lane,
+                # and strict mode checks at the end of the gesture that
+                # every interval names a row the table holds.
+                self.tracks[:] = rows
+                for _imp in (result.imports or []):
+                    _n_imported += self._ingest_staged_column(_imp)
+        except (ValueError, TypeError) as exc:
+            set_status(self, "Manage Lanes changed nothing: %s" % (exc,))
+            return False
+
+        self._reconcile_active_track()
+        # A gesture may not write to a lane the user cannot see, so an
+        # active lane the box just hid moves to the first visible one --
+        # which is what Ctrl+H has always done.
+        _active = find_track(table_of(self), active_id_of(self))
+        if _active is not None and not getattr(_active, "visible", True):
+            _vis = visible_lanes(self)
+            if _vis:
+                self._set_active_track(_vis[0].id, announce=False,
+                                       repaint=False)
+        # Pack M2.6's doctrine: ONE SENTENCE, NOT TWO. Deleting or hiding
+        # the lane you were working on MOVES the active lane, and
+        # `_reconcile_active_track` writes its own line about it --
+        # which the line below would then write straight over, so the
+        # user would never learn that the next Add lands somewhere else.
+        # The fact is composed into the one sentence instead.
+        _now = find_track(table_of(self), active_id_of(self))
+        _moved = ""
+        if _now is not None and _now.id != _was_active:
+            _moved = _now.name or _now.id
+        self._repoint_class_controls()
+        self._refresh_lane_controls()
+        set_status(self, self._manage_lanes_note(result, _n_deleted,
+                                                 _n_imported, _moved))
+        self._update_plot()
+        if getattr(self, "_save_autosave", None) is not None:
+            self._save_autosave()
+        return True
+
+    @staticmethod
+    def _manage_lanes_note(result, n_deleted, n_imported,
+                           moved_to="") -> str:
+        """One line naming what the OK did. Short, and true.
+
+        `Lanes updated: 1 added, 1 deleted (41 intervals)`, plus
+        ` -- active lane is now 'Wake (umbra)'` when the OK moved it.
+        """
+        def _n(n, word):
+            return "%d %s%s" % (n, word, "" if n == 1 else "s")
+
+        parts = []
+        if result.added:
+            parts.append("%d added" % len(result.added))
+        if result.imports:
+            parts.append("%d imported (%s)"
+                         % (len(result.imports), _n(n_imported,
+                                                    "interval")))
+        if result.renamed:
+            parts.append("%d renamed" % len(result.renamed))
+        if result.deleted:
+            parts.append("%d deleted (%s)"
+                         % (len(result.deleted), _n(n_deleted,
+                                                    "interval")))
+        if result.reordered:
+            parts.append("reordered")
+        if result.flagged:
+            parts.append("lock/visibility changed")
+        return "Lanes updated: %s%s" % (
+            ", ".join(parts) or "no change",
+            (" -- active lane is now '%s'" % (moved_to,))
+            if moved_to else "")
+
+    # ---- the lock guard, as a method for the gesture sites --------------
 
     def _refuse_if_locked(self, track_id=None, what: str = "edit") -> bool:
         """True when this edit must not happen. See core/lanes.py.

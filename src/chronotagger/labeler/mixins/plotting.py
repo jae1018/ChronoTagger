@@ -260,6 +260,93 @@ class PlottingMixin:
         pane._layout_frozen = False
         _note_layout_invalidation()
 
+    # ---------- Pack M3.1: the Labels row follows the lane count ----------
+
+    def _retune_strip_row(self, pane=None) -> bool:
+        """Give the Labels row the height the CURRENT lane count asks for.
+
+        The strip's height ratio, `max(1.0, 0.75 * K)`, was read ONCE at
+        figure build (core/lanes.py, view_build/canvas.py) -- so a lane
+        added after the window was up got no room and every lane on the
+        strip simply got thinner. Measured at base on a three-row pane:
+        the Labels row stayed 0.2817 of the figure from K=1 to K=4,
+        against 0.5019 on a fresh four-lane build.
+
+        THE SAME RULE the builder used, applied to the SAME gridspec the
+        axes' SubplotSpecs already point at. No axes is created,
+        destroyed, re-parented or moved: the selectors, the pick
+        connections, the blit caches and the painter are all wired to
+        those objects, so only their POSITIONS change.
+
+        Returns True when the gridspec really changed, which is also
+        when a re-solve and a blit invalidation were asked for.
+
+        A pane whose `layout_spec` carries its own `height_ratios` is
+        left ALONE. "An explicit height_ratios always wins" is a shipped
+        rule with a pin on it (tests/test_packm2_lane_screen.py), two of
+        the user's own files carry one, and scaling a driver's ratios by
+        the lane rule is a different product decision. Its lanes get
+        thinner as lanes are added, exactly as today.
+        """
+        if pane is None:
+            pane = getattr(self, "active_pane", None)
+        ax = getattr(pane, "strip_ax", None) if pane is not None else None
+        if ax is None:
+            return False
+        spec = getattr(pane, "layout_spec", None) or {}
+        try:
+            explicit = spec.get("height_ratios")
+        except Exception:
+            explicit = None
+        if explicit is not None:
+            return False
+        try:
+            from chronotagger.core.lanes import labels_row_height
+            ss = ax.get_subplotspec()
+            gs = ss.get_gridspec()
+            row = ss.rowspan.start
+            hrs = list(gs.get_height_ratios() or [1.0] * gs.nrows)
+            want = float(labels_row_height(self._visible_lane_count()))
+            if float(hrs[row]) == want:
+                return False
+            hrs[row] = want
+            gs.set_height_ratios(hrs)
+        except Exception:
+            self._warn_once("strip-row-retune",
+                            "could not retune the Labels row height")
+            return False
+        # MEASURED: without this the ratios change and NOTHING moves
+        # (0.000e+00). Pack 5 R4a froze the constrained-layout solver
+        # after the first draw and its PlaceHolderLayoutEngine preserves
+        # the solved geometry exactly, so the freeze IS the mechanism --
+        # one more solve, performed by the draw at the end of
+        # _update_plot, which then refreezes.
+        self._invalidate_layout_freeze(pane)
+        # And the blit cache, which holds a copy of the canvas AT THE OLD
+        # GEOMETRY until the next draw_event refreshes it.
+        _blit = getattr(pane, "_blit", None)
+        _inv = getattr(_blit, "invalidate", None)
+        if callable(_inv):
+            try:
+                _inv()
+            except Exception:
+                pass
+        return True
+
+    def _retune_strip_rows(self) -> int:
+        """Retune EVERY pane; returns how many gridspecs changed.
+
+        The lanes are a property of the SESSION, not of a pane, so a tab
+        the user has not visited must already carry the new ratio when
+        he gets there -- its `_layout_frozen` is False and the position
+        updates on its first draw, which is the tab visit.
+        """
+        n = 0
+        for pane in (getattr(self, "panes", None) or []):
+            if self._retune_strip_row(pane):
+                n += 1
+        return n
+
     def _update_plot(self) -> None:
         """Redraw user panels and strip, preserving two-click preview overlays."""
         import pandas as pd
@@ -861,9 +948,23 @@ class PlottingMixin:
         # whose legend is the widest artist), and only above one lane, so
         # a single-lane figure keeps its byte-identical geometry. The
         # draw at the end of _update_plot re-solves and refreezes.
+        #
+        # Pack M3.1: AND THE LABELS ROW TAKES THE HEIGHT THIS LANE COUNT
+        # ASKS FOR. This is the one place in the tree that already runs
+        # once per pane per repaint and already knows when the lane set
+        # changed, so every one of the ten writers that can change the
+        # table -- the new Manage Lanes box included -- gets the resize
+        # by doing what it does today and nothing more.
+        # THE `_K > 1` GUARD STAYS ON THE M2.1 INVALIDATION AND MUST NOT
+        # REACH THE RETUNE: a shrink back to ONE lane changes the ratio
+        # and would then never re-solve, so the strip would keep its old
+        # height with the new ratio -- a silently wrong picture rather
+        # than a crash.
         _sig = (_K, tuple(t.id for t in _lanes), self.active_track_id)
-        if _K > 1 and getattr(_pane, "_strip_layout_sig", None) != _sig:
-            self._invalidate_layout_freeze(_pane)
+        if getattr(_pane, "_strip_layout_sig", None) != _sig:
+            self._retune_strip_row(_pane)
+            if _K > 1:
+                self._invalidate_layout_freeze(_pane)
         _pane._strip_layout_sig = _sig
         # The active lane's PREVIEW band. The two painted preview
         # rectangles below read it, so one paint asks for it once. The DRAG
