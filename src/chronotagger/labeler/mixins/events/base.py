@@ -121,6 +121,39 @@ class EventsBaseMixin:
             return
         sel = self.intervals_tree.selection()  # type: ignore[union-attr]
         if not sel:
+            # Pack M2.8: A REFILL THAT DROPS THE ROW IS NOT A DESELECT.
+            # _update_intervals_list CLEARS the Treeview before it
+            # refills it, and ttk answers that clear with a
+            # <<TreeviewSelect>> carrying an EMPTY selection, delivered
+            # on a LATER turn of the event loop. When the refill did not
+            # put the selected interval back -- the Lanes filter, the
+            # Show: window filter, a tab change -- this branch used to
+            # run and drop the selection one tick after the status bar
+            # had said it STAYS. Measured end to end, probe_s5_lowdown
+            # Q1a and Q1b: selected_interval None after the idle turn,
+            # not a word on the bar, and the next Delete popped "No
+            # Selection".
+            #
+            # Pack M2 DR6's _suppress_tree_select covers only the
+            # refill's own selection_set and is NOT widened to cover the
+            # clear: it is released on an idle callback, so a host that
+            # never turns the event loop would leave it raised and
+            # swallow the user's next click -- measured, six Pack M0 pins
+            # go red that way (SECTION 0a, DR1). The deletion case is
+            # closed by STATE instead. An empty selection while an
+            # interval is STILL selected and the list is showing no row
+            # for it can only be the refill's own event: every deselect
+            # path in the product -- the row toggle below, the strip band
+            # (events/selection.py), Escape (events/keyboard.py) and
+            # right-click -- sets selected_interval to None BEFORE its
+            # empty event is delivered, and the one gesture that can
+            # empty the selection on its own, a Ctrl+click, can only
+            # reach a row the list IS showing.
+            _want = getattr(self, "selected_interval", None)
+            if _want is not None and not any(
+                    iv is _want for iv
+                    in getattr(self, "_interval_row_map", {}).values()):
+                return
             self.selected_interval = None
             self._clear_selected_interval_highlights()
             return

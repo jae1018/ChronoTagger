@@ -22,8 +22,8 @@ KEYBOARD_SHORTCUTS: Tuple[Tuple[str, str], ...] = (
     ("u",                 "Quick-select UNKNOWN class (if present)"),
     ("Ctrl+S",            "Save session"),
     ("Ctrl+E",            "Export intervals"),
-    ("Ctrl+Z / Backspace","Undo"),
-    ("Ctrl+Y / Shift+Backspace", "Redo"),
+    ("Ctrl+Z / Backspace / Shift+Backspace", "Undo"),
+    ("Ctrl+Y",            "Redo"),
 )
 
 MULTI_PANE_SHORTCUTS: Tuple[Tuple[str, str], ...] = (
@@ -49,6 +49,14 @@ class HelpMixin:
     def _open_help_dialog(self, _evt=None) -> None:
         if self._help_window and tk.Toplevel.winfo_exists(self._help_window):
             self._help_window.lift()
+            # Pack M2.8: LIFTING IS NOT FOCUSING. Pressing F1 again
+            # raised the window and left the keyboard on the main
+            # window, so Escape still went to the main window's own
+            # binding. Same call, same reason, as the open path below.
+            try:
+                self._help_window.focus_force()
+            except Exception:
+                pass
             return
 
         win = tk.Toplevel(self.root)
@@ -95,6 +103,19 @@ class HelpMixin:
 
         # Close on Esc / window X
         win.bind("<Escape>", lambda e: win.destroy())
+        # Pack M2.8: AND GIVE IT THE KEYBOARD, or that binding is dead.
+        # grab_set() above takes the POINTER; it does not move keyboard
+        # focus, so the key reached the MAIN window instead. Measured
+        # live in computer-use session 5: Help opened, Escape left it
+        # open, Close worked. focus_force rather than focus_set because
+        # the window manager's focus is on the main window at this
+        # instant, which is exactly the case focus_set does not cover
+        # (SECTION 0a, DR3). Guarded because a Tk call on a window that
+        # has just gone away must not take the dialog down with it.
+        try:
+            win.focus_force()
+        except Exception:
+            pass
         win.protocol("WM_DELETE_WINDOW", win.destroy)
 
         # Center on parent

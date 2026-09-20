@@ -25,7 +25,12 @@ class _ReassignDialog(tk.Toplevel):
         self.result: Optional[str] = None
 
         ttk.Label(self, text=f"'{deleting}' is used. Reassign its intervals to:").pack(padx=10, pady=(10, 5))
-        self._var = tk.StringVar(value=choices[0] if choices else "")
+        # Pack M2.8: the variable names its MASTER. An unmastered
+        # tk.StringVar binds to Tk's DEFAULT root, which is not
+        # necessarily the interpreter this dialog lives on -- the rule
+        # Pack M2.5 applied to every other var in this app when it closed
+        # the two-root defect (tests/test_packm2_5_one_root.py).
+        self._var = tk.StringVar(master=self, value=choices[0] if choices else "")
         self._menu = ttk.OptionMenu(self, self._var, self._var.get(), *choices)
         self._menu.pack(padx=10, pady=5, fill=tk.X)
 
@@ -240,6 +245,20 @@ class LabelManagerDialog(tk.Toplevel):
                 messagebox.showerror("Cannot delete", "No other label to reassign intervals to.", parent=self)
                 return
             dlg = _ReassignDialog(self, deleting=cur, choices=choices)
+            # Pack M2.8: WAIT FOR THE ANSWER. _ReassignDialog.__init__
+            # ends at wait_visibility()/focus() and RETURNS, so without
+            # this line dlg.result is read the instant the box appears --
+            # always None -- and _on_delete returns having changed
+            # nothing while the box is still on the screen. Whatever the
+            # user then answers goes nowhere. Measured, probe_s5_lowdown
+            # Q2: classes unchanged, _reassign_map empty, the box still
+            # open after _on_delete returned, and still nothing after the
+            # user pressed OK in it. `git log -S wait_window` on this
+            # file finds no commit: deleting a class that is in use has
+            # never once worked. This is the same call
+            # _open_label_manager already makes around the outer dialog
+            # (mixins/labels.py:48).
+            self.wait_window(dlg)
             if dlg.result is None:
                 return
             self._reassign_map[cur] = dlg.result

@@ -255,12 +255,16 @@ class SidebarMixin:
         self.interval_track_all_btn.pack(side=tk.LEFT, padx=(4, 0))
 
         self.snap_var = tk.BooleanVar(master=self.root, value=False)
-        ttk.Checkbutton(opts, text="Snap to samples", variable=self.snap_var).pack(anchor=tk.W)
+        ttk.Checkbutton(
+            opts, text="Snap to samples", variable=self.snap_var,
+            command=self._on_snap_toggle
+        ).pack(anchor=tk.W)
 
         # Overlay toggle
         self.overlays_var = tk.BooleanVar(master=self.root, value=True)
         ttk.Checkbutton(
-            opts, text="Show interval overlays on panels", variable=self.overlays_var
+            opts, text="Show interval overlays on panels",
+            variable=self.overlays_var, command=self._on_overlays_toggle
         ).pack(anchor=tk.W)
 
         # Point highlighting toggle (performance optimization)
@@ -428,6 +432,52 @@ class SidebarMixin:
             # Final geometry update
             self.sidebar_canvas.update_idletasks()
             self.sidebar_interior.update_idletasks()
+
+    def _on_snap_toggle(self) -> None:
+        """
+        Pack M2.8: 'Snap to samples' says what it did.
+
+        The box had NO command, so ticking it wrote nothing anywhere and
+        the only way to find out whether it had taken was to make a
+        selection and read the timestamps. NOTHING ON SCREEN DEPENDS ON
+        THIS SETTING until the next selection -- snap_var is read inside
+        the selection handlers (events/mouse.py, events/selection.py,
+        events/overlays.py) and nowhere on the draw path -- so there is
+        nothing to repaint here and the status line is the whole fix.
+        """
+        try:
+            on = bool(self.snap_var.get())
+        except Exception:
+            return
+        if getattr(self, "status_var", None) is not None:
+            self.status_var.set(
+                "Snap to samples: %s" % ("on" if on else "off"))
+
+    def _on_overlays_toggle(self) -> None:
+        """
+        Pack M2.8: 'Show interval overlays on panels' acts at once.
+
+        This box had no command either, so unticking it changed nothing
+        on screen until something else happened to repaint: computer-use
+        session 5 had to press n and then p before the bands went.
+        _overlays_enabled() is read inside _update_plot
+        (mixins/plotting.py:447), so the repaint IS the fix.
+
+        It goes through _request_redraw, so it coalesces with any other
+        pending render exactly as every gesture has since Pack 5 R4d.
+        The status line is written AFTER the request on purpose: a host
+        with no Tk root renders SYNCHRONOUSLY inside that call, and that
+        render's own _update_intervals_list writes to this same bar.
+        """
+        try:
+            shown = bool(self.overlays_var.get())
+        except Exception:
+            shown = True
+        self._request_redraw()
+        if getattr(self, "status_var", None) is not None:
+            self.status_var.set(
+                "Interval overlays on panels: %s"
+                % ("shown" if shown else "hidden"))
 
     def _on_highlight_points_toggle(self) -> None:
         """

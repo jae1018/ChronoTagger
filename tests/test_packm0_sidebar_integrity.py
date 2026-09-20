@@ -402,18 +402,22 @@ def test_scoping_the_list_does_not_scope_the_statistics(labeler):
 
 
 def test_scoping_the_list_does_not_deselect_what_is_off_window(labeler):
-    """The scope change is a VIEW change, not an edit -- at model level.
+    """The scope change is a VIEW change, not an edit.
 
-    HONEST LIMIT, measured in `packm0_draft_7_liveselect.py` on BOTH
-    trees: in the RUNNING application a refill deselects anyway. The
-    clear pass empties the Treeview selection, Tk dispatches an empty
-    `<<TreeviewSelect>>` on the next turn of the event loop, and the
-    app's own binding turns that into `selected_interval = None`
-    (`events/base.py:114-117`). That is PRE-EXISTING -- it happens at
-    b5431d5 for every `_update_plot` -- and this pack changes nothing
-    about it (DR6). What this pin holds is that
-    `_on_interval_scope_change` itself does not touch the selection,
-    which is what a fix would build on.
+    AMENDED BY PACK M2.8 (DR2), and the amendment is the point. This pin
+    used to carry an HONEST LIMIT: "in the RUNNING application a refill
+    deselects anyway", because the clear pass empties the Treeview
+    selection, Tk dispatches an empty `<<TreeviewSelect>>` on the next
+    turn of the event loop and the app's own binding turned that into
+    `selected_interval = None`. What the limit described is the
+    session-5 defect S5.1, and Pack M2.8 closes it in
+    `events/base.py::_on_interval_tree_select`.
+
+    So four lines are new, in the MIDDLE of the pin and just before the
+    delete: they PUMP the event loop, which is the only way that queued
+    event is ever delivered without a mainloop, and they assert the
+    off-window selection is still there. Every other line is the pin as
+    Pack M0 wrote it.
     """
     labeler.intervals[:] = spread_intervals()
     scope_window(labeler)
@@ -425,6 +429,11 @@ def test_scoping_the_list_does_not_deselect_what_is_off_window(labeler):
     scoped(labeler)
     assert "iv:0" not in rows(labeler)
     assert labeler.selected_interval.start == ts("00:01:00")
+
+    for _ in range(4):
+        labeler.root.update()
+    assert labeler.selected_interval is labeler.intervals[0], \
+        "the queued empty <<TreeviewSelect>> dropped an off-window selection"
 
     labeler._delete_interval()
     assert [iv.start.strftime("%H:%M:%S") for iv in labeler.intervals] == [
