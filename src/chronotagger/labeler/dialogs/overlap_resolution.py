@@ -74,6 +74,12 @@ class OverlapResolutionDialog(tk.Toplevel):
         self.policy: Optional[str] = None
         
         # Finalize
+        # Pack M3.0: this box had NO position at all -- no geometry call,
+        # no parent read, nothing -- so the window manager put it wherever
+        # it cascades, which on a two-monitor desk is not where the plot
+        # is.
+        from ._placement import center_on_parent
+        center_on_parent(self, parent)
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.wait_visibility()
         self.focus()

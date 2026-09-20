@@ -39,6 +39,10 @@ class _ReassignDialog(tk.Toplevel):
         ttk.Button(btns, text="Cancel", command=self._cancel).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btns, text="OK", command=self._ok).pack(side=tk.RIGHT)
 
+        # Pack M3.0: centred over its own parent -- which is the Manage
+        # Labels window, so it opens on top of the box that raised it.
+        from ._placement import center_on_parent
+        center_on_parent(self, parent)
         self.transient(parent)
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._cancel)
@@ -66,9 +70,15 @@ class LabelManagerDialog(tk.Toplevel):
         class_colors: Dict[str, str],
         usage_counts: Dict[str, int],
         reserved: Set[str] = frozenset({"UNKNOWN"}),
+        title: str = "Manage Labels",
     ) -> None:
         super().__init__(parent)
-        self.title("Manage Labels")
+        # Pack M3.0: the window says WHICH LANE it is editing. This
+        # dialog has always edited ONE lane's vocabulary and its title
+        # named none of them. The caller composes the text; the default
+        # keeps every existing call site -- the wizard's included -- on
+        # the bare "Manage Labels" it writes today.
+        self.title(title)
         self.resizable(False, False)
 
         # Working copies
@@ -85,6 +95,10 @@ class LabelManagerDialog(tk.Toplevel):
         self._build_ui()
 
         self.result: Optional[LabelManagerResult] = None
+        # Pack M3.0: centred over the main window, AFTER the UI is built,
+        # so the size it reports is the real one.
+        from ._placement import center_on_parent
+        center_on_parent(self, parent)
         self.transient(parent)
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)

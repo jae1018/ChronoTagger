@@ -262,7 +262,15 @@ def test_an_ingest_then_a_recover_duplicates_nothing(launch, monkeypatch):
     monkeypatch.setattr(app, "_show_recovery_dialog", lambda d: "recover")
     app.run()
 
-    assert app.status_var.get() == "Recovered 3 intervals from autosave"
+    # Pack M3.0 AMENDMENT: A RECOVERY MERGES THE LANE LIST. The `agent`
+    # lane this driver ingested AFTER launch is not in the autosave, and
+    # at base it vanished when the autosave was recovered -- the exact
+    # loss item D closes. It is kept, and the status line says so in the
+    # same sentence. The three counts below are unchanged.
+    assert app.status_var.get() == (
+        "Recovered 3 intervals from autosave -- loaded 1 lane from the "
+        "file; kept 1 lane from the driver")
+    assert [t.id for t in app.tracks] == ["human", "agent"]
     assert len(app.intervals) == 3
     keys = {(iv.start, iv.end, iv.label, iv.track) for iv in app.intervals}
     assert len(keys) == 3, "no interval arrived twice"

@@ -304,9 +304,27 @@ class CanvasMixin:
                 self._guard_cb(
                     "resize",
                     lambda event, p=pane: self._invalidate_layout_freeze(p)))
-            pane.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-            toolbar = NavigationToolbar2Tk(pane.canvas, parent)  # noqa: F841
-            toolbar.update()
+            # Pack M3.0: THE TOOLBAR IS SERVED BEFORE THE CANVAS. The Tk
+            # packer hands out parcels in PACK ORDER from a shrinking
+            # cavity, and the canvas asks for 800 px of height (14x8 in at
+            # 100 dpi). At the default 1600x900 root, after the status
+            # bar, the two-row control area and -- in multi-pane mode --
+            # the notebook's tab strip, the cavity left for the plot frame
+            # is under 800 px, so the canvas took all of it and the
+            # toolbar, packed after it and needing 50, got a zero-height
+            # parcel on every tab. It appeared only when the window was
+            # maximized. Served first, it takes its 50 px and the canvas
+            # expands into what is left.
+            #
+            # The reference is kept ON THE PANE. It was a throwaway local
+            # marked `# noqa: F841`, so nothing could re-pack it, hide it
+            # or ask it anything afterwards.
+            pane.toolbar = NavigationToolbar2Tk(pane.canvas, parent,
+                                                pack_toolbar=False)
+            pane.toolbar.update()
+            pane.toolbar.pack(side=tk.BOTTOM, fill=tk.X)
+            pane.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH,
+                                             expand=True)
 
             # ── Blitting: cache per-axes backgrounds and keep them fresh ────────────────
             from ...utils.fastdraw import BlitHelper

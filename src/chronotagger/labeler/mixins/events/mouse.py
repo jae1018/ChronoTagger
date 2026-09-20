@@ -381,8 +381,23 @@ class MouseEventsMixin:
         if pane is not self.active_pane:
             return
 
-        # Left-click only, and only on the strip axis
-        if event.button != 1 or event.inaxes is not pane.strip_ax:
+        # Left-click only
+        if event.button != 1:
+            return
+
+        # Pack M3.0: A CLICK ON A LANE'S NAME MAKES THAT LANE ACTIVE. The
+        # names are the strip's y tick labels and they are drawn OUTSIDE
+        # the axes, so `event.inaxes` is None over them and this handler
+        # used to return right here with nothing done -- the one place on
+        # the strip that shows a lane's name was the one place you could
+        # not click to go there. `_strip_name_hit` tests the click's
+        # pixel against the labels' own extents and answers None for
+        # every other click, a data panel's included: that one's `inaxes`
+        # is the panel, not None.
+        if event.inaxes is not pane.strip_ax:
+            _named = self._strip_name_hit(event, pane)
+            if _named is not None:
+                self._activate_lane_from_strip(_named)
             return
 
         # If no selected interval yet, select the one under the cursor (if any)
@@ -413,6 +428,19 @@ class MouseEventsMixin:
         # Determine drag mode against the selected interval
         mode = self._hit_test_selected(event)
         if mode is None or self.selected_interval is None:
+            # Pack M3.0: AN EMPTY PART OF A LANE'S ROW MAKES THAT LANE
+            # ACTIVE, and this is the one place it can go. A press that
+            # reaches this line hit no interval to select (the scan
+            # above) and no handle to drag (the hit test just now), so
+            # there is no gesture for it to displace. The SELECTED
+            # interval's own band is unreachable from here -- the hit
+            # test answers "move" for any press inside it -- so a drag
+            # still starts exactly as it does today, and a selection on
+            # another lane simply stays selected while the active lane
+            # moves. `_activate_lane_from_empty_row` declines over any
+            # band, so a click on another lane's interval is still the
+            # pick path's business and nothing else's.
+            self._activate_lane_from_empty_row(event, pane, click_ts)
             return
 
         # Pack M2 R1, lock path 7 of 9: the strip drag. Refused BEFORE

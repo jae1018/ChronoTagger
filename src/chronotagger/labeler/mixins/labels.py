@@ -38,12 +38,23 @@ class LabelsMixin:
             if iv.label in counts:
                 counts[iv.label] += 1
 
+        # Pack M3.0: WITH MORE THAN ONE LANE THE TITLE NAMES THE LANE.
+        # With exactly one there is nothing to disambiguate and the title
+        # stays byte-for-byte the "Manage Labels" it is today.
+        from chronotagger.core.tracks import find_track, table_of
+        _rows = table_of(self)
+        _row = find_track(_rows, _active_track)
+        _title = "Manage Labels"
+        if len(_rows) > 1 and _row is not None:
+            _title = "Manage Labels -- %s" % (_row.name or _row.id,)
+
         dlg = LabelManagerDialog(
             parent=self.root,               # type: ignore[arg-type]
             classes=self.classes,
             class_colors=self.class_colors,
             usage_counts=counts,
             reserved={"UNKNOWN"},
+            title=_title,
         )
         self.root.wait_window(dlg)          # type: ignore[union-attr]
 

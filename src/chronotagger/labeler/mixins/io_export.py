@@ -27,6 +27,8 @@ from chronotagger.core.tracks import (
     default_table,
     find_track,
     intervals_on,
+    lane_merge_note,
+    merge_track_tables,
     stray_tracks,
     table_of,
     union_covered,
@@ -750,7 +752,20 @@ class IOExportMixin:
                     "Refused %s -- it holds intervals on tracks its own "
                     "track table does not list" % (path,))
             return
-        # Validate against the table being INSTALLED, not the live one.
+        # Pack M3.0: THE FILE'S LANES, THEN THE LANES ONLY THE DRIVER
+        # KNOWS. The stray-interval refusal above is deliberately keyed
+        # to the FILE'S OWN table and runs BEFORE this: a file naming a
+        # lane its own table lacks is internally inconsistent and is
+        # refused exactly as it is today, whether or not the live table
+        # happens to carry a row of that id. The merged table is then
+        # validated in its own right, and nothing has been published at
+        # this point, so a refusal leaves the session untouched.
+        new_tracks, _n_file, _n_kept = merge_track_tables(
+            new_tracks, table_of(self))
+        new_tracks = validate_track_table(new_tracks, "Session")
+        self._lane_merge_note = lane_merge_note(_n_file, _n_kept)
+        # Validate the MERGED table against the intervals being
+        # INSTALLED, not against the live table.
         check_interval_invariants(new_intervals, new_tracks)
         new_window = pd.Timedelta(data["window"])
         new_step = pd.Timedelta(data["step"])
@@ -768,6 +783,12 @@ class IOExportMixin:
         # switch. So everything this load has to tell the user is
         # collected here and said once, at the bottom.
         _load_note = []
+        # Pack M3.0: the merge says what it did, in the SAME sentence as
+        # everything else this load reports. Empty when it kept nothing,
+        # so a session saved from this driver reads exactly as it does
+        # today.
+        if getattr(self, "_lane_merge_note", ""):
+            _load_note.append(self._lane_merge_note)
         if find_track(self.tracks, new_active):
             self._active_track_id = new_active
         else:
@@ -1856,15 +1877,34 @@ class IOExportMixin:
             raise ValueError(
                 "Autosave has intervals on tracks that are not in its track "
                 "table: " + ", ".join(unknown))
+        # Pack M3.0: THE SAME MERGE THE LOAD PATH DOES, for the same
+        # reason -- a recovered autosave written before the driver grew a
+        # lane must not delete it. The stray check above stays keyed to
+        # the payload's own table.
+        new_tracks, _n_file, _n_kept = merge_track_tables(
+            new_tracks, table_of(self))
+        new_tracks = validate_track_table(new_tracks, "Autosave")
+        self._lane_merge_note = lane_merge_note(_n_file, _n_kept)
         check_interval_invariants(new_intervals, new_tracks)
 
         if getattr(self, "tracks", None) is None:
             self.tracks = new_tracks
         else:
             self.tracks[:] = new_tracks
-        self._active_track_id = (new_active
-                                 if find_track(self.tracks, new_active)
-                                 else self.tracks[0].id)
+        # Pack M3.0: THE FALLBACK THE LOAD PATH ALREADY USES. A saved
+        # active lane naming no row fell back to `tracks[0]`, which can be
+        # a HIDDEN row -- measured, recovery landed the active lane on a
+        # hidden lane, a state the GUI itself refuses to reach.
+        # `resolve_active_row` picks the first VISIBLE lane, which is what
+        # the painter falls back to as well. The id is cleared first so
+        # the resolution cannot latch onto the PREVIOUS session's active
+        # lane when the merged table happens to carry a row of that name.
+        if find_track(self.tracks, new_active):
+            self._active_track_id = new_active
+        else:
+            from chronotagger.core.tracks import resolve_active_row
+            self._active_track_id = None
+            self._active_track_id = resolve_active_row(self).id
         self.intervals = new_intervals
         # getattr guards: this method is a named entry point and must
         # not assume the GUI widgets exist yet (fold V2).
@@ -1911,11 +1951,13 @@ class IOExportMixin:
         dialog.transient(self.root)
         dialog.grab_set()
 
-        # Center on screen
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
+        # Pack M3.0: OVER THE MAIN WINDOW, not over the middle of the
+        # primary display. The size is passed IN because this box's
+        # content is built AFTER this line and its geometry is the fixed
+        # 640x700 set three lines up, so asking the window to measure
+        # itself here can only ever describe an empty box.
+        from chronotagger.labeler.dialogs._placement import center_on_parent
+        center_on_parent(dialog, self.root, 640, 700)
 
         # Horizontally fixed for consistent appearance; vertically
         # resizable as the escape hatch against content overflow

@@ -1822,11 +1822,10 @@ class SelectionMixin:
         dialog.transient(root)
         dialog.grab_set()  # Modal dialog
 
-        # Center dialog on screen
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
+        # Pack M3.0: over the MAIN WINDOW, with the fixed size set above
+        # -- the same defect as the recovery box, in the same shape.
+        from chronotagger.labeler.dialogs._placement import center_on_parent
+        center_on_parent(dialog, root, 380, 350)
 
         # Header
         header = ttk.Label(

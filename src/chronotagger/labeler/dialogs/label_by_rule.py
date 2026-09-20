@@ -247,6 +247,9 @@ class LabelByRuleDialog(tk.Toplevel):
         
         # Finalize
         self.result: Optional[LabelByRuleResult] = None
+        # Pack M3.0: centred over the main window. See _placement.py.
+        from ._placement import center_on_parent
+        center_on_parent(self, parent)
         self.bind("<Return>", lambda e: self._on_preview())
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.wait_visibility()

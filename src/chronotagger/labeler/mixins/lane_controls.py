@@ -31,6 +31,7 @@ lane bindings.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import List, Optional
 
 from chronotagger.core.lanes import (lane_layout, refuse_if_locked,
@@ -44,8 +45,46 @@ HIDDEN_SUFFIX = " (hidden)"
 class LaneControlMixin:
     """The active lane, and the controls that move it."""
 
-    # ---- the setter -----------------------------------------------------
+    # ---- one lane-table write = one undo step ---------------------------
 
+    @contextmanager
+    def _lane_gesture(self, name: str):
+        """Make ONE write to the lane table ONE undo entry. Pack M3.0.
+
+        Ctrl+L, Ctrl+H and un-hiding from the sidebar's Lane list wrote
+        `row.locked` / `row.visible` BARE, while every GestureCommand
+        restores the WHOLE table (core/commands.py). Measured on a
+        three-lane driver: add an interval, lock a lane, press Ctrl+Z
+        ONCE -- the interval went AND the lock silently flipped back,
+        because the undo restored the table as it stood before the
+        interval was added. One press, two things, one of them never
+        announced.
+
+        `_gesture` already carries the table in its snapshot, so the fix
+        is the wrapper and nothing else: no new command class, no second
+        stack, no new state.
+
+        TODAY'S `modified` FLAG IS KEPT. A bare lane write did not mark
+        the session modified and did not autosave, so closing the window
+        after a lock asked nothing; `_gesture` marks it at the end of
+        every block, which would have changed that without anyone ruling
+        it. The value is put back. Undo and redo mark modified exactly as
+        they do for every other gesture.
+
+        A host without the gesture machinery -- the GUI-free hosts in
+        tests/ bind a NAMED LIST of mixin methods -- writes bare, as it
+        did before.
+        """
+        _g = getattr(self, "_gesture", None)
+        if not callable(_g):
+            yield
+            return
+        _was_modified = bool(getattr(self, "modified", False))
+        with _g(name):
+            yield
+        self.modified = _was_modified
+
+    # ---- the setter -----------------------------------------------------
     def _set_active_track(self, track_id, announce: bool = True,
                           repaint: bool = True) -> bool:
         """Make `track_id` the lane every gesture writes to. The ONE writer.
@@ -96,9 +135,17 @@ class LaneControlMixin:
         if callable(_claim):
             _hidden = _claim()
         if announce:
+            # Pack M3.0: THE LOCKED CLAUSE SAYS HOW TO UNLOCK. A click on
+            # a locked lane's NAME or empty row now switches to it, and
+            # "  (locked)" told the user he had landed somewhere he
+            # cannot draw on without telling him what to do about it. One
+            # sentence, one writer: every door into a locked lane --
+            # Ctrl+Up / Ctrl+Down, the sidebar's Lane list, a click on the
+            # strip -- says the same thing.
             set_status(self, "Active lane: %s%s%s%s"
                        % (row.name or row.id,
-                          "  (locked)" if row.locked else "",
+                          " -- lane locked (Ctrl+L to unlock)"
+                          if row.locked else "",
                           " -- rule preview cleared (it belonged to the "
                           "lane you left)" if dropped else "",
                           _hidden))
@@ -223,7 +270,15 @@ class LaneControlMixin:
         return out
 
     def _track_id_for_choice(self, text) -> Optional[str]:
-        """The lane id behind one entry of `_lane_choices`."""
+        """The lane id behind one entry of `_lane_choices`, BY TEXT.
+
+        Pack M3.0: this is the FALLBACK, not the resolution. Display
+        names are free text and nothing forbids two lanes from sharing
+        one, and then this can only ever answer the FIRST of them --
+        measured, picking the second row activated the first. It is kept
+        for the callers that set `lane_var` by hand and never touch the
+        widget.
+        """
         text = str(text)
         if text.endswith(HIDDEN_SUFFIX):
             text = text[: -len(HIDDEN_SUFFIX)]
@@ -231,6 +286,41 @@ class LaneControlMixin:
             if (t.name or t.id) == text:
                 return t.id
         return None
+
+    def _track_id_for_index(self, index) -> Optional[str]:
+        """The lane id at POSITION `index` of `_lane_choices`. Pack M3.0.
+
+        `_lane_choices` walks `table_of(self)` in table order and emits
+        exactly one entry per row, so entry i IS row i. Out of range --
+        and the -1 a combobox reports when its text matches none of its
+        values -- is None, and the caller falls back to the text.
+        """
+        try:
+            i = int(index)
+        except (TypeError, ValueError):
+            return None
+        table = table_of(self)
+        if 0 <= i < len(table):
+            return table[i].id
+        return None
+
+    def _lane_id_for_pick(self, text) -> Optional[str]:
+        """The lane the sidebar's Lane list is pointing at. Pack M3.0.
+
+        BY POSITION FIRST. The widget knows which ROW was picked, and
+        that is the only answer that survives two lanes sharing one
+        display name. The text lookup is the fallback, for a caller that
+        wrote `lane_var` and never touched the widget.
+        """
+        combo = getattr(self, "lane_combo", None)
+        if combo is not None:
+            try:
+                tid = self._track_id_for_index(combo.current())
+            except Exception:
+                tid = None
+            if tid is not None:
+                return tid
+        return self._track_id_for_choice(text)
 
     def _on_lane_combo_change(self, event=None) -> None:
         """The sidebar's Lane list changed -- switch, unhiding if needed."""
@@ -241,13 +331,19 @@ class LaneControlMixin:
             text = var.get()
         except Exception:
             return
-        tid = self._track_id_for_choice(text)
+        # Pack M3.0: BY POSITION, NOT BY NAME -- see `_lane_id_for_pick`.
+        tid = self._lane_id_for_pick(text)
         if tid is None:
             return
         row = find_track(table_of(self), tid)
         unhid = False
         if row is not None and not getattr(row, "visible", True):
-            row.visible = True
+            # Pack M3.0: ONE UNDO STEP. See `_lane_gesture` -- this write
+            # rode in every later snapshot and was silently reverted by
+            # the undo of an unrelated edit.
+            with self._lane_gesture("show lane %s"
+                                    % (row.name or row.id,)):
+                row.visible = True
             unhid = True
         # Pack M2.6: ONE SENTENCE, NOT TWO. Unhiding a lane from this
         # list wrote "lane 'Wake (umbra)' is visible again" and then the
@@ -306,6 +402,19 @@ class LaneControlMixin:
                     var.set(want)
             except Exception:
                 pass
+        # Pack M3.0: AND THE SELECTED INDEX FOLLOWS THE ACTIVE LANE. The
+        # widget's own index is what `_lane_id_for_pick` reads back, and
+        # writing the TEXT cannot move it when two lanes share a display
+        # name: `var.set` is skipped as a no-op and the index stays on
+        # whichever row it was already on, so the next pick answered the
+        # wrong lane.
+        if combo is not None and row is not None:
+            _i = next((i for i, t in enumerate(table) if t is row), -1)
+            if _i >= 0:
+                try:
+                    combo.current(_i)
+                except Exception:
+                    pass
         vv = getattr(self, "lane_visible_var", None)
         if vv is not None and row is not None:
             try:
@@ -327,13 +436,24 @@ class LaneControlMixin:
         `locked` is MODEL state -- it says "this lane came from a file and
         you must not edit it", which is a fact about provenance, not about
         the current window -- so this writes the table and persists with
-        it. It is NOT a gesture: it pushes no undo entry, exactly like the
-        snap and overlay controls beside it.
+        it.
+
+        Pack M3.0: and the write is ONE UNDO STEP. It used to be a bare
+        write, which the whole-table snapshot in every later gesture then
+        reverted behind the user's back: lock a lane, undo an EARLIER
+        edit, and the lock flipped off with nothing said. The entry is
+        named for the act and the lane, so the bar reads
+        `Undo: lock lane Agent (C-MMAE)`. The session's `modified` flag
+        is left exactly as it was found, which is what a bare write did.
         """
         row = find_track(table_of(self), active_id_of(self))
         if row is None:
             return "break"
-        row.locked = not bool(row.locked)
+        _want = not bool(row.locked)
+        with self._lane_gesture("%s lane %s"
+                                % ("lock" if _want else "unlock",
+                                   row.name or row.id)):
+            row.locked = _want
         self._refresh_lane_controls()
         set_status(self, "lane '%s' is now %s"
                    % (row.name or row.id,
@@ -349,6 +469,13 @@ class LaneControlMixin:
         pack exists to remove (gestures writing to a lane the user cannot
         see). The LAST visible lane refuses to hide: a strip with no lane
         is not a state worth being able to reach.
+
+        Pack M3.0: the WRITE is ONE UNDO STEP (`_lane_gesture`); the
+        REFUSAL writes nothing and therefore pushes nothing. Undoing a
+        hide brings the lane back VISIBLE and does NOT move the active
+        lane back -- the active lane is view state and rides in no
+        snapshot -- so the bar says `Undo: hide lane Region (human)` and
+        means exactly that and nothing more.
         """
         table = table_of(self)
         row = find_track(table, active_id_of(self))
@@ -362,14 +489,18 @@ class LaneControlMixin:
                            % (row.name or row.id,))
                 self._refresh_lane_controls()
                 return "break"
-            row.visible = False
+            with self._lane_gesture("hide lane %s"
+                                    % (row.name or row.id,)):
+                row.visible = False
             nxt = others[0]
             set_status(self, "lane '%s' hidden -- active lane is now '%s'"
                        % (row.name or row.id, nxt.name or nxt.id))
             self._set_active_track(nxt.id, announce=False, repaint=False)
             self._update_plot()
         else:
-            row.visible = True
+            with self._lane_gesture("show lane %s"
+                                    % (row.name or row.id,)):
+                row.visible = True
             set_status(self, "lane '%s' is visible again"
                        % (row.name or row.id,))
             self._refresh_lane_controls()
@@ -398,8 +529,116 @@ class LaneControlMixin:
             return False
         return self._set_active_track(track_id, announce=False, repaint=False)
 
-    # ---- the two hit paths, resolved through the PAINT -------------------
+    # ---- click a lane to make it active (Pack M3.0) ----------------------
 
+    def _activate_lane_from_strip(self, track_id) -> bool:
+        """A click on a lane's NAME, or on an EMPTY part of its row.
+
+        Unlike `_activate_lane_from_click` -- the BAND path, which keeps
+        refusing locked lanes because a click on a band is first of all a
+        SELECTION, and moving the active lane there would make the next
+        Add fail for a reason the user did not ask for -- this door DOES
+        switch to a locked lane. It is a lane switch and nothing else,
+        the bar says `lane locked (Ctrl+L to unlock)`, and the
+        alternative is a lane name you can click that does nothing.
+
+        A click on the lane that is ALREADY active does nothing at all
+        and writes no status line.
+        """
+        if track_id is None or track_id == active_id_of(self):
+            return False
+        if find_track(table_of(self), track_id) is None:
+            return False
+        return self._set_active_track(track_id)
+
+    def _strip_name_hit(self, event, pane) -> Optional[str]:
+        """The lane whose NAME this canvas click landed on, or None.
+
+        The names are the strip's y TICK LABELS (plotting.py), drawn
+        OUTSIDE the axes: `event.inaxes` is None over them, so the press
+        handler's axes test declines before anything else can look. There
+        is no artist to pick either -- the band collection is the only
+        picker in the tree -- so the test is the click's PIXEL against
+        each label's window extent, asked for on demand because
+        `_update_strip` calls `ax.clear()` and throws the artists away on
+        every paint.
+
+        `get_window_extent` needs a renderer, which exists only after a
+        draw; before the first one it raises and this answers None. The
+        labels belong to ONE pane's axes and the caller has already gated
+        on the active pane, so a click on another pane's canvas cannot
+        reach a lane here; neither can a click on another axes' tick
+        labels, which sit at other heights, nor one inside any axes at
+        all. At one lane there are no labels.
+        """
+        ax = getattr(pane, "strip_ax", None)
+        if ax is None or getattr(event, "inaxes", None) is not None:
+            return None
+        x = getattr(event, "x", None)
+        y = getattr(event, "y", None)
+        if x is None or y is None:
+            return None
+        if int(getattr(pane, "_strip_lane_count", 1) or 1) <= 1:
+            return None
+        ids = list(getattr(pane, "_strip_lane_ids", None) or [])
+        if not ids:
+            return None
+        try:
+            labels = list(ax.get_yticklabels())
+        except Exception:
+            return None
+        # A few pixels of slack: the extent is tight around a 7-point
+        # string and a name is a target for a mouse, not for a compiler.
+        pad = 3.0
+        for i, lab in enumerate(labels):
+            if i >= len(ids):
+                break
+            try:
+                bb = lab.get_window_extent()
+            except Exception:
+                return None
+            if (bb.x0 - pad <= x <= bb.x1 + pad
+                    and bb.y0 - pad <= y <= bb.y1 + pad):
+                return ids[i]
+        return None
+
+    def _activate_lane_from_empty_row(self, event, pane, click_ts) -> bool:
+        """A click on an EMPTY part of a lane's row makes it active.
+
+        EMPTY means inside the lane's band with no interval OF THAT LANE
+        under the cursor. The gutters between lanes, above the top band
+        and below the bottom one are not a lane and do nothing, which is
+        what `lane_strict` already answers for the press path's own
+        candidate scan.
+
+        The interval test is what keeps this off every other gesture: a
+        press over a band is a selection or a drag and is answered before
+        this is reached, and a press inside the SELECTED interval never
+        reaches here at all, because the drag hit test speaks first.
+        """
+        k = int(getattr(pane, "_strip_lane_count", 1) or 1)
+        if k <= 1:
+            return False
+        ids = list(getattr(pane, "_strip_lane_ids", None) or [])
+        if not ids:
+            return False
+        from chronotagger.core.lanes import frac_from_event, lane_strict
+        from chronotagger.core.tracks import intervals_on
+        ax = getattr(pane, "strip_ax", None)
+        frac = frac_from_event(ax, event)
+        if frac is None:
+            return False
+        row = lane_strict(frac, k, getattr(pane, "_strip_pad_frac", None))
+        if row is None or row >= len(ids):
+            return False
+        tid = ids[row]
+        if click_ts is not None:
+            for iv in intervals_on(self.intervals, tid):
+                if iv.contains(click_ts):
+                    return False
+        return self._activate_lane_from_strip(tid)
+
+    # ---- the two hit paths, resolved through the PAINT -------------------
     def _strip_click_candidates(self, event, pane, click_ts) -> List:
         """The intervals a PICK on the strip may have meant, best first.
 

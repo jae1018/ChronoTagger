@@ -205,8 +205,14 @@ def test_the_usage_counts_the_dialog_is_given_are_the_active_lanes(unlocked,
 
     class FakeDialog(object):
         def __init__(self, parent=None, classes=None, class_colors=None,
-                     usage_counts=None, reserved=None):
+                     usage_counts=None, reserved=None, title=None):
+            # Pack M3.0 AMENDMENT: the dialog takes a `title` now, so the
+            # stand-in has to accept one or the opener raises TypeError
+            # before this pin can read anything. What the pin MEASURES --
+            # that the counts are the ACTIVE lane's -- is unchanged, and
+            # the title it was handed is recorded beside them.
             seen["counts"] = dict(usage_counts or {})
+            seen["title"] = title
             self.result = None
 
     import chronotagger.labeler.mixins.labels as labels_mod

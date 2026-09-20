@@ -767,7 +767,12 @@ class TimeIntervalLabeler(
                     self._update_plot()
                     if hasattr(self, '_update_intervals_list'):
                         self._update_intervals_list()
-                    self.status_var.set(f"Recovered {len(self.intervals)} intervals from autosave")
+                    # Pack M3.0: and it says whether the merge kept a lane
+                    # the autosave had never heard of.
+                    self.status_var.set(
+                        "Recovered %d intervals from autosave%s"
+                        % (len(self.intervals),
+                           getattr(self, "_lane_merge_note", "") or ""))
 
             elif choice == 'start_fresh':
                 # Don't load autosave, keep empty intervals

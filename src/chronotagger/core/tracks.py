@@ -412,10 +412,62 @@ def stray_tracks(intervals, tracks) -> List[str]:
 
     Sorted, deduplicated. This is the MEMBERSHIP clause's evidence and
     the export's orphan-track refusal, in one place.
+
+    Pack M3.0: it is also what Load Session and Recover ask of the
+    FILE'S OWN table, BEFORE the merge below runs. A file that names a
+    lane its own table lacks is internally inconsistent and is refused
+    whatever the live table happens to hold.
     """
     known = set(track_ids(tracks))
     return sorted({iv.track for iv in intervals} - known)
 
+
+def merge_track_tables(file_rows, live_rows):
+    """The file's lanes, then the lanes only the driver knows. Pack M3.0.
+
+    Load Session and Recover REPLACED the lane table with the file's, so
+    a lane the driver declared and the file had never heard of simply
+    VANISHED, with its name, its classes and its colours. Measured on a
+    three-lane driver: a two-lane file loaded and left two lanes; a v1
+    file left ONE, called `default`.
+
+    The rule: the FILE WINS for every lane id it holds, in every field.
+    Every live lane whose id the file lacks is KEPT -- empty of the
+    file's intervals, because the interval list is the file's -- and
+    appended AFTER the file's lanes, in the order the live table holds
+    them. `order` is renumbered across the whole result, so the painted
+    order really is "the file's lanes, then the kept ones".
+
+    The file's own rows are renumbered in the order they would have been
+    PAINTED (by `order`, stable), not in the order they happen to sit in
+    the file, so a file whose `order` values are scrambled still paints
+    exactly as it does today.
+
+    Returns (merged_rows, n_from_file, n_kept). Nothing here refuses
+    anything: the caller validates the result before publishing it.
+    """
+    out = list(file_rows or [])
+    out.sort(key=lambda t: (int(getattr(t, "order", 0) or 0),))
+    known = {t.id for t in out}
+    kept = [Track.from_dict(t.to_dict()) for t in (live_rows or [])
+            if t.id not in known]
+    out.extend(kept)
+    for i, t in enumerate(out):
+        t.order = i
+    return out, len(out) - len(kept), len(kept)
+
+
+def lane_merge_note(n_file, n_kept) -> str:
+    """The one sentence a merge that KEPT something owes the user.
+
+    Empty when it kept nothing, which is the point: a session saved from
+    the same driver keeps the status line it has today, byte for byte.
+    """
+    if not n_kept:
+        return ""
+    return (" -- loaded %d lane%s from the file; kept %d lane%s from the "
+            "driver" % (n_file, "" if n_file == 1 else "s",
+                        n_kept, "" if n_kept == 1 else "s"))
 
 def union_covered(intervals) -> "pd.Timedelta":
     """The time covered by AT LEAST ONE interval, on any track.
